@@ -39,34 +39,11 @@ QUY TẮC:
 - nhom_ly_do: nhãn ngắn (tối đa 6 từ) cho lý do chính, dùng lại cách diễn đạt của bảng tiêu chí để các lead cùng lý do có cùng nhãn. Ví dụ: "Tin nhắn cụt, 1 chiều", "Giá không thực tế", "Hỏi sai sản phẩm", "SĐT không liên lạc được", "Có nhu cầu rõ ràng".
 - ly_do: 1-2 câu tiếng Việt, dẫn chứng cụ thể từ hội thoại.
 - nhu_cau: sản phẩm/kích thước/chất liệu khách hỏi (nếu có), để trống nếu không có.
-- Trả về đúng MỘT phần tử cho MỖI hội thoại, giữ nguyên conversation_id.`;
+- Trả về đúng MỘT phần tử cho MỖI hội thoại, giữ nguyên conversation_id.
 
-const schema = {
-  type: 'ARRAY',
-  items: {
-    type: 'OBJECT',
-    properties: {
-      conversation_id: { type: 'STRING' },
-      ket_luan: { type: 'STRING', enum: ['NGON', 'DO', 'CHUA_RO'] },
-      bo_loc: {
-        type: 'ARRAY',
-        items: {
-          type: 'OBJECT',
-          properties: {
-            ten: { type: 'STRING' },
-            ket_qua: { type: 'STRING', enum: ['NGON', 'DO', 'KHONG_RO'] },
-            ly_do: { type: 'STRING' },
-          },
-          required: ['ten', 'ket_qua', 'ly_do'],
-        },
-      },
-      nhom_ly_do: { type: 'STRING' },
-      ly_do: { type: 'STRING' },
-      nhu_cau: { type: 'STRING' },
-    },
-    required: ['conversation_id', 'ket_luan', 'bo_loc', 'nhom_ly_do', 'ly_do'],
-  },
-};
+ĐỊNH DẠNG TRẢ VỀ: chỉ một mảng JSON, không kèm chữ nào khác, không dùng \`\`\`:
+[{"conversation_id":"...","ket_luan":"NGON|DO|CHUA_RO","bo_loc":[{"ten":"<tên bộ lọc>","ket_qua":"NGON|DO|KHONG_RO","ly_do":"..."}],"nhom_ly_do":"...","ly_do":"...","nhu_cau":"..."}]`;
+
 
 const size = Math.max(1, Number(cfg.so_hoi_thoai_moi_lan_goi_ai) || 10);
 const out = [];
@@ -86,7 +63,12 @@ for (let i = 0; i < leads.length; i += size) {
       body: {
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: `Chấm ${chunk.length} hội thoại sau:\n\n${text}` }] }],
-        generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+          maxOutputTokens: 16384,
+          ...(/2\.5-flash/.test(cfg.gemini_model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+        },
       },
     },
   });

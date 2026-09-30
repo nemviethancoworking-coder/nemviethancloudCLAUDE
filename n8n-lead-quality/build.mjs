@@ -55,7 +55,7 @@ nodes.push({
         ['gemini_model', 'gemini-2.5-flash'],
         ['ngay_bao_cao', ''],
         ['chi_quet_page_ids', ''],
-        ['so_hoi_thoai_moi_lan_goi_ai', 10],
+        ['so_hoi_thoai_moi_lan_goi_ai', 8],
         ['so_tin_nhan_toi_da', 80],
       ].map(([name, value], i) => ({
         id: `cfg-${i}`,
@@ -160,7 +160,7 @@ nodes.push(
     typeVersion: 4.2,
     position: pos(),
     retryOnFail: true,
-    maxTries: 3,
+    maxTries: 5,
     waitBetweenTries: 5000,
     onError: 'continueRegularOutput',
     parameters: {
@@ -171,7 +171,7 @@ nodes.push(
       sendBody: true,
       specifyBody: 'json',
       jsonBody: '={{ JSON.stringify($json.body) }}',
-      options: { batching: { batch: { batchSize: 1, batchInterval: 4000 } }, timeout: 180000 },
+      options: { batching: { batch: { batchSize: 1, batchInterval: 7000 } }, timeout: 180000 },
     },
   },
   {
