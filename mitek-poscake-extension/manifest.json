@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Mitek ghi âm cho POScake",
+  "version": "1.0.0",
+  "description": "Nghe lại ghi âm cuộc gọi tổng đài Mitek ngay trên trang đơn hàng POScake.",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": ["https://pos.pages.fm/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://pos.pages.fm/*"],
+      "js": ["lib/utils.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Mitek ghi âm – Tuỳ chọn"
+  }
+}

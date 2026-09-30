@@ -1,0 +1,28 @@
+.mtk-fab {
+  position: fixed; right: 20px; bottom: 20px; z-index: 2147483000;
+  background: #1677ff; color: #fff; border: 0; border-radius: 22px;
+  padding: 10px 16px; font: 600 14px/1 system-ui, sans-serif; cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+}
+.mtk-fab:hover { background: #0958d9; }
+.mtk-panel {
+  position: fixed; right: 20px; bottom: 70px; z-index: 2147483001;
+  width: 360px; max-height: 70vh; display: none; flex-direction: column; gap: 8px;
+  background: #fff; color: #222; border-radius: 10px; padding: 12px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.25); font: 13px/1.4 system-ui, sans-serif;
+}
+.mtk-head { display: flex; justify-content: space-between; align-items: center; }
+.mtk-x { border: 0; background: none; font-size: 20px; cursor: pointer; color: #888; }
+.mtk-row { display: flex; gap: 6px; }
+.mtk-input { flex: 1; padding: 6px 8px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 13px; }
+.mtk-btn {
+  padding: 6px 10px; border: 1px solid #1677ff; background: #fff; color: #1677ff;
+  border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;
+}
+.mtk-btn:disabled { border-color: #d9d9d9; color: #aaa; cursor: default; }
+.mtk-status { color: #666; }
+.mtk-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.mtk-call { border: 1px solid #f0f0f0; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mtk-meta { color: #333; }
+.mtk-audio { width: 100%; }
+.mtk-err { color: #cf1322; }
