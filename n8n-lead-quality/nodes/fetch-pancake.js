@@ -57,9 +57,21 @@ const pickSignals = (obj, depth = 0, out = {}) => {
 // 1. Danh sách page
 const pagesRes = await get(`${BASE}/v1/pages`, { access_token: token });
 let pages = pagesRes?.categorized?.activated || pagesRes?.pages || pagesRes?.data || [];
-const onlyPages = String(cfg.chi_quet_page_ids || '').split(',').map((s) => s.trim()).filter(Boolean);
-if (onlyPages.length) pages = pages.filter((p) => onlyPages.includes(String(p.id)));
-if (!pages.length) throw new Error('Pancake không trả về page nào. Kiểm tra lại access token. Phản hồi: ' + JSON.stringify(pagesRes).slice(0, 500));
+pages = (Array.isArray(pages) ? pages : []).filter((p) => p && typeof p === 'object' && p.id != null);
+if (!pages.length) {
+  throw new Error('Pancake không trả về page nào. Kiểm tra lại access token. Phản hồi: ' + JSON.stringify(pagesRes).slice(0, 300));
+}
+// Lọc page: nhận ID page hoặc tên page (không phân biệt hoa thường, khớp một phần tên)
+const norm = (s) => String(s || '').normalize('NFC').toLowerCase().trim();
+const onlyPages = String(cfg.chi_quet_page_ids || '').split(',').map(norm).filter(Boolean);
+if (onlyPages.length) {
+  const all = pages;
+  pages = all.filter((p) => onlyPages.some((q) => norm(p.id) === q || norm(p.name).includes(q)));
+  if (!pages.length) {
+    const list = all.map((p) => `${p.name} (ID: ${p.id})`).join('; ');
+    throw new Error(`Không có page nào khớp "${cfg.chi_quet_page_ids}". Các page hiện có: ${list}`.slice(0, 1500));
+  }
+}
 
 const results = [];
 const errors = [];

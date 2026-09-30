@@ -17,7 +17,7 @@ Mỗi ngày lúc 7h sáng (giờ VN), workflow thực hiện:
 1. Mở node **Cấu hình**:
    - `pancake_access_token`: token tài khoản Pancake (Pancake → Cài đặt → API). Workflow tự tạo token cho từng page.
    - `ngay_bao_cao`: để trống thì tự lấy ngày hôm qua. Điền `YYYY-MM-DD` để chạy lại một ngày cụ thể.
-   - `chi_quet_page_ids`: để trống thì quét tất cả page. Điền danh sách ID cách nhau bằng dấu phẩy để giới hạn.
+   - `chi_quet_page_ids`: để trống thì quét tất cả page. Điền ID hoặc tên page (cách nhau bằng dấu phẩy) để giới hạn.
 2. Gán credential:
    - Mọi node HTTP làm việc với sheet (*Tạo tab…, Tiêu đề…, Đọc tiêu chí, Đọc khóa…, Thêm vào…, Cập nhật…*): dùng *Google Sheets OAuth2 API*.
    - Node **Gemini chấm lead**: dùng *Google Gemini (PaLM) API*, lấy key tại https://aistudio.google.com/apikey.
