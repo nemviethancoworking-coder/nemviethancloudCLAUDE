@@ -1,28 +1,14 @@
-// Cấu hình mặc định. Người dùng chỉnh trong trang Tuỳ chọn của extension.
+// Cấu hình mặc định. Người dùng chỉnh trong trang Tuỳ chọn của extension (lưu ở chrome.storage.local).
 (function (root) {
   'use strict';
   const DEFAULTS = {
-    // --- Mitek ---
-    apiBase: '',                 // VD: https://api.mitek.vn  (dùng để xin quyền truy cập + ghép link tương đối)
-    cdrUrlTemplate: '',          // VD: https://api.mitek.vn/v1/cdr?phone={phone}&from={from}&to={to}
-    authHeaderName: 'Authorization',
-    authHeaderValue: '',         // VD: Bearer xxxxxxxx  (để trống nếu dùng cookie đăng nhập)
-    sendCookies: true,           // gửi cookie phiên đăng nhập Mitek trên Chrome (link ghi âm cần đăng nhập)
-    dateFormat: 'datetime',      // datetime | date | unix | unixms
-    lookbackDays: 90,
-
-    // --- Ánh xạ trường trong JSON trả về ---
-    listPath: 'data',            // đường dẫn tới mảng cuộc gọi
-    fieldTime: 'start_time',
-    fieldDuration: 'duration',
-    fieldDirection: 'direction',
-    fieldAgent: 'extension',
-    fieldRecording: 'recording_url',
-    recordingUrlTemplate: '',    // nếu API chỉ trả mã file: https://api.mitek.vn/v1/recording/{value}
-    extraOrigins: '',            // tên miền khác chứa file ghi âm, mỗi dòng 1 cái. VD: https://rec.mitek.vn
-
-    // --- POScake ---
-    phoneSelector: ''            // CSS selector vùng chứa SĐT trên trang đơn hàng (để trống = tự dò)
+    mitekUrl: '',        // MITEK_URL trong tài liệu, VD: https://abc.mitek.vn  (API: MITEK_URL/cdr/getCallsLog)
+    secret: '',          // secret do Mitek cấp
+    lookbackDays: 90,    // tra cứu cuộc gọi trong N ngày gần nhất
+    maxPages: 5,         // mỗi trang tối đa 100 cuộc (giới hạn của Mitek)
+    sendCookies: true,   // gửi cookie đăng nhập Mitek trên Chrome khi tải file ghi âm
+    extraOrigins: '',    // tên miền chứa file ghi âm (VD: https://rec.mitek.vn), mỗi dòng 1 cái
+    phoneSelector: ''    // CSS selector vùng chứa SĐT trên trang đơn hàng POScake (để trống = tự dò)
   };
   root.MITEK_DEFAULTS = DEFAULTS;
   if (typeof module !== 'undefined' && module.exports) module.exports = DEFAULTS;

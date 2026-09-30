@@ -8,53 +8,32 @@
     h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 28px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
     label { display: block; margin-top: 12px; font-weight: 600; }
     small { display: block; color: #777; font-weight: 400; }
-    input[type=text], input[type=number], select, textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
+    input[type=text], input[type=password], input[type=number], textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
     .row { display: flex; gap: 8px; margin-top: 20px; align-items: center; flex-wrap: wrap; }
     button { padding: 8px 14px; border-radius: 6px; border: 1px solid #1677ff; background: #1677ff; color: #fff; cursor: pointer; }
     button.sec { background: #fff; color: #1677ff; }
-    pre { background: #f6f6f6; padding: 10px; border-radius: 6px; max-height: 300px; overflow: auto; white-space: pre-wrap; }
+    pre { background: #f6f6f6; padding: 10px; border-radius: 6px; max-height: 360px; overflow: auto; white-space: pre-wrap; }
     #msg { font-weight: 600; }
   </style>
 </head>
 <body>
   <h1>🎧 Mitek ghi âm cho POScake – Tuỳ chọn</h1>
-  <p>Điền theo tài liệu API mà Mitek cấp cho tài khoản của bạn.</p>
 
   <h2>1. Kết nối Mitek</h2>
-  <label>Địa chỉ gốc API Mitek <small>VD: https://api.mitek.vn</small>
-    <input type="text" id="apiBase"></label>
-  <label>URL lấy lịch sử cuộc gọi (CDR)
-    <small>Dùng {phone}, {from}, {to}. VD: https://api.mitek.vn/v1/cdr?phone={phone}&amp;from={from}&amp;to={to}</small>
-    <input type="text" id="cdrUrlTemplate"></label>
-  <label>Định dạng {from}/{to}
-    <select id="dateFormat">
-      <option value="datetime">YYYY-MM-DD HH:mm:ss</option>
-      <option value="date">YYYY-MM-DD</option>
-      <option value="unix">Unix (giây)</option>
-      <option value="unixms">Unix (mili giây)</option>
-    </select></label>
+  <label>MITEK_URL
+    <small>Địa chỉ tổng đài Mitek cấp (phần trước <code>/cdr/getCallsLog</code>). VD: https://abc.mitek.vn</small>
+    <input type="text" id="mitekUrl"></label>
+  <label>Secret <small>Mã secret do Mitek cấp.</small>
+    <input type="password" id="secret" autocomplete="off"></label>
   <label>Số ngày tra cứu gần nhất <input type="number" id="lookbackDays" min="1"></label>
-  <label>Tên header xác thực <small>Thường là Authorization hoặc X-API-Key</small>
-    <input type="text" id="authHeaderName"></label>
-  <label>Giá trị header xác thực <small>VD: Bearer abc123. Để trống nếu chỉ dùng phiên đăng nhập Mitek.</small>
-    <input type="text" id="authHeaderValue" autocomplete="off"></label>
-  <label><input type="checkbox" id="sendCookies"> Dùng phiên đăng nhập Mitek trên Chrome
-    <small>Bật nếu link ghi âm chỉ nghe được khi đã đăng nhập Mitek. Bạn cần đăng nhập Mitek trên Chrome này.</small></label>
-  <label>Tên miền khác chứa file ghi âm (nếu có) <small>Mỗi dòng một địa chỉ, VD: https://record.mitek.vn</small>
-    <textarea id="extraOrigins" rows="2"></textarea></label>
+  <label>Số trang tối đa (mỗi trang 100 cuộc gọi, mỗi chiều) <input type="number" id="maxPages" min="1"></label>
 
-  <h2>2. Ánh xạ dữ liệu trả về</h2>
-  <small>Đường dẫn dạng a.b.c trong JSON. Bấm "Thử kết nối" để xem JSON mẫu rồi điền cho đúng.</small>
-  <label>Đường dẫn tới danh sách cuộc gọi <small>VD: data hoặc data.items. Để trống nếu JSON trả về là mảng.</small>
-    <input type="text" id="listPath"></label>
-  <label>Trường thời gian <input type="text" id="fieldTime"></label>
-  <label>Trường thời lượng (giây) <input type="text" id="fieldDuration"></label>
-  <label>Trường chiều gọi (vào/ra) <input type="text" id="fieldDirection"></label>
-  <label>Trường máy lẻ / nhân viên <input type="text" id="fieldAgent"></label>
-  <label>Trường link (hoặc mã) file ghi âm <input type="text" id="fieldRecording"></label>
-  <label>Mẫu URL file ghi âm (nếu trường trên chỉ là mã)
-    <small>Dùng {value}. VD: https://api.mitek.vn/v1/recording/{value}. Để trống nếu đã là link đầy đủ.</small>
-    <input type="text" id="recordingUrlTemplate"></label>
+  <h2>2. File ghi âm</h2>
+  <label><input type="checkbox" id="sendCookies"> Dùng phiên đăng nhập Mitek trên Chrome khi tải ghi âm
+    <small>Bật nếu link ghi âm chỉ nghe được khi đã đăng nhập Mitek. Nhân viên cần đăng nhập Mitek trên Chrome này.</small></label>
+  <label>Tên miền chứa file ghi âm
+    <small>Tự điền sau khi bấm "Thử kết nối". Mỗi dòng một địa chỉ, VD: https://rec.mitek.vn</small>
+    <textarea id="extraOrigins" rows="2"></textarea></label>
 
   <h2>3. POScake</h2>
   <label>CSS selector vùng chứa SĐT khách trên trang đơn hàng (không bắt buộc)
@@ -63,8 +42,9 @@
 
   <div class="row">
     <button id="save">Lưu</button>
-    <input type="text" id="testPhone" placeholder="SĐT để thử" style="width:160px">
+    <input type="text" id="testPhone" placeholder="SĐT khách để thử" style="width:170px">
     <button class="sec" id="test">Thử kết nối</button>
+    <button class="sec" id="grant" hidden>Cấp quyền nghe ghi âm</button>
     <span id="msg"></span>
   </div>
   <pre id="out" hidden></pre>

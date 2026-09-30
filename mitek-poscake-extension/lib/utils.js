@@ -29,51 +29,69 @@
     return out;
   }
 
-  // Lấy giá trị theo đường dẫn "a.b.0.c". Đường dẫn rỗng trả về chính đối tượng.
-  function getPath(obj, path) {
-    if (!path) return obj;
-    return String(path).split('.').reduce(function (cur, key) {
-      return cur == null ? undefined : cur[key];
-    }, obj);
-  }
-
   function pad(n) {
     return n < 10 ? '0' + n : String(n);
   }
 
-  function formatDate(d, fmt) {
-    if (fmt === 'unix') return String(Math.floor(d.getTime() / 1000));
-    if (fmt === 'unixms') return String(d.getTime());
-    const date = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-    if (fmt === 'date') return date;
-    return date + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  // Định dạng "YYYY-mm-dd H:i:s" theo giờ máy, đúng yêu cầu startDate/endDate của Mitek.
+  function formatDateTime(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
 
-  // Thay {key} trong template bằng giá trị đã encode URL.
-  function fillTemplate(tpl, vars) {
-    return String(tpl).replace(/\{(\w+)\}/g, function (all, key) {
-      return Object.prototype.hasOwnProperty.call(vars, key) ? encodeURIComponent(vars[key]) : all;
-    });
+  function callLogUrl(mitekUrl) {
+    return String(mitekUrl || '').trim().replace(/\/+$/, '') + '/cdr/getCallsLog';
   }
 
-  // Chuyển 1 bản ghi CDR của Mitek sang định dạng thống nhất theo cấu hình ánh xạ trường.
-  function mapCall(item, cfg) {
-    let rec = getPath(item, cfg.fieldRecording);
-    if (rec && cfg.recordingUrlTemplate) {
-      rec = fillTemplate(cfg.recordingUrlTemplate, { value: rec });
-    }
-    if (rec && cfg.apiBase && !/^https?:\/\//i.test(rec)) {
-      try {
-        rec = new URL(rec, cfg.apiBase).href;
-      } catch (e) { /* giữ nguyên */ }
-    }
-    return {
-      time: getPath(item, cfg.fieldTime) || '',
-      duration: getPath(item, cfg.fieldDuration),
-      direction: getPath(item, cfg.fieldDirection) || '',
-      agent: getPath(item, cfg.fieldAgent) || '',
-      recordingUrl: rec || ''
+  // Body cho API Get Call Logs. Mitek giới hạn (limit - offset) <= 100.
+  // field là 'srcs' (khách gọi đến) hoặc 'dsts' (gọi ra cho khách).
+  function buildCallLogBody(opts) {
+    const body = {
+      secret: opts.secret,
+      startDate: formatDateTime(opts.from),
+      endDate: formatDateTime(opts.to),
+      offset: String(opts.offset),
+      limit: String(opts.offset + 100)
     };
+    body[opts.field] = [opts.phone];
+    return body;
+  }
+
+  // Mitek trả về mảng; một số bản bọc trong { data: [...] }.
+  function extractList(json) {
+    if (Array.isArray(json)) return json;
+    if (json && Array.isArray(json.data)) return json.data;
+    return null;
+  }
+
+  function mapCall(item, customerPhone) {
+    const caller = String(item.caller == null ? '' : item.caller);
+    const called = String(item.called == null ? '' : item.called);
+    const customerIsCaller = normalizePhone(caller) === customerPhone;
+    return {
+      id: item.callrefid || '',
+      time: item.calldate || '',
+      direction: item.calltype || (customerIsCaller ? 'in' : 'out'),
+      status: item.callstatus || '',
+      duration: item.billsec != null ? item.billsec : item.duration,
+      agent: customerIsCaller ? called : caller,
+      recordingUrl: item.recordingfile || ''
+    };
+  }
+
+  // Gộp kết quả 2 chiều gọi, bỏ trùng theo callrefid, mới nhất lên đầu.
+  function mergeCalls(lists) {
+    const seen = new Set();
+    const out = [];
+    lists.forEach(function (list) {
+      list.forEach(function (c) {
+        const key = c.id || c.time + '|' + c.recordingUrl;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(c);
+      });
+    });
+    return out.sort(function (a, b) { return String(b.time).localeCompare(String(a.time)); });
   }
 
   function formatDuration(sec) {
@@ -82,7 +100,14 @@
     return Math.floor(s / 60) + ':' + pad(s % 60);
   }
 
-  const api = { normalizePhone, findPhones, getPath, formatDate, fillTemplate, mapCall, formatDuration };
+  function originOf(url) {
+    try { return new URL(url).origin; } catch (e) { return ''; }
+  }
+
+  const api = {
+    normalizePhone, findPhones, formatDateTime, callLogUrl, buildCallLogBody,
+    extractList, mapCall, mergeCalls, formatDuration, originOf
+  };
   root.MitekUtils = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

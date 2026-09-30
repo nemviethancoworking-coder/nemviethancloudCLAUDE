@@ -6,9 +6,9 @@
   let panel = null;
   let fab = null;
 
-  chrome.storage.sync.get({ phoneSelector: '' }, function (c) { phoneSelector = c.phoneSelector || ''; });
-  chrome.storage.onChanged.addListener(function (ch) {
-    if (ch.phoneSelector) phoneSelector = ch.phoneSelector.newValue || '';
+  chrome.storage.local.get({ phoneSelector: '' }, function (c) { phoneSelector = c.phoneSelector || ''; });
+  chrome.storage.onChanged.addListener(function (ch, area) {
+    if (area === 'local' && ch.phoneSelector) phoneSelector = ch.phoneSelector.newValue || '';
   });
 
   function send(msg) {
@@ -103,8 +103,9 @@
     const player = el('div', { class: 'mtk-player' });
     const dir = String(c.direction).toLowerCase();
     // Kiểm tra "out" trước vì "outgoing" cũng chứa chữ "in".
-    const icon = /^(out|gọi đi|goi di|đi|di|ra)/.test(dir) ? '↗ Gọi đi' : /^(in|gọi đến|goi den|đến|den|vào|vao)/.test(dir) ? '↙ Gọi đến' : '•';
-    const meta = [c.time, U.formatDuration(c.duration), c.agent ? 'máy lẻ ' + c.agent : ''].filter(Boolean).join(' · ');
+    const icon = /^(out|gọi đi|goi di|đi|di|ra)/.test(dir) ? '↗ Gọi đi' : /^(in|gọi đến|goi den|đến|den|vào|vao)/.test(dir) ? '↙ Gọi đến' : '• ' + c.direction;
+    const status = c.status && !/^answered$/i.test(c.status) ? c.status : '';
+    const meta = [c.time, U.formatDuration(c.duration), c.agent ? 'máy lẻ ' + c.agent : '', status].filter(Boolean).join(' · ');
     const btn = el('button', {
       class: 'mtk-btn',
       text: c.recordingUrl ? '▶ Nghe' : 'Không có ghi âm'

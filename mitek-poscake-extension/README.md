@@ -9,7 +9,7 @@ Nghe lại ghi âm cuộc gọi tổng đài **Mitek** ngay trên **trang đơn 
 3. Bấm **▶ Nghe** để phát ghi âm ngay trong bảng.
 4. Cách khác: bôi đen một số điện thoại bất kỳ trên POScake → chuột phải → **Nghe ghi âm Mitek của số "..."**.
 
-Link ghi âm của Mitek cần đăng nhập. Extension tải file bằng API key và/hoặc phiên đăng nhập Mitek có sẵn trên Chrome, rồi phát trực tiếp. File không được lưu vào máy.
+Link ghi âm của Mitek cần đăng nhập. Extension tải file bằng phiên đăng nhập Mitek có sẵn trên Chrome, rồi phát trực tiếp. File không được lưu vào máy.
 
 ## Cài đặt (mỗi máy nhân viên)
 
@@ -20,28 +20,23 @@ Link ghi âm của Mitek cần đăng nhập. Extension tải file bằng API ke
 
 ## Cấu hình (làm 1 lần)
 
-Điền theo tài liệu API mà Mitek cấp:
+Extension dùng API **Get Call Logs** của Mitek (`POST MITEK_URL/cdr/getCallsLog`, theo tài liệu *CallCenter Webhook&API v1.5.1*). Với mỗi SĐT, extension gọi 2 lần: `srcs` (khách gọi đến) và `dsts` (gọi ra cho khách), mỗi lần tối đa 100 cuộc/trang. Sau đó gộp lại và xếp mới nhất lên đầu.
 
-| Ô | Ví dụ | Ghi chú |
-|---|---|---|
-| Địa chỉ gốc API | `https://api.mitek.vn` | |
-| URL lịch sử cuộc gọi | `https://api.mitek.vn/v1/cdr?phone={phone}&from={from}&to={to}` | `{phone}`, `{from}`, `{to}` được tự điền |
-| Header xác thực | `Authorization` / `Bearer xxx` | Hoặc `X-API-Key` tuỳ Mitek |
-| Dùng phiên đăng nhập Mitek | ✔ | Bật nếu ghi âm chỉ nghe được khi đã đăng nhập |
-| Đường dẫn danh sách | `data` | Vị trí mảng cuộc gọi trong JSON |
-| Các trường | `start_time`, `duration`, `direction`, `extension`, `recording_url` | Đổi theo tên trường thật |
+1. Mở Tuỳ chọn, điền:
+   - **MITEK_URL**: địa chỉ tổng đài Mitek cấp, VD `https://abc.mitek.vn` (không gồm `/cdr/getCallsLog`).
+   - **Secret**: mã secret Mitek cấp.
+2. Nhập SĐT một khách đã từng gọi, bấm **Thử kết nối** và chọn **Cho phép** khi Chrome hỏi quyền.
+3. Nếu kết nối OK, sẽ hiện nút **Cấp quyền nghe ghi âm (https://rec...)**. Bấm vào nút và chọn **Cho phép**. Tên miền chứa file ghi âm thường khác MITEK_URL.
+4. Nếu link ghi âm cần đăng nhập, giữ bật ô **Dùng phiên đăng nhập Mitek** và đăng nhập Mitek trên cùng Chrome đó.
 
-Sau đó nhập một SĐT đã từng gọi vào ô bên cạnh nút **Thử kết nối** rồi bấm nút. Trang sẽ hiện **JSON gốc** Mitek trả về. Bạn nhìn vào đó để sửa các ô tên trường cho đúng, rồi bấm **Lưu**. Chrome sẽ hỏi cấp quyền truy cập tên miền Mitek: chọn **Cho phép**.
-
-Nếu Mitek chỉ trả **mã file** thay vì link ghi âm, điền ô **Mẫu URL file ghi âm**, ví dụ `https://api.mitek.vn/v1/recording/{value}`.
-
-> Cấu hình được lưu bằng `chrome.storage.sync`, tức là đồng bộ theo tài khoản Google trên Chrome. Không commit API key vào mã nguồn.
+> Cấu hình (kể cả secret) được lưu trong `chrome.storage.local` trên từng máy. Nhân viên nào có quyền mở trang Tuỳ chọn thì xem được secret. Không commit secret vào mã nguồn.
 
 ## Lỗi thường gặp
 
-- **"Mitek từ chối truy cập (401/403)"**: API key sai, hoặc phiên đăng nhập Mitek trên Chrome đã hết hạn.
+- **"Mitek từ chối truy cập" / "không đúng dạng danh sách"**: secret sai hoặc MITEK_URL sai.
+- **"Chưa cấp quyền cho tên miền ghi âm"**: vào Tuỳ chọn, bấm Thử kết nối rồi bấm Cấp quyền nghe ghi âm.
 - **"Mitek trả về trang đăng nhập"**: đăng nhập lại Mitek trên cùng Chrome.
-- **Không tìm thấy danh sách cuộc gọi**: ô "Đường dẫn danh sách" chưa đúng. Xem JSON gốc khi bấm Thử kết nối.
+- **Thiếu cuộc gọi ra**: nếu tổng đài lưu số gọi ra có tiền tố (VD `9` hay `84`), báo lại để chỉnh.
 - **Không tự nhận SĐT / nhận sai số**: gõ số vào ô trong bảng, hoặc điền CSS selector vùng chứa SĐT khách ở mục 3 của Tuỳ chọn.
 
 ## Phát triển
@@ -52,7 +47,7 @@ npm test   # kiểm tra các hàm xử lý SĐT, ánh xạ dữ liệu
 
 Các file:
 - `manifest.json`: khai báo extension (Manifest V3)
-- `background.js`: gọi API Mitek và tải file ghi âm (tránh bị chặn CORS)
+- `background.js`: gọi API Mitek `cdr/getCallsLog` và tải file ghi âm (tránh bị chặn CORS)
 - `content.js`, `content.css`: nút và bảng nghe ghi âm trên POScake
 - `options.html`, `options.js`: trang cấu hình
 - `lib/utils.js`, `lib/defaults.js`: hàm dùng chung và cấu hình mặc định

@@ -1,12 +1,19 @@
 (function () {
   'use strict';
   const D = window.MITEK_DEFAULTS;
+  const U = window.MitekUtils;
   const $ = (id) => document.getElementById(id);
   const msg = $('msg');
   const out = $('out');
+  const grantBtn = $('grant');
+
+  function say(text, color) {
+    msg.style.color = color || '#555';
+    msg.textContent = text;
+  }
 
   function load() {
-    chrome.storage.sync.get(D, function (cfg) {
+    chrome.storage.local.get(D, function (cfg) {
       Object.keys(D).forEach(function (k) {
         const input = $(k);
         if (!input) return;
@@ -28,54 +35,69 @@
     return cfg;
   }
 
-  function originsOf(cfg) {
-    const urls = [cfg.apiBase, cfg.cdrUrlTemplate, cfg.recordingUrlTemplate].concat(cfg.extraOrigins.split(/\s+/));
+  function originPatterns(cfg) {
     const set = new Set();
-    urls.forEach(function (u) {
-      if (!u) return;
-      try { set.add(new URL(u.replace(/\{\w+\}/g, 'x')).origin + '/*'); } catch (e) { /* bỏ qua */ }
+    [cfg.mitekUrl].concat(cfg.extraOrigins.split(/\s+/)).forEach(function (u) {
+      const o = U.originOf(u);
+      if (o) set.add(o + '/*');
     });
     return Array.from(set);
   }
 
-  // Phải gọi trong sự kiện click để Chrome hiện hộp thoại xin quyền.
+  // Phải gọi ngay trong sự kiện click để Chrome hiện hộp thoại xin quyền.
   function save() {
     const cfg = read();
-    const origins = originsOf(cfg);
+    const origins = originPatterns(cfg);
     const grant = origins.length ? chrome.permissions.request({ origins }) : Promise.resolve(true);
     return grant.then(function (granted) {
-      return chrome.storage.sync.set(cfg).then(function () {
-        msg.style.color = granted ? 'green' : '#cf1322';
-        msg.textContent = granted ? 'Đã lưu.' : 'Đã lưu, nhưng bạn chưa cấp quyền truy cập Mitek, nên extension sẽ không gọi được.';
+      return chrome.storage.local.set(cfg).then(function () {
+        if (granted) say('Đã lưu.', 'green');
+        else say('Đã lưu, nhưng bạn chưa cấp quyền truy cập Mitek, nên extension sẽ không gọi được.', '#cf1322');
         return granted;
       });
     });
   }
 
+  // Sau khi thử kết nối: tìm tên miền file ghi âm chưa có quyền và đề nghị cấp.
+  function offerRecordingOrigins(calls) {
+    const known = $('extraOrigins').value.split(/\s+/).filter(Boolean);
+    const found = [];
+    calls.forEach(function (c) {
+      const o = U.originOf(c.recordingUrl);
+      if (o && known.indexOf(o) < 0 && found.indexOf(o) < 0) found.push(o);
+    });
+    if (!found.length) return;
+    $('extraOrigins').value = known.concat(found).join('\n');
+    grantBtn.hidden = false;
+    grantBtn.textContent = 'Cấp quyền nghe ghi âm (' + found.join(', ') + ')';
+  }
+
   function test() {
     const phone = $('testPhone').value.trim();
-    if (!phone) { msg.style.color = '#cf1322'; msg.textContent = 'Nhập SĐT để thử.'; return; }
+    if (!phone) { say('Nhập SĐT để thử.', '#cf1322'); return; }
     save().then(function () {
-      msg.style.color = '#555';
-      msg.textContent = 'Đang gọi Mitek…';
+      say('Đang gọi Mitek…');
       chrome.runtime.sendMessage({ type: 'testCalls', phone }, function (res) {
         out.hidden = false;
         if (!res || !res.ok) {
-          msg.style.color = '#cf1322';
-          msg.textContent = '⚠ ' + ((res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message));
-          out.textContent = res && res.raw ? 'JSON trả về:\n' + JSON.stringify(res.raw, null, 2).slice(0, 5000) : '';
+          say('⚠ ' + ((res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message)), '#cf1322');
+          out.textContent = res && res.raw ? 'Dữ liệu Mitek trả về:\n' + JSON.stringify(res.raw, null, 2).slice(0, 5000) : '';
           return;
         }
-        msg.style.color = 'green';
-        msg.textContent = 'Kết nối OK, ' + res.data.calls.length + ' cuộc gọi.';
-        out.textContent =
-          'Kết quả sau ánh xạ (3 cuộc đầu):\n' + JSON.stringify(res.data.calls.slice(0, 3), null, 2) +
-          '\n\nJSON gốc:\n' + JSON.stringify(res.data.raw, null, 2).slice(0, 5000);
+        const calls = res.data.calls;
+        say('Kết nối OK: ' + calls.length + ' cuộc gọi với ' + U.normalizePhone(phone) + '.', 'green');
+        out.textContent = '3 cuộc gần nhất:\n' + JSON.stringify(calls.slice(0, 3), null, 2);
+        offerRecordingOrigins(calls);
       });
     });
   }
 
   $('save').addEventListener('click', save);
   $('test').addEventListener('click', test);
+  grantBtn.addEventListener('click', function () {
+    save().then(function (granted) {
+      if (granted) { grantBtn.hidden = true; say('Đã cấp quyền nghe ghi âm.', 'green'); }
+    });
+  });
   load();
 })();
