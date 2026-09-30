@@ -19,7 +19,7 @@ Mỗi ngày lúc 7h sáng (giờ VN), workflow thực hiện:
    - `ngay_bao_cao`: để trống thì tự lấy ngày hôm qua. Điền `YYYY-MM-DD` để chạy lại một ngày cụ thể.
    - `chi_quet_page_ids`: để trống thì quét tất cả page. Điền danh sách ID cách nhau bằng dấu phẩy để giới hạn.
 2. Gán credential:
-   - Các node **Tạo tab / Tiêu đề / Đọc tiêu chí / Ghi BC_\***: dùng *Google Sheets OAuth2 API*.
+   - Mọi node HTTP làm việc với sheet (*Tạo tab…, Tiêu đề…, Đọc tiêu chí, Đọc khóa…, Thêm vào…, Cập nhật…*): dùng *Google Sheets OAuth2 API*.
    - Node **Gemini chấm lead**: dùng *Google Gemini (PaLM) API*, lấy key tại https://aistudio.google.com/apikey.
 3. Bấm **Test workflow** (nút "Chạy thử"), kiểm tra 2 tab mới trong sheet, rồi bật **Active**.
 

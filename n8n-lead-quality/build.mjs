@@ -184,41 +184,67 @@ nodes.push(
 );
 
 const [sx] = pos();
-nodes.push(
-  {
-    name: 'Ghi BC_CHI_TIET',
-    type: 'n8n-nodes-base.googleSheets',
-    typeVersion: 4.5,
-    position: [sx, 180],
-    parameters: {
-      operation: 'appendOrUpdate',
-      documentId: { __rl: true, mode: 'id', value: "={{ $('Cấu hình').first().json.spreadsheet_id }}" },
-      sheetName: { __rl: true, mode: 'name', value: 'BC_CHI_TIET' },
-      columns: { mappingMode: 'autoMapInputData', value: {}, matchingColumns: ['Mã hội thoại'], schema: [] },
-      options: { handlingExtraData: 'ignoreIt' },
+nodes.push({
+  name: 'Thống kê ngày',
+  type: 'n8n-nodes-base.code',
+  typeVersion: 2,
+  position: [sx, 460],
+  executeOnce: true,
+  parameters: { jsCode: code('daily-stats.js') },
+});
+
+// Ghi sheet qua Google Sheets API: đọc cột khóa, ghi đè dòng đã có, thêm dòng mới.
+const writeTab = (tab, source, x0, y) => {
+  const tpl = (mode) => code('sheet-rows.js')
+    .replaceAll('__TAB__', tab).replaceAll('__MODE__', mode).replaceAll('__SOURCE__', source)
+    .replace('__HEADERS__', JSON.stringify(HEADERS[tab]));
+  nodes.push(
+    {
+      name: `Đọc khóa ${tab}`,
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: [x0, y],
+      executeOnce: true,
+      parameters: { method: 'GET', url: `${SHEETS_API}/values/${tab}!A:A`, ...sheetsCred, options: {} },
     },
-  },
-  {
-    name: 'Thống kê ngày',
-    type: 'n8n-nodes-base.code',
-    typeVersion: 2,
-    position: [sx, 420],
-    parameters: { jsCode: code('daily-stats.js') },
-  },
-  {
-    name: 'Ghi BC_NGAY',
-    type: 'n8n-nodes-base.googleSheets',
-    typeVersion: 4.5,
-    position: [sx + 220, 420],
-    parameters: {
-      operation: 'appendOrUpdate',
-      documentId: { __rl: true, mode: 'id', value: "={{ $('Cấu hình').first().json.spreadsheet_id }}" },
-      sheetName: { __rl: true, mode: 'name', value: 'BC_NGAY' },
-      columns: { mappingMode: 'autoMapInputData', value: {}, matchingColumns: ['Ngày'], schema: [] },
-      options: { handlingExtraData: 'ignoreIt' },
+    { name: `Dòng mới ${tab}`, type: 'n8n-nodes-base.code', typeVersion: 2, position: [x0 + 220, y - 80], parameters: { jsCode: tpl('append') } },
+    { name: `Dòng cũ ${tab}`, type: 'n8n-nodes-base.code', typeVersion: 2, position: [x0 + 220, y + 80], parameters: { jsCode: tpl('update') } },
+    {
+      name: `Thêm vào ${tab}`,
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: [x0 + 440, y - 80],
+      parameters: {
+        method: 'POST',
+        url: `${SHEETS_API}/values/${tab}!A1:append`,
+        ...sheetsCred,
+        sendQuery: true,
+        queryParameters: { parameters: [{ name: 'valueInputOption', value: 'RAW' }, { name: 'insertDataOption', value: 'INSERT_ROWS' }] },
+        sendBody: true,
+        specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify($json.body) }}',
+        options: {},
+      },
     },
-  },
-);
+    {
+      name: `Cập nhật ${tab}`,
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: [x0 + 440, y + 80],
+      parameters: {
+        method: 'POST',
+        url: `${SHEETS_API}/values:batchUpdate`,
+        ...sheetsCred,
+        sendBody: true,
+        specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify($json.body) }}',
+        options: {},
+      },
+    },
+  );
+};
+writeTab('BC_CHI_TIET', 'Tách kết quả AI', sx, 180);
+writeTab('BC_NGAY', 'Thống kê ngày', sx + 220, 520);
 
 const chain = [
   'Cấu hình', 'Tạo tab BC_NGAY', 'Tạo tab BC_CHI_TIET', 'Tiêu đề BC_NGAY', 'Tiêu đề BC_CHI_TIET',
@@ -237,12 +263,15 @@ link('Có hội thoại?', 'Chia lô gửi AI', 0);
 link('Có hội thoại?', 'Thống kê ngày', 1);
 link('Chia lô gửi AI', 'Gemini chấm lead');
 link('Gemini chấm lead', 'Tách kết quả AI');
-link('Tách kết quả AI', 'Ghi BC_CHI_TIET');
+link('Tách kết quả AI', 'Đọc khóa BC_CHI_TIET');
 link('Tách kết quả AI', 'Thống kê ngày');
-link('Thống kê ngày', 'Ghi BC_NGAY');
-
-// "Thống kê ngày" nhận nhiều item nhưng chỉ cần chạy 1 lần
-nodes.find((n) => n.name === 'Thống kê ngày').executeOnce = true;
+link('Thống kê ngày', 'Đọc khóa BC_NGAY');
+for (const tab of ['BC_CHI_TIET', 'BC_NGAY']) {
+  link(`Đọc khóa ${tab}`, `Dòng mới ${tab}`);
+  link(`Đọc khóa ${tab}`, `Dòng cũ ${tab}`);
+  link(`Dòng mới ${tab}`, `Thêm vào ${tab}`);
+  link(`Dòng cũ ${tab}`, `Cập nhật ${tab}`);
+}
 
 const workflow = {
   name: 'Pancake - Đánh giá chất lượng lead hằng ngày (Gemini)',

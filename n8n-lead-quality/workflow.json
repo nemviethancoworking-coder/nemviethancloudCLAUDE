@@ -320,84 +320,210 @@
     },
     {
       "id": "node-13",
-      "name": "Ghi BC_CHI_TIET",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
-      "position": [
-        2640,
-        180
-      ],
-      "parameters": {
-        "operation": "appendOrUpdate",
-        "documentId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Cấu hình').first().json.spreadsheet_id }}"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "name",
-          "value": "BC_CHI_TIET"
-        },
-        "columns": {
-          "mappingMode": "autoMapInputData",
-          "value": {},
-          "matchingColumns": [
-            "Mã hội thoại"
-          ],
-          "schema": []
-        },
-        "options": {
-          "handlingExtraData": "ignoreIt"
-        }
-      }
-    },
-    {
-      "id": "node-14",
       "name": "Thống kê ngày",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         2640,
-        420
+        460
       ],
+      "executeOnce": true,
       "parameters": {
         "jsCode": "// Tổng hợp 1 dòng thống kê / ngày cho tab BC_NGAY.\nlet rows = [];\ntry {\n  rows = $('Tách kết quả AI').all().map((i) => i.json);\n} catch (e) {\n  rows = [];\n}\nconst first = $('Lấy hội thoại Pancake').first().json;\nconst day = first.ngay;\nconst count = (arr, key) => arr.reduce((m, x) => {\n  const k = key(x);\n  if (k) m[k] = (m[k] || 0) + 1;\n  return m;\n}, {});\nconst top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k} (${v})`).join('; ');\n\nconst total = rows.length;\nconst by = count(rows, (r) => r['Kết luận']);\nconst ngon = by['Ngon'] || 0;\nconst dở = by['Dở'] || 0;\n\nconst filterDo = {};\nfor (const r of rows) {\n  for (const b of r._bo_loc || []) {\n    if (b.ket_qua === 'DO') filterDo[b.ten] = (filterDo[b.ten] || 0) + 1;\n  }\n}\nconst pages = {};\nfor (const r of rows) {\n  const p = (pages[r['Page']] ||= { t: 0, n: 0 });\n  p.t++;\n  if (r['Kết luận'] === 'Ngon') p.n++;\n}\n\nreturn [{\n  json: {\n    'Ngày': day,\n    'Tổng lead': total,\n    'Lead ngon': ngon,\n    'Lead dở': dở,\n    'Chưa rõ': by['Chưa rõ'] || 0,\n    'Lỗi AI': by['Lỗi AI'] || 0,\n    'Tỉ lệ ngon (%)': total ? Math.round((ngon / total) * 1000) / 10 : 0,\n    'Dở theo bộ lọc': Object.entries(filterDo).map(([k, v]) => `${k}: ${v}`).join('\\n'),\n    'Lý do dở phổ biến': top(count(rows.filter((r) => r['Kết luận'] === 'Dở'), (r) => r['Nhóm lý do']), 5),\n    'Điểm cộng phổ biến': top(count(rows.filter((r) => r['Kết luận'] === 'Ngon'), (r) => r['Nhóm lý do']), 5),\n    'Theo page': Object.entries(pages).map(([k, v]) => `${k}: ${v.n}/${v.t} ngon`).join('\\n'),\n    'Ghi chú': first._empty ? `Không có hội thoại mới. ${first.loi || ''}`.trim() : first.loi_lay_du_lieu || '',\n    'Cập nhật lúc': new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' '),\n  },\n}];\n"
-      },
-      "executeOnce": true
+      }
+    },
+    {
+      "id": "node-14",
+      "name": "Đọc khóa BC_CHI_TIET",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        180
+      ],
+      "executeOnce": true,
+      "parameters": {
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/BC_CHI_TIET!A:A",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      }
     },
     {
       "id": "node-15",
-      "name": "Ghi BC_NGAY",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
+      "name": "Dòng mới BC_CHI_TIET",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         2860,
-        420
+        100
       ],
       "parameters": {
-        "operation": "appendOrUpdate",
-        "documentId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Cấu hình').first().json.spreadsheet_id }}"
+        "jsCode": "// Chuẩn bị dòng ghi vào tab BC_CHI_TIET (chế độ: append).\n// Khóa là cột A: dòng đã có khóa thì ghi đè đúng dòng đó, chưa có thì thêm mới.\nconst TAB = 'BC_CHI_TIET';\nconst MODE = 'append';\nconst HEADERS = [\"Mã hội thoại\",\"Ngày\",\"Page\",\"Khách hàng\",\"Loại\",\"Tin khách/page\",\"Kết luận\",\"Nhóm lý do\",\"Lý do\",\"Chi tiết bộ lọc\",\"Nhu cầu\",\"Link Pancake\",\"Cập nhật lúc\"];\nlet source = [];\ntry {\n  source = $('Tách kết quả AI').all().map((i) => i.json);\n} catch (e) {\n  source = [];\n}\nconst existing = ($('Đọc khóa BC_CHI_TIET').first().json.values || []).map((r) => String((r || [])[0] ?? '').trim());\nconst rowOf = new Map();\nexisting.forEach((k, i) => { if (i > 0 && k && !rowOf.has(k)) rowOf.set(k, i + 1); });\n\nconst toRow = (o) => HEADERS.map((h) => {\n  const v = o[h];\n  return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : v;\n});\n\nconst updates = [];\nconst appends = [];\nfor (const o of source) {\n  const key = String(o[HEADERS[0]] ?? '').trim();\n  if (!key) continue;\n  const r = rowOf.get(key);\n  if (r) updates.push({ range: `${TAB}!A${r}`, values: [toRow(o)] });\n  else appends.push(toRow(o));\n}\n\nif (MODE === 'update') {\n  return updates.length ? [{ json: { body: { valueInputOption: 'RAW', data: updates } } }] : [];\n}\nreturn appends.length ? [{ json: { body: { values: appends } } }] : [];\n"
+      }
+    },
+    {
+      "id": "node-16",
+      "name": "Dòng cũ BC_CHI_TIET",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        260
+      ],
+      "parameters": {
+        "jsCode": "// Chuẩn bị dòng ghi vào tab BC_CHI_TIET (chế độ: update).\n// Khóa là cột A: dòng đã có khóa thì ghi đè đúng dòng đó, chưa có thì thêm mới.\nconst TAB = 'BC_CHI_TIET';\nconst MODE = 'update';\nconst HEADERS = [\"Mã hội thoại\",\"Ngày\",\"Page\",\"Khách hàng\",\"Loại\",\"Tin khách/page\",\"Kết luận\",\"Nhóm lý do\",\"Lý do\",\"Chi tiết bộ lọc\",\"Nhu cầu\",\"Link Pancake\",\"Cập nhật lúc\"];\nlet source = [];\ntry {\n  source = $('Tách kết quả AI').all().map((i) => i.json);\n} catch (e) {\n  source = [];\n}\nconst existing = ($('Đọc khóa BC_CHI_TIET').first().json.values || []).map((r) => String((r || [])[0] ?? '').trim());\nconst rowOf = new Map();\nexisting.forEach((k, i) => { if (i > 0 && k && !rowOf.has(k)) rowOf.set(k, i + 1); });\n\nconst toRow = (o) => HEADERS.map((h) => {\n  const v = o[h];\n  return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : v;\n});\n\nconst updates = [];\nconst appends = [];\nfor (const o of source) {\n  const key = String(o[HEADERS[0]] ?? '').trim();\n  if (!key) continue;\n  const r = rowOf.get(key);\n  if (r) updates.push({ range: `${TAB}!A${r}`, values: [toRow(o)] });\n  else appends.push(toRow(o));\n}\n\nif (MODE === 'update') {\n  return updates.length ? [{ json: { body: { valueInputOption: 'RAW', data: updates } } }] : [];\n}\nreturn appends.length ? [{ json: { body: { values: appends } } }] : [];\n"
+      }
+    },
+    {
+      "id": "node-17",
+      "name": "Thêm vào BC_CHI_TIET",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/BC_CHI_TIET!A1:append",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            },
+            {
+              "name": "insertDataOption",
+              "value": "INSERT_ROWS"
+            }
+          ]
         },
-        "sheetName": {
-          "__rl": true,
-          "mode": "name",
-          "value": "BC_NGAY"
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-18",
+      "name": "Cập nhật BC_CHI_TIET",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-19",
+      "name": "Đọc khóa BC_NGAY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        520
+      ],
+      "executeOnce": true,
+      "parameters": {
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/BC_NGAY!A:A",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-20",
+      "name": "Dòng mới BC_NGAY",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        440
+      ],
+      "parameters": {
+        "jsCode": "// Chuẩn bị dòng ghi vào tab BC_NGAY (chế độ: append).\n// Khóa là cột A: dòng đã có khóa thì ghi đè đúng dòng đó, chưa có thì thêm mới.\nconst TAB = 'BC_NGAY';\nconst MODE = 'append';\nconst HEADERS = [\"Ngày\",\"Tổng lead\",\"Lead ngon\",\"Lead dở\",\"Chưa rõ\",\"Lỗi AI\",\"Tỉ lệ ngon (%)\",\"Dở theo bộ lọc\",\"Lý do dở phổ biến\",\"Điểm cộng phổ biến\",\"Theo page\",\"Ghi chú\",\"Cập nhật lúc\"];\nlet source = [];\ntry {\n  source = $('Thống kê ngày').all().map((i) => i.json);\n} catch (e) {\n  source = [];\n}\nconst existing = ($('Đọc khóa BC_NGAY').first().json.values || []).map((r) => String((r || [])[0] ?? '').trim());\nconst rowOf = new Map();\nexisting.forEach((k, i) => { if (i > 0 && k && !rowOf.has(k)) rowOf.set(k, i + 1); });\n\nconst toRow = (o) => HEADERS.map((h) => {\n  const v = o[h];\n  return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : v;\n});\n\nconst updates = [];\nconst appends = [];\nfor (const o of source) {\n  const key = String(o[HEADERS[0]] ?? '').trim();\n  if (!key) continue;\n  const r = rowOf.get(key);\n  if (r) updates.push({ range: `${TAB}!A${r}`, values: [toRow(o)] });\n  else appends.push(toRow(o));\n}\n\nif (MODE === 'update') {\n  return updates.length ? [{ json: { body: { valueInputOption: 'RAW', data: updates } } }] : [];\n}\nreturn appends.length ? [{ json: { body: { values: appends } } }] : [];\n"
+      }
+    },
+    {
+      "id": "node-21",
+      "name": "Dòng cũ BC_NGAY",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        600
+      ],
+      "parameters": {
+        "jsCode": "// Chuẩn bị dòng ghi vào tab BC_NGAY (chế độ: update).\n// Khóa là cột A: dòng đã có khóa thì ghi đè đúng dòng đó, chưa có thì thêm mới.\nconst TAB = 'BC_NGAY';\nconst MODE = 'update';\nconst HEADERS = [\"Ngày\",\"Tổng lead\",\"Lead ngon\",\"Lead dở\",\"Chưa rõ\",\"Lỗi AI\",\"Tỉ lệ ngon (%)\",\"Dở theo bộ lọc\",\"Lý do dở phổ biến\",\"Điểm cộng phổ biến\",\"Theo page\",\"Ghi chú\",\"Cập nhật lúc\"];\nlet source = [];\ntry {\n  source = $('Thống kê ngày').all().map((i) => i.json);\n} catch (e) {\n  source = [];\n}\nconst existing = ($('Đọc khóa BC_NGAY').first().json.values || []).map((r) => String((r || [])[0] ?? '').trim());\nconst rowOf = new Map();\nexisting.forEach((k, i) => { if (i > 0 && k && !rowOf.has(k)) rowOf.set(k, i + 1); });\n\nconst toRow = (o) => HEADERS.map((h) => {\n  const v = o[h];\n  return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : v;\n});\n\nconst updates = [];\nconst appends = [];\nfor (const o of source) {\n  const key = String(o[HEADERS[0]] ?? '').trim();\n  if (!key) continue;\n  const r = rowOf.get(key);\n  if (r) updates.push({ range: `${TAB}!A${r}`, values: [toRow(o)] });\n  else appends.push(toRow(o));\n}\n\nif (MODE === 'update') {\n  return updates.length ? [{ json: { body: { valueInputOption: 'RAW', data: updates } } }] : [];\n}\nreturn appends.length ? [{ json: { body: { values: appends } } }] : [];\n"
+      }
+    },
+    {
+      "id": "node-22",
+      "name": "Thêm vào BC_NGAY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        440
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/BC_NGAY!A1:append",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            },
+            {
+              "name": "insertDataOption",
+              "value": "INSERT_ROWS"
+            }
+          ]
         },
-        "columns": {
-          "mappingMode": "autoMapInputData",
-          "value": {},
-          "matchingColumns": [
-            "Ngày"
-          ],
-          "schema": []
-        },
-        "options": {
-          "handlingExtraData": "ignoreIt"
-        }
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-23",
+      "name": "Cập nhật BC_NGAY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
       }
     }
   ],
@@ -545,7 +671,7 @@
       "main": [
         [
           {
-            "node": "Ghi BC_CHI_TIET",
+            "node": "Đọc khóa BC_CHI_TIET",
             "type": "main",
             "index": 0
           },
@@ -561,7 +687,83 @@
       "main": [
         [
           {
-            "node": "Ghi BC_NGAY",
+            "node": "Đọc khóa BC_NGAY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đọc khóa BC_CHI_TIET": {
+      "main": [
+        [
+          {
+            "node": "Dòng mới BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Dòng cũ BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dòng mới BC_CHI_TIET": {
+      "main": [
+        [
+          {
+            "node": "Thêm vào BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dòng cũ BC_CHI_TIET": {
+      "main": [
+        [
+          {
+            "node": "Cập nhật BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đọc khóa BC_NGAY": {
+      "main": [
+        [
+          {
+            "node": "Dòng mới BC_NGAY",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Dòng cũ BC_NGAY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dòng mới BC_NGAY": {
+      "main": [
+        [
+          {
+            "node": "Thêm vào BC_NGAY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dòng cũ BC_NGAY": {
+      "main": [
+        [
+          {
+            "node": "Cập nhật BC_NGAY",
             "type": "main",
             "index": 0
           }
