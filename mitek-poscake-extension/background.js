@@ -121,11 +121,14 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 });
 
 chrome.runtime.onInstalled.addListener(function () {
-  chrome.contextMenus.create({
-    id: 'mitek-lookup',
-    title: 'Nghe ghi âm Mitek của số "%s"',
-    contexts: ['selection'],
-    documentUrlPatterns: ['https://pos.pages.fm/*']
+  // Xoá menu cũ trước để tránh lỗi trùng id khi cập nhật/tải lại extension.
+  chrome.contextMenus.removeAll(function () {
+    chrome.contextMenus.create({
+      id: 'mitek-lookup',
+      title: 'Nghe ghi âm Mitek của số "%s"',
+      contexts: ['selection'],
+      documentUrlPatterns: ['https://pos.pancake.vn/*', 'https://pos.pages.fm/*']
+    });
   });
 });
 

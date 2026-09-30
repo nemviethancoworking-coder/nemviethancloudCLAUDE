@@ -1,6 +1,6 @@
 # Mitek ghi âm cho POScake (Chrome extension)
 
-Nghe lại ghi âm cuộc gọi tổng đài **Mitek** ngay trên **trang đơn hàng POScake** (pos.pages.fm), không cần tải file hay mở Mitek.
+Nghe lại ghi âm cuộc gọi tổng đài **Mitek** ngay trên **trang đơn hàng POScake** (pos.pancake.vn hoặc pos.pages.fm), không cần tải file hay mở Mitek.
 
 ## Cách hoạt động
 
@@ -12,6 +12,8 @@ Nghe lại ghi âm cuộc gọi tổng đài **Mitek** ngay trên **trang đơn 
 Link ghi âm của Mitek cần đăng nhập. Extension tải file bằng phiên đăng nhập Mitek có sẵn trên Chrome, rồi phát trực tiếp. File không được lưu vào máy.
 
 ## Cài đặt (mỗi máy nhân viên)
+
+> Khi cập nhật bản mới: vào `chrome://extensions`, bấm nút ↻ (Tải lại) trên thẻ extension, rồi F5 trang POScake.
 
 1. Tải thư mục `mitek-poscake-extension` về máy.
 2. Mở Chrome, vào `chrome://extensions`, bật **Chế độ dành cho nhà phát triển** (Developer mode).
