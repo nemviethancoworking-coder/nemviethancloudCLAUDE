@@ -61,7 +61,7 @@
             {
               "id": "cfg-2",
               "name": "gemini_model",
-              "value": "gemini-2.5-flash",
+              "value": "gemini-flash-latest",
               "type": "string"
             },
             {

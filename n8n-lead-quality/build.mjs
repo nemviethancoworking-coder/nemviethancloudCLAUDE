@@ -52,7 +52,7 @@ nodes.push({
       assignments: [
         ['pancake_access_token', 'DIEN_PANCAKE_ACCESS_TOKEN_VAO_DAY'],
         ['spreadsheet_id', SPREADSHEET_ID],
-        ['gemini_model', 'gemini-2.5-flash'],
+        ['gemini_model', 'gemini-flash-latest'],
         ['ngay_bao_cao', ''],
         ['chi_quet_page_ids', ''],
         ['so_hoi_thoai_moi_lan_goi_ai', 8],
