@@ -1,0 +1,576 @@
+{
+  "name": "Pancake - Đánh giá chất lượng lead hằng ngày (Gemini)",
+  "nodes": [
+    {
+      "id": "node-0",
+      "name": "Mỗi ngày 7h sáng",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-1",
+      "name": "Chạy thử",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "node-2",
+      "name": "Cấu hình",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "notes": "Điền Pancake access token (Pancake > Cài đặt tài khoản > API/Access token). Để trống ngay_bao_cao = tự lấy hôm qua; điền YYYY-MM-DD để chạy lại 1 ngày cụ thể.",
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-0",
+              "name": "pancake_access_token",
+              "value": "DIEN_PANCAKE_ACCESS_TOKEN_VAO_DAY",
+              "type": "string"
+            },
+            {
+              "id": "cfg-1",
+              "name": "spreadsheet_id",
+              "value": "1a5ZFJZOVxJmUjqHoVf7glwXuX3Y7v-hvOakw89YmeLE",
+              "type": "string"
+            },
+            {
+              "id": "cfg-2",
+              "name": "gemini_model",
+              "value": "gemini-2.5-flash",
+              "type": "string"
+            },
+            {
+              "id": "cfg-3",
+              "name": "ngay_bao_cao",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfg-4",
+              "name": "chi_quet_page_ids",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfg-5",
+              "name": "so_hoi_thoai_moi_lan_goi_ai",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "cfg-6",
+              "name": "so_tin_nhan_toi_da",
+              "value": 80,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-3",
+      "name": "Tạo tab BC_NGAY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Lỗi \"already exists\" ở các lần chạy sau là bình thường.",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"requests\":[{\"addSheet\":{\"properties\":{\"title\":\"BC_NGAY\"}}}]}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-4",
+      "name": "Tạo tab BC_CHI_TIET",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Lỗi \"already exists\" ở các lần chạy sau là bình thường.",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"requests\":[{\"addSheet\":{\"properties\":{\"title\":\"BC_CHI_TIET\"}}}]}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-5",
+      "name": "Tiêu đề BC_NGAY",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/BC_NGAY!A1:M1",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"values\":[[\"Ngày\",\"Tổng lead\",\"Lead ngon\",\"Lead dở\",\"Chưa rõ\",\"Lỗi AI\",\"Tỉ lệ ngon (%)\",\"Dở theo bộ lọc\",\"Lý do dở phổ biến\",\"Điểm cộng phổ biến\",\"Theo page\",\"Ghi chú\",\"Cập nhật lúc\"]]}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-6",
+      "name": "Tiêu đề BC_CHI_TIET",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/BC_CHI_TIET!A1:M1",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"values\":[[\"Mã hội thoại\",\"Ngày\",\"Page\",\"Khách hàng\",\"Loại\",\"Tin khách/page\",\"Kết luận\",\"Nhóm lý do\",\"Lý do\",\"Chi tiết bộ lọc\",\"Nhu cầu\",\"Link Pancake\",\"Cập nhật lúc\"]]}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-7",
+      "name": "Đọc tiêu chí (summary)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Cấu hình').first().json.spreadsheet_id }}/values/summary!A1:C100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-8",
+      "name": "Lấy hội thoại Pancake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Lấy toàn bộ hội thoại được TẠO trong ngày báo cáo (mặc định: hôm qua, giờ VN)\n// trên tất cả page của tài khoản Pancake, kèm nội dung tin nhắn.\nconst cfg = $('Cấu hình').first().json;\nconst token = String(cfg.pancake_access_token || '').trim();\nif (!token || token.startsWith('DIEN_')) {\n  throw new Error('Chưa điền pancake_access_token trong node \"Cấu hình\".');\n}\n\nconst VN_OFFSET = 7 * 3600;\nlet day;\nif (/^\\d{4}-\\d{2}-\\d{2}$/.test(String(cfg.ngay_bao_cao || '').trim())) {\n  day = String(cfg.ngay_bao_cao).trim();\n} else {\n  const nowVN = new Date(Date.now() + VN_OFFSET * 1000);\n  const y = new Date(Date.UTC(nowVN.getUTCFullYear(), nowVN.getUTCMonth(), nowVN.getUTCDate() - 1));\n  day = y.toISOString().slice(0, 10);\n}\nconst since = Math.floor(Date.parse(day + 'T00:00:00Z') / 1000) - VN_OFFSET;\nconst until = since + 86400;\n\nconst MAX_MSG = Number(cfg.so_tin_nhan_toi_da) || 80;\nconst MAX_CHARS = 8000;\nconst BASE = 'https://pages.fm/api';\n\nconst get = (url, qs) => this.helpers.httpRequest({ method: 'GET', url, qs, json: true, timeout: 60000 });\nconst post = (url, qs) => this.helpers.httpRequest({ method: 'POST', url, qs, json: true, timeout: 60000 });\n\nconst toTs = (v) => {\n  if (v == null) return NaN;\n  if (typeof v === 'number') return v > 1e12 ? v / 1000 : v;\n  const s = String(v);\n  return Date.parse(/[zZ]|[+-]\\d\\d:?\\d\\d$/.test(s) ? s : s + 'Z') / 1000;\n};\nconst clean = (s) => String(s || '')\n  .replace(/<br\\s*\\/?>/gi, '\\n')\n  .replace(/<[^>]+>/g, '')\n  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/\\n{3,}/g, '\\n\\n')\n  .trim();\nconst hhmm = (ts) => new Date((ts + VN_OFFSET) * 1000).toISOString().slice(11, 16);\n\n// Các trường liên quan SĐT / báo xấu / ghi chú mà Pancake trả về (nếu có),\n// để AI dùng cho bộ lọc tình trạng số điện thoại.\nconst pickSignals = (obj, depth = 0, out = {}) => {\n  if (!obj || typeof obj !== 'object' || depth > 3) return out;\n  for (const [k, v] of Object.entries(obj)) {\n    if (/phone|report|bom|boom|note|return|order_count|succe|fail|tag/i.test(k) && v != null && v !== '' &&\n        !(Array.isArray(v) && v.length === 0)) {\n      out[k] = v;\n    } else if (typeof v === 'object') {\n      pickSignals(v, depth + 1, out);\n    }\n  }\n  return out;\n};\n\n// 1. Danh sách page\nconst pagesRes = await get(`${BASE}/v1/pages`, { access_token: token });\nlet pages = pagesRes?.categorized?.activated || pagesRes?.pages || pagesRes?.data || [];\nconst onlyPages = String(cfg.chi_quet_page_ids || '').split(',').map((s) => s.trim()).filter(Boolean);\nif (onlyPages.length) pages = pages.filter((p) => onlyPages.includes(String(p.id)));\nif (!pages.length) throw new Error('Pancake không trả về page nào. Kiểm tra lại access token. Phản hồi: ' + JSON.stringify(pagesRes).slice(0, 500));\n\nconst results = [];\nconst errors = [];\n\nfor (const page of pages) {\n  const pageId = String(page.id);\n  const pageName = page.name || pageId;\n  let pageToken;\n  try {\n    const t = await post(`${BASE}/v1/pages/${pageId}/generate_page_access_token`, { page_id: pageId, access_token: token });\n    pageToken = t?.page_access_token || t?.data?.page_access_token;\n  } catch (e) {\n    errors.push(`${pageName}: không tạo được page token (${e.message})`);\n    continue;\n  }\n  if (!pageToken) { errors.push(`${pageName}: không có page token`); continue; }\n\n  // 2. Hội thoại: lấy đến thời điểm hiện tại rồi lọc theo thời gian TẠO,\n  // để không sót hội thoại tạo hôm qua nhưng có tin nhắn mới hôm nay.\n  const convs = new Map();\n  let lastId;\n  for (let i = 0; i < 100; i++) {\n    const qs = { page_access_token: pageToken, since, until: Math.floor(Date.now() / 1000), order_by: 'inserted_at' };\n    if (lastId) qs.last_conversation_id = lastId;\n    let res;\n    try {\n      res = await get(`${BASE}/public_api/v2/pages/${pageId}/conversations`, qs);\n    } catch (e) {\n      errors.push(`${pageName}: lỗi lấy hội thoại (${e.message})`);\n      break;\n    }\n    const list = res?.conversations || res?.data || [];\n    if (!list.length) break;\n    for (const c of list) {\n      const ts = toTs(c.inserted_at);\n      if (ts >= since && ts < until) convs.set(String(c.id), c);\n    }\n    const newLast = String(list[list.length - 1].id);\n    if (newLast === lastId) break;\n    lastId = newLast;\n  }\n\n  // 3. Tin nhắn của từng hội thoại (5 luồng song song)\n  const convList = [...convs.values()];\n  for (let i = 0; i < convList.length; i += 5) {\n    const chunk = convList.slice(i, i + 5);\n    const done = await Promise.all(chunk.map(async (c) => {\n      const customer = (c.customers || [])[0] || {};\n      const qs = { page_access_token: pageToken };\n      if (customer.id) qs.customer_id = customer.id;\n      let res;\n      try {\n        res = await get(`${BASE}/public_api/v1/pages/${pageId}/conversations/${c.id}/messages`, qs);\n      } catch (e) {\n        errors.push(`${pageName}/${c.id}: lỗi lấy tin nhắn (${e.message})`);\n        return null;\n      }\n      const msgs = (res?.messages || res?.data || [])\n        .slice()\n        .sort((a, b) => toTs(a.inserted_at) - toTs(b.inserted_at));\n      let nKhach = 0;\n      let nPage = 0;\n      const lines = msgs.map((m) => {\n        const fromPage = String(m.from?.id || '') === pageId || m.from?.admin_id != null || m.from?.page_id != null;\n        fromPage ? nPage++ : nKhach++;\n        let text = clean(m.original_message || m.message);\n        const att = (m.attachments || []).map((a) => `[${a.type || 'tệp'}]`).join(' ');\n        if (!text && !att && m.type) text = `[${m.type}]`;\n        return `[${hhmm(toTs(m.inserted_at))}] ${fromPage ? 'PAGE' : 'KHÁCH'}: ${[text, att].filter(Boolean).join(' ')}`;\n      });\n      let transcript = lines.slice(-MAX_MSG).join('\\n');\n      if (transcript.length > MAX_CHARS) transcript = '…\\n' + transcript.slice(-MAX_CHARS);\n      if (lines.length > MAX_MSG) transcript = `(bỏ bớt ${lines.length - MAX_MSG} tin nhắn cũ)\\n` + transcript;\n\n      const signals = pickSignals({\n        conversation: { recent_phone_numbers: c.recent_phone_numbers, tags: c.tags, has_phone: c.has_phone },\n        customers: res?.customers,\n        extra: { reports_by_phone: res?.reports_by_phone, notes: res?.notes, recent_orders: res?.recent_orders },\n      });\n\n      return {\n        ngay: day,\n        page_id: pageId,\n        page_name: pageName,\n        conversation_id: String(c.id),\n        loai: c.type || '',\n        khach_hang: customer.name || c.from?.name || '',\n        so_tin_khach: nKhach,\n        so_tin_page: nPage,\n        link: `https://pancake.vn/${pageId}?c_id=${c.id}`,\n        du_lieu_sdt: JSON.stringify(signals).slice(0, 1500),\n        transcript: transcript || '(không có tin nhắn)',\n      };\n    }));\n    for (const r of done) if (r) results.push(r);\n  }\n}\n\nif (!results.length) {\n  return [{ json: { _empty: true, ngay: day, so_page: pages.length, loi: errors.join(' | ') } }];\n}\nresults[0].loi_lay_du_lieu = errors.join(' | ');\nreturn results.map((json) => ({ json }));\n"
+      }
+    },
+    {
+      "id": "node-9",
+      "name": "Có hội thoại?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-conv",
+              "leftValue": "={{ $json._empty === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "node-10",
+      "name": "Chia lô gửi AI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Ghép tiêu chí từ sheet \"summary\" + hội thoại thành các lô gửi Gemini.\nconst cfg = $('Cấu hình').first().json;\nconst leads = $input.all().map((i) => i.json);\nif (leads.length === 1 && leads[0]._empty) return [];\n\n// Bảng tiêu chí: cột A = tên bộ lọc (ô gộp, chỉ dòng đầu có giá trị), B = LEAD NGON, C = LEAD DỞ\nconst rows = $('Đọc tiêu chí (summary)').first().json.values || [];\nconst filters = [];\nlet cur = null;\nfor (const r of rows) {\n  const [a, b, c] = [r[0], r[1], r[2]].map((v) => String(v || '').trim());\n  if (a && (!cur || cur.name !== a)) {\n    cur = { name: a, ngon: [], do: [] };\n    filters.push(cur);\n  }\n  if (!cur) continue;\n  if (b) cur.ngon.push(b);\n  if (c) cur.do.push(c);\n}\nif (!filters.length) throw new Error('Sheet \"summary\" trống hoặc không đọc được.');\nconst criteria = filters\n  .map((f) => `### ${f.name}\\n${f.ngon.map((x) => '  + ' + x).join('\\n')}\\n${f.do.map((x) => '  - ' + x).join('\\n')}`)\n  .join('\\n\\n');\nconst filterNames = filters.map((f) => f.name);\n\nconst system = `Bạn là chuyên viên đánh giá chất lượng lead cho một doanh nghiệp bán NỆM qua Facebook/Pancake.\nNhiệm vụ: đọc từng hội thoại và chấm lead theo ĐÚNG bộ tiêu chí dưới đây (dòng \"+\" là dấu hiệu LEAD NGON, dòng \"-\" là dấu hiệu LEAD DỞ).\n\n${criteria}\n\nQUY TẮC:\n- Chấm lần lượt TỪNG bộ lọc ở trên, giữ nguyên tên bộ lọc. Mỗi bộ lọc cho kết quả: \"NGON\", \"DO\" hoặc \"KHONG_RO\" (khi hội thoại và dữ liệu đi kèm không có thông tin để kết luận cho bộ lọc đó).\n- Bộ lọc về số điện thoại: dùng mọi dấu hiệu có trong hội thoại (khách để lại SĐT, nhân viên nhắn \"gọi không nghe máy\", \"thuê bao\", \"zalo chặn người lạ\", \"đã kết bạn zalo\", \"đã gọi tư vấn\"...) và trường \"Dữ liệu SĐT từ Pancake\" (báo xấu, tỉ lệ hoàn, bom hàng...). Không có dấu hiệu nào thì ghi KHONG_RO, KHÔNG được đoán.\n- Bộ lọc về hồ sơ FB/Zalo: chỉ kết luận khi có thông tin (tên nick kiểu clone, nội dung nhân viên nhắc tới...), còn lại KHONG_RO.\n- Kết luận chung (ket_luan):\n  * \"DO\" nếu bộ lọc số điện thoại (bộ lọc quyết định) là DO, hoặc có dấu hiệu \"loại ngay\" rõ ràng (hỏi sai sản phẩm, giá phi thực tế, chỉ 1 tin cụt lủn/sticker/tin nhắn mặc định của Facebook rồi im lặng...).\n  * \"NGON\" nếu có nhu cầu thật và tương tác 2 chiều, không vướng dấu hiệu loại ngay.\n  * \"CHUA_RO\" nếu quá ít thông tin để kết luận.\n- nhom_ly_do: nhãn ngắn (tối đa 6 từ) cho lý do chính, dùng lại cách diễn đạt của bảng tiêu chí để các lead cùng lý do có cùng nhãn. Ví dụ: \"Tin nhắn cụt, 1 chiều\", \"Giá không thực tế\", \"Hỏi sai sản phẩm\", \"SĐT không liên lạc được\", \"Có nhu cầu rõ ràng\".\n- ly_do: 1-2 câu tiếng Việt, dẫn chứng cụ thể từ hội thoại.\n- nhu_cau: sản phẩm/kích thước/chất liệu khách hỏi (nếu có), để trống nếu không có.\n- Trả về đúng MỘT phần tử cho MỖI hội thoại, giữ nguyên conversation_id.`;\n\nconst schema = {\n  type: 'ARRAY',\n  items: {\n    type: 'OBJECT',\n    properties: {\n      conversation_id: { type: 'STRING' },\n      ket_luan: { type: 'STRING', enum: ['NGON', 'DO', 'CHUA_RO'] },\n      bo_loc: {\n        type: 'ARRAY',\n        items: {\n          type: 'OBJECT',\n          properties: {\n            ten: { type: 'STRING' },\n            ket_qua: { type: 'STRING', enum: ['NGON', 'DO', 'KHONG_RO'] },\n            ly_do: { type: 'STRING' },\n          },\n          required: ['ten', 'ket_qua', 'ly_do'],\n        },\n      },\n      nhom_ly_do: { type: 'STRING' },\n      ly_do: { type: 'STRING' },\n      nhu_cau: { type: 'STRING' },\n    },\n    required: ['conversation_id', 'ket_luan', 'bo_loc', 'nhom_ly_do', 'ly_do'],\n  },\n};\n\nconst size = Math.max(1, Number(cfg.so_hoi_thoai_moi_lan_goi_ai) || 10);\nconst out = [];\nfor (let i = 0; i < leads.length; i += size) {\n  const chunk = leads.slice(i, i + size);\n  const text = chunk.map((l) => [\n    `===== HỘI THOẠI conversation_id=${l.conversation_id} =====`,\n    `Page: ${l.page_name} | Loại: ${l.loai || 'INBOX'} | Khách: ${l.khach_hang} | Số tin khách: ${l.so_tin_khach} | Số tin page: ${l.so_tin_page}`,\n    `Dữ liệu SĐT từ Pancake: ${l.du_lieu_sdt && l.du_lieu_sdt !== '{}' ? l.du_lieu_sdt : '(không có)'}`,\n    l.transcript,\n  ].join('\\n')).join('\\n\\n');\n\n  out.push({\n    json: {\n      conversation_ids: chunk.map((l) => l.conversation_id),\n      filter_names: filterNames,\n      body: {\n        systemInstruction: { parts: [{ text: system }] },\n        contents: [{ role: 'user', parts: [{ text: `Chấm ${chunk.length} hội thoại sau:\\n\\n${text}` }] }],\n        generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },\n      },\n    },\n  });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "node-11",
+      "name": "Gemini chấm lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{ $('Cấu hình').first().json.gemini_model }}:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 4000
+            }
+          },
+          "timeout": 180000
+        }
+      }
+    },
+    {
+      "id": "node-12",
+      "name": "Tách kết quả AI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Ghép kết quả Gemini với thông tin hội thoại -> 1 dòng / lead cho tab BC_CHI_TIET.\nconst leads = new Map($('Lấy hội thoại Pancake').all().map((i) => [i.json.conversation_id, i.json]));\nconst batches = $('Chia lô gửi AI').all();\nconst responses = $input.all();\nconst label = { NGON: 'Ngon', DO: 'Dở', CHUA_RO: 'Chưa rõ', KHONG_RO: 'Không rõ' };\nconst updatedAt = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ');\n\nconst graded = new Map();\nresponses.forEach((res, idx) => {\n  const r = res.json;\n  const ids = batches[idx]?.json.conversation_ids || [];\n  let arr = [];\n  try {\n    const text = (r.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');\n    arr = JSON.parse(text);\n  } catch (e) {\n    arr = [];\n  }\n  for (const g of Array.isArray(arr) ? arr : []) {\n    if (g && ids.includes(String(g.conversation_id))) graded.set(String(g.conversation_id), g);\n  }\n});\n\nconst out = [];\nfor (const [id, l] of leads) {\n  if (!l.conversation_id) continue;\n  const g = graded.get(id);\n  out.push({\n    json: {\n      'Mã hội thoại': id,\n      'Ngày': l.ngay,\n      'Page': l.page_name,\n      'Khách hàng': l.khach_hang,\n      'Loại': l.loai,\n      'Tin khách/page': `${l.so_tin_khach}/${l.so_tin_page}`,\n      'Kết luận': g ? label[g.ket_luan] || g.ket_luan : 'Lỗi AI',\n      'Nhóm lý do': g?.nhom_ly_do || '',\n      'Lý do': g?.ly_do || (g ? '' : 'Gemini không trả kết quả cho hội thoại này'),\n      'Chi tiết bộ lọc': g ? (g.bo_loc || []).map((b) => `${b.ten}: ${label[b.ket_qua] || b.ket_qua} - ${b.ly_do}`).join('\\n') : '',\n      'Nhu cầu': g?.nhu_cau || '',\n      'Link Pancake': l.link,\n      'Cập nhật lúc': updatedAt,\n      _bo_loc: g?.bo_loc || [],\n    },\n  });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "node-13",
+      "name": "Ghi BC_CHI_TIET",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2640,
+        180
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Cấu hình').first().json.spreadsheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "BC_CHI_TIET"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "Mã hội thoại"
+          ],
+          "schema": []
+        },
+        "options": {
+          "handlingExtraData": "ignoreIt"
+        }
+      }
+    },
+    {
+      "id": "node-14",
+      "name": "Thống kê ngày",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// Tổng hợp 1 dòng thống kê / ngày cho tab BC_NGAY.\nlet rows = [];\ntry {\n  rows = $('Tách kết quả AI').all().map((i) => i.json);\n} catch (e) {\n  rows = [];\n}\nconst first = $('Lấy hội thoại Pancake').first().json;\nconst day = first.ngay;\nconst count = (arr, key) => arr.reduce((m, x) => {\n  const k = key(x);\n  if (k) m[k] = (m[k] || 0) + 1;\n  return m;\n}, {});\nconst top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k} (${v})`).join('; ');\n\nconst total = rows.length;\nconst by = count(rows, (r) => r['Kết luận']);\nconst ngon = by['Ngon'] || 0;\nconst dở = by['Dở'] || 0;\n\nconst filterDo = {};\nfor (const r of rows) {\n  for (const b of r._bo_loc || []) {\n    if (b.ket_qua === 'DO') filterDo[b.ten] = (filterDo[b.ten] || 0) + 1;\n  }\n}\nconst pages = {};\nfor (const r of rows) {\n  const p = (pages[r['Page']] ||= { t: 0, n: 0 });\n  p.t++;\n  if (r['Kết luận'] === 'Ngon') p.n++;\n}\n\nreturn [{\n  json: {\n    'Ngày': day,\n    'Tổng lead': total,\n    'Lead ngon': ngon,\n    'Lead dở': dở,\n    'Chưa rõ': by['Chưa rõ'] || 0,\n    'Lỗi AI': by['Lỗi AI'] || 0,\n    'Tỉ lệ ngon (%)': total ? Math.round((ngon / total) * 1000) / 10 : 0,\n    'Dở theo bộ lọc': Object.entries(filterDo).map(([k, v]) => `${k}: ${v}`).join('\\n'),\n    'Lý do dở phổ biến': top(count(rows.filter((r) => r['Kết luận'] === 'Dở'), (r) => r['Nhóm lý do']), 5),\n    'Điểm cộng phổ biến': top(count(rows.filter((r) => r['Kết luận'] === 'Ngon'), (r) => r['Nhóm lý do']), 5),\n    'Theo page': Object.entries(pages).map(([k, v]) => `${k}: ${v.n}/${v.t} ngon`).join('\\n'),\n    'Ghi chú': first._empty ? `Không có hội thoại mới. ${first.loi || ''}`.trim() : first.loi_lay_du_lieu || '',\n    'Cập nhật lúc': new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' '),\n  },\n}];\n"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "node-15",
+      "name": "Ghi BC_NGAY",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2860,
+        420
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Cấu hình').first().json.spreadsheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "BC_NGAY"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "Ngày"
+          ],
+          "schema": []
+        },
+        "options": {
+          "handlingExtraData": "ignoreIt"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Mỗi ngày 7h sáng": {
+      "main": [
+        [
+          {
+            "node": "Cấu hình",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chạy thử": {
+      "main": [
+        [
+          {
+            "node": "Cấu hình",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cấu hình": {
+      "main": [
+        [
+          {
+            "node": "Tạo tab BC_NGAY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tạo tab BC_NGAY": {
+      "main": [
+        [
+          {
+            "node": "Tạo tab BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tạo tab BC_CHI_TIET": {
+      "main": [
+        [
+          {
+            "node": "Tiêu đề BC_NGAY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tiêu đề BC_NGAY": {
+      "main": [
+        [
+          {
+            "node": "Tiêu đề BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tiêu đề BC_CHI_TIET": {
+      "main": [
+        [
+          {
+            "node": "Đọc tiêu chí (summary)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đọc tiêu chí (summary)": {
+      "main": [
+        [
+          {
+            "node": "Lấy hội thoại Pancake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lấy hội thoại Pancake": {
+      "main": [
+        [
+          {
+            "node": "Có hội thoại?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Có hội thoại?": {
+      "main": [
+        [
+          {
+            "node": "Chia lô gửi AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Thống kê ngày",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chia lô gửi AI": {
+      "main": [
+        [
+          {
+            "node": "Gemini chấm lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini chấm lead": {
+      "main": [
+        [
+          {
+            "node": "Tách kết quả AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tách kết quả AI": {
+      "main": [
+        [
+          {
+            "node": "Ghi BC_CHI_TIET",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Thống kê ngày",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thống kê ngày": {
+      "main": [
+        [
+          {
+            "node": "Ghi BC_NGAY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Ho_Chi_Minh"
+  }
+}

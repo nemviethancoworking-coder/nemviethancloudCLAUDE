@@ -1,0 +1,264 @@
+<title>Chất lượng lead Pancake</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600&family=Lexend:wght@500;600&display=swap">
+<style>
+/* Layout: dải chọn ngày → 5 chỉ số → xu hướng 14 ngày + lý do → bảng lead của ngày; một cột ở màn hình hẹp */
+:root{
+  --bg:#f5f6f4; --surface:#ffffff; --fg:#1d2522; --muted:#5d6a65; --line:#dfe3e0;
+  --accent:#2f5d8a; --good:#2f7d4f; --bad:#b8433a; --unk:#a07818;
+  --good-soft:#e3f1e8; --bad-soft:#f7e4e2; --unk-soft:#f5ecd6;
+  --f-display:"Lexend",system-ui,sans-serif; --f-body:"Be Vietnam Pro",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141917; --surface:#1c2320; --fg:#e6ebe8; --muted:#95a39d; --line:#2e3834;
+  --accent:#86b1dc; --good:#6cc08d; --bad:#e88379; --unk:#d9b25a;
+  --good-soft:#1f3328; --bad-soft:#3a2321; --unk-soft:#352d1a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --surface:#1c2320; --fg:#e6ebe8; --muted:#95a39d; --line:#2e3834;
+  --accent:#86b1dc; --good:#6cc08d; --bad:#e88379; --unk:#d9b25a;
+  --good-soft:#1f3328; --bad-soft:#3a2321; --unk-soft:#352d1a; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--f-body);padding:24px 16px 48px}
+.wrap{max-width:1120px;margin:0 auto;display:grid;gap:20px}
+h1,h2{font-family:var(--f-display);font-weight:600;margin:0;text-wrap:balance}
+h1{font-size:1.6rem}
+h2{font-size:1rem}
+.muted{color:var(--muted)}
+.top{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:end;justify-content:space-between}
+.top p{margin:4px 0 0}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select,button{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:7px 10px}
+button{cursor:pointer}
+button:hover{border-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.kpi b{display:block;font:600 1.7rem/1.1 var(--f-display);font-variant-numeric:tabular-nums}
+.kpi span{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.kpi.good b{color:var(--good)} .kpi.bad b{color:var(--bad)} .kpi.unk b{color:var(--unk)}
+.grid2{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:20px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px;display:grid;gap:12px;min-width:0;align-content:start}
+.legend{display:flex;gap:14px;font-size:.8rem;color:var(--muted);flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+svg text{fill:var(--muted);font:11px var(--f-body)}
+.bars{display:grid;gap:8px}
+.bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;font-size:.85rem}
+.bar .track{grid-column:1/-1;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar .fill{height:100%;background:var(--bad)}
+.bar .n{font-variant-numeric:tabular-nums;color:var(--muted)}
+ol{margin:0;padding-left:1.2em;display:grid;gap:4px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border-radius:999px;padding:4px 12px;font-size:.8rem}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:760px;font-size:.85rem}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:500}
+td.why{max-width:420px}
+.pill{display:inline-block;border-radius:4px;padding:2px 8px;font-size:.75rem;font-weight:600;white-space:nowrap}
+.pill.Ngon{background:var(--good-soft);color:var(--good)}
+.pill.Dở{background:var(--bad-soft);color:var(--bad)}
+.pill.other{background:var(--unk-soft);color:var(--unk)}
+details summary{cursor:pointer;color:var(--accent);font-size:.8rem}
+details pre{white-space:pre-wrap;font:inherit;font-size:.8rem;margin:6px 0 0;color:var(--muted)}
+a{color:var(--accent)}
+.notice{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--unk);border-radius:6px;padding:14px 16px}
+.notice.err{border-left-color:var(--bad)}
+@media (max-width:820px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:minmax(0,1fr)}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Chất lượng lead Pancake</h1>
+      <p class="muted" id="sub">Đang tải dữ liệu từ Google Sheet…</p>
+    </div>
+    <div class="controls">
+      <label for="day" class="muted">Ngày</label>
+      <select id="day" disabled></select>
+      <button id="reload" type="button">Tải lại</button>
+    </div>
+  </header>
+
+  <div id="msg" class="notice" hidden></div>
+
+  <section class="kpis" id="kpis" aria-label="Chỉ số trong ngày">
+    <div class="kpi"><span>Tổng lead</span><b id="k-total">–</b></div>
+    <div class="kpi good"><span>Lead ngon</span><b id="k-good">–</b></div>
+    <div class="kpi bad"><span>Lead dở</span><b id="k-bad">–</b></div>
+    <div class="kpi unk"><span>Chưa rõ / lỗi</span><b id="k-unk">–</b></div>
+    <div class="kpi"><span>Tỉ lệ ngon</span><b id="k-rate">–</b></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>14 ngày gần nhất</h2>
+      <div class="legend"><span><i style="background:var(--good)"></i>Ngon</span><span><i style="background:var(--bad)"></i>Dở</span><span><i style="background:var(--unk)"></i>Chưa rõ</span></div>
+      <svg id="trend" viewBox="0 0 560 220" role="img" aria-label="Số lead theo ngày" style="width:100%;height:auto"></svg>
+    </section>
+    <section class="panel">
+      <h2>Lead dở rơi vào bộ lọc nào</h2>
+      <div class="bars" id="filters"><p class="muted">Chưa có dữ liệu.</p></div>
+      <h2>Lý do dở phổ biến</h2>
+      <ol id="reasons"><li class="muted">Chưa có dữ liệu.</li></ol>
+      <h2>Theo page</h2>
+      <div id="pages" class="muted" style="white-space:pre-line">–</div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="top">
+      <h2 id="tbl-title">Chi tiết lead</h2>
+      <div class="chips" id="chips" role="group" aria-label="Lọc theo kết luận"></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Khách hàng</th><th>Page</th><th>Kết luận</th><th>Lý do</th><th>Nhu cầu</th><th>Tin K/P</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="7" class="muted">Chưa có dữ liệu.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file “ĐÁNH GIÁ CHẤT LƯỢNG LEAD”, mỗi sáng 7h.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const FILE_ID = "1a5ZFJZOVxJmUjqHoVf7glwXuX3Y7v-hvOakw89YmeLE";
+const SERVER = "Google Drive";
+const $ = (id) => document.getElementById(id);
+const state = { days: [], leads: [], day: null, filter: "Tất cả" };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const num = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
+const dayKey = (v) => {
+  if (typeof v === "number") { const d = XLSX.SSF.parse_date_code(v); return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`; }
+  return String(v ?? "").trim().slice(0, 10);
+};
+const fmtDay = (k) => { const [y, m, d] = k.split("-"); return d ? `${d}/${m}/${y}` : k; };
+
+function showMsg(html, err) { const m = $("msg"); m.innerHTML = html; m.className = "notice" + (err ? " err" : ""); m.hidden = false; }
+
+const ERR = {
+  server_not_connected: "Chưa kết nối Google Drive. Thêm Google Drive trong claude.ai → Settings → Connectors rồi bấm Tải lại.",
+  needs_reauth: "Kết nối Google Drive đã hết hạn. Kết nối lại trong claude.ai → Settings → Connectors.",
+  not_in_manifest: "Trang này chưa được phép đọc Google Drive. Bấm Tải lại và chọn Cho phép.",
+  selection_required: "Bạn có nhiều kết nối Google Drive. Chọn một kết nối khi được hỏi rồi bấm Tải lại.",
+  blocked_by_policy: "Tổ chức của bạn chặn công cụ Google Drive cho trang này.",
+  tool_error: "Google Drive báo lỗi khi đọc file. Kiểm tra bạn có quyền xem file “ĐÁNH GIÁ CHẤT LƯỢNG LEAD”.",
+};
+
+async function load(fresh) {
+  $("reload").disabled = true;
+  $("sub").textContent = "Đang tải dữ liệu từ Google Sheet…";
+  const mcp = await claude.use("mcp");
+  if (!mcp) {
+    $("reload").disabled = false;
+    $("sub").textContent = "Không đọc được dữ liệu trong chế độ xem này.";
+    showMsg("Mở trang trên claude.ai (đã đăng nhập, có kết nối Google Drive) để xem báo cáo.");
+    return;
+  }
+  try {
+    const res = await mcp.callTool(SERVER, "download_file_content", {
+      fileId: FILE_ID,
+      exportMimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }, { cache: fresh === true ? { refresh: true } : { staleTime: 60000 } });
+    const p = res.payload;
+    const b64 = typeof p === "string" ? p : p && (p.content || p.data);
+    if (!b64) throw { code: "tool_error" };
+    const wb = XLSX.read(b64, { type: "base64" });
+    const rows = (name) => wb.Sheets[name] ? XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: "" }) : null;
+    const days = rows("BC_NGAY"), leads = rows("BC_CHI_TIET");
+    $("msg").hidden = true;
+    if (!days || !days.length) {
+      $("sub").textContent = "Chưa có báo cáo nào.";
+      showMsg("Chưa thấy tab <b>BC_NGAY</b> hoặc tab chưa có dòng nào. Workflow n8n sẽ tạo tab và ghi dữ liệu sau lần chạy đầu tiên (7h sáng hằng ngày, hoặc bấm “Test workflow” trên n8n).");
+      return;
+    }
+    state.days = days.map((d) => ({ ...d, _k: dayKey(d["Ngày"]) })).filter((d) => d._k).sort((a, b) => a._k.localeCompare(b._k));
+    state.leads = (leads || []).map((l) => ({ ...l, _k: dayKey(l["Ngày"]) }));
+    const sel = $("day");
+    sel.innerHTML = state.days.slice().reverse().map((d) => `<option value="${d._k}">${fmtDay(d._k)}</option>`).join("");
+    sel.disabled = false;
+    state.day = state.days.some((d) => d._k === state.day) ? state.day : state.days[state.days.length - 1]._k;
+    sel.value = state.day;
+    const at = res.cache?.storedAt ? new Date(res.cache.storedAt) : new Date();
+    $("sub").textContent = `${state.days.length} ngày có báo cáo · dữ liệu đọc lúc ${at.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}`;
+    render();
+  } catch (e) {
+    $("sub").textContent = "Không tải được dữ liệu.";
+    showMsg(esc(ERR[e?.code] || `Không đọc được Google Sheet (${e?.code || "lỗi không xác định"}). Bấm Tải lại để thử lần nữa.`), true);
+  } finally {
+    $("reload").disabled = false;
+  }
+}
+
+function render() {
+  const d = state.days.find((x) => x._k === state.day) || {};
+  const total = num(d["Tổng lead"]);
+  $("k-total").textContent = total;
+  $("k-good").textContent = num(d["Lead ngon"]);
+  $("k-bad").textContent = num(d["Lead dở"]);
+  $("k-unk").textContent = num(d["Chưa rõ"]) + num(d["Lỗi AI"]);
+  $("k-rate").textContent = total ? `${num(d["Tỉ lệ ngon (%)"])}%` : "–";
+
+  const fl = String(d["Dở theo bộ lọc"] || "").split("\n").map((s) => s.trim()).filter(Boolean).map((s) => {
+    const i = s.lastIndexOf(":"); return { name: s.slice(0, i), n: num(s.slice(i + 1)) };
+  });
+  const bad = Math.max(1, num(d["Lead dở"]), ...fl.map((f) => f.n));
+  $("filters").innerHTML = fl.length ? fl.map((f) => `<div class="bar"><span>${esc(f.name)}</span><span class="n">${f.n}</span><div class="track"><div class="fill" style="width:${(f.n / bad) * 100}%"></div></div></div>`).join("")
+    : `<p class="muted">Không có lead dở nào bị đánh trượt ở bộ lọc cụ thể.</p>`;
+  const rs = String(d["Lý do dở phổ biến"] || "").split(";").map((s) => s.trim()).filter(Boolean);
+  $("reasons").innerHTML = rs.length ? rs.map((r) => `<li>${esc(r)}</li>`).join("") : `<li class="muted">Không có.</li>`;
+  $("pages").textContent = d["Theo page"] || "–";
+  if (d["Ghi chú"]) showMsg(`<b>Ghi chú của lần chạy:</b> ${esc(d["Ghi chú"])}`);
+
+  drawTrend();
+
+  const dayLeads = state.leads.filter((l) => l._k === state.day);
+  const kinds = ["Tất cả", "Ngon", "Dở", "Chưa rõ", "Lỗi AI"].filter((k) => k === "Tất cả" || dayLeads.some((l) => l["Kết luận"] === k));
+  if (!kinds.includes(state.filter)) state.filter = "Tất cả";
+  $("chips").innerHTML = kinds.map((k) => {
+    const n = k === "Tất cả" ? dayLeads.length : dayLeads.filter((l) => l["Kết luận"] === k).length;
+    return `<button type="button" class="chip" data-k="${k}" aria-pressed="${k === state.filter}">${k} · ${n}</button>`;
+  }).join("");
+  const shown = dayLeads.filter((l) => state.filter === "Tất cả" || l["Kết luận"] === state.filter);
+  $("tbl-title").textContent = `Chi tiết lead ngày ${fmtDay(state.day)}`;
+  $("rows").innerHTML = shown.length ? shown.map((l) => {
+    const k = l["Kết luận"];
+    return `<tr>
+      <td>${esc(l["Khách hàng"] || "(không tên)")}</td>
+      <td>${esc(l["Page"])}</td>
+      <td><span class="pill ${k === "Ngon" || k === "Dở" ? k : "other"}">${esc(k)}</span></td>
+      <td class="why"><b>${esc(l["Nhóm lý do"])}</b><br>${esc(l["Lý do"])}
+        ${l["Chi tiết bộ lọc"] ? `<details><summary>Từng bộ lọc</summary><pre>${esc(l["Chi tiết bộ lọc"])}</pre></details>` : ""}</td>
+      <td>${esc(l["Nhu cầu"])}</td>
+      <td style="font-variant-numeric:tabular-nums">${esc(l["Tin khách/page"])}</td>
+      <td>${l["Link Pancake"] ? `<a href="${esc(l["Link Pancake"])}" target="_blank" rel="noopener">Mở</a>` : ""}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="7" class="muted">Không có lead nào trong nhóm này.</td></tr>`;
+}
+
+function drawTrend() {
+  const last = state.days.slice(-14);
+  const W = 560, H = 220, L = 34, R = 8, T = 10, B = 28;
+  const max = Math.max(1, ...last.map((d) => num(d["Tổng lead"])));
+  const step = Math.pow(10, Math.floor(Math.log10(max))); const top = Math.ceil(max / step) * step;
+  const y = (v) => T + (H - T - B) * (1 - v / top);
+  const bw = (W - L - R) / Math.max(last.length, 1);
+  let s = "";
+  [0, top / 2, top].forEach((v) => { s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)}</text>`; });
+  last.forEach((d, i) => {
+    const x = L + i * bw + bw * 0.18, w = bw * 0.64;
+    const parts = [["Lead ngon", "var(--good)"], ["Lead dở", "var(--bad)"], ["Chưa rõ", "var(--unk)"]];
+    let base = 0;
+    parts.forEach(([k, c]) => { const v = num(d[k]) + (k === "Chưa rõ" ? num(d["Lỗi AI"]) : 0); if (!v) return;
+      s += `<rect x="${x}" y="${y(base + v)}" width="${w}" height="${y(base) - y(base + v)}" fill="${c}" opacity="${d._k === state.day ? 1 : .55}"><title>${fmtDay(d._k)} · ${k}: ${v}</title></rect>`; base += v; });
+    if (last.length <= 7 || i % 2 === last.length % 2 || d._k === state.day) s += `<text x="${x + w / 2}" y="${H - 8}" text-anchor="middle">${d._k.slice(8)}/${d._k.slice(5, 7)}</text>`;
+  });
+  $("trend").innerHTML = s;
+}
+
+$("day").addEventListener("change", (e) => { state.day = e.target.value; $("msg").hidden = true; render(); });
+$("chips").addEventListener("click", (e) => { const b = e.target.closest("button[data-k]"); if (b) { state.filter = b.dataset.k; render(); } });
+$("reload").addEventListener("click", () => load(true));
+load();
+</script>
