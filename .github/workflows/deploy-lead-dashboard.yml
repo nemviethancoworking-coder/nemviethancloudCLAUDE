@@ -1,0 +1,34 @@
+# Xuất bản thư mục docs/ (website Chất lượng lead Pancake) lên GitHub Pages
+name: Deploy lead dashboard
+
+on:
+  push:
+    branches: [claude/eloquent-bell-aaea5q, claude/practical-gates-o54zqp]
+    paths: [docs/**, .github/workflows/deploy-lead-dashboard.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4
