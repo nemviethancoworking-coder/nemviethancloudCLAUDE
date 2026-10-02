@@ -83,12 +83,29 @@ a{color:var(--accent)}
 .toolbar .controls{flex:1 1 auto;justify-content:flex-end}
 #q{min-width:160px;flex:1 1 160px;max-width:320px}
 .more{justify-self:start}
+.lock{min-height:70vh;display:grid;place-items:center}
+.lock form{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:28px 24px;width:min(360px,100%);display:grid;gap:12px}
+.lock h1{font-size:1.25rem}
+.lock input{font-size:1.4rem;letter-spacing:.35em;text-align:center;padding:10px;font-variant-numeric:tabular-nums}
+.lock button{background:var(--accent);border-color:var(--accent);color:var(--surface);font-weight:500;padding:10px}
+.lock .err{color:var(--bad);font-size:.85rem;min-height:1.3em;margin:0}
+.footlinks{display:flex;gap:12px;flex-wrap:wrap;font-size:.8rem}
 @media (max-width:820px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:minmax(0,1fr)}.kpi:last-child{grid-column:1/-1}}
 @media (prefers-reduced-motion:no-preference){.bar .fill{transition:width .3s}}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="lock" id="lock" hidden>
+  <form id="lock-form" autocomplete="off">
+    <h1>Chất lượng lead Pancake</h1>
+    <p class="muted" style="margin:0">Nhập mã PIN nội bộ để xem báo cáo.</p>
+    <label for="pin" class="muted" style="font-size:.8rem">Mã PIN</label>
+    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" required aria-describedby="pin-err">
+    <p class="err" id="pin-err" role="alert"></p>
+    <button type="submit" id="pin-btn">Mở báo cáo</button>
+  </form>
+</div>
+<div class="wrap" id="app" hidden>
   <header class="top">
     <div>
       <h1>Chất lượng lead Pancake</h1>
@@ -146,7 +163,7 @@ a{color:var(--accent)}
     </div>
     <button id="more" class="more" type="button" hidden>Hiện thêm</button>
   </section>
-  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file <a id="sheet-link" href="#" target="_blank" rel="noopener">ĐÁNH GIÁ CHẤT LƯỢNG LEAD</a>, mỗi sáng 7h. Trang tự làm mới mỗi 5 phút.</p>
+  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file <a id="sheet-link" href="#" target="_blank" rel="noopener">ĐÁNH GIÁ CHẤT LƯỢNG LEAD</a>, mỗi sáng 7h. Trang tự làm mới mỗi 5 phút. <a href="#" id="relock">Khóa lại trên thiết bị này</a></p>
 </div>
 
 <script>
@@ -349,8 +366,44 @@ $("page").addEventListener("change", (e) => { state.page = e.target.value; state
 $("q").addEventListener("input", (e) => { state.q = e.target.value; state.limit = PAGE_SIZE; renderTable(); });
 $("more").addEventListener("click", () => { state.limit += PAGE_SIZE; renderTable(); });
 $("reload").addEventListener("click", load);
-setInterval(() => { if (document.visibilityState === "visible") load(); }, 5 * 60 * 1000);
-load();
+setInterval(() => { if (document.visibilityState === "visible" && unlocked) load(); }, 5 * 60 * 1000);
+
+// Cổng PIN: so băm SHA-256(muối + PIN); nhớ 30 ngày trên thiết bị. Chỉ cản người tò mò,
+// quyền thật nằm ở chế độ chia sẻ của Google Sheet.
+const PIN_HASH = "4f77120e56fb74be9ccd5ae3774c5334d4b68ef7dfee652cafe452a930490688";
+const PIN_SALT = "nvh-lead-2026";
+const UNLOCK_KEY = "lead_unlock";
+const UNLOCK_DAYS = 30;
+let unlocked = false, tries = 0;
+async function sha256(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function remembered() {
+  try { const v = JSON.parse(localStorage.getItem(UNLOCK_KEY) || "null"); return v && v.h === PIN_HASH && v.exp > Date.now(); } catch { return false; }
+}
+function unlock(remember) {
+  unlocked = true;
+  if (remember) { try { localStorage.setItem(UNLOCK_KEY, JSON.stringify({ h: PIN_HASH, exp: Date.now() + UNLOCK_DAYS * 864e5 })); } catch {} }
+  $("lock").hidden = true; $("app").hidden = false;
+  load();
+}
+$("lock-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("pin-btn"), err = $("pin-err");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const ok = (await sha256(PIN_SALT + $("pin").value.trim())) === PIN_HASH;
+    if (ok) return unlock(true);
+    tries++;
+    await new Promise((r) => setTimeout(r, Math.min(tries, 5) * 700));
+    err.textContent = "Mã PIN không đúng.";
+    $("pin").value = ""; $("pin").focus();
+  } catch { err.textContent = "Trình duyệt không hỗ trợ kiểm tra PIN. Mở trang bằng https."; }
+  finally { btn.disabled = false; }
+});
+$("relock").addEventListener("click", (e) => { e.preventDefault(); try { localStorage.removeItem(UNLOCK_KEY); } catch {} location.reload(); });
+if (remembered()) unlock(false); else { $("lock").hidden = false; $("pin").focus(); }
 </script>
 </body>
 </html>
