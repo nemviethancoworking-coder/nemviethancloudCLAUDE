@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OKRs & Báo cáo tuần</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        colors: { base: { 50:'#eef4ff', 100:'#dbe6ff', 500:'#2f6fed', 600:'#1f5ad8', 700:'#1a4bb5' } }
+      }
+    }
+  }
+</script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; }
+  .input { width:100%; border:1px solid #d1d5db; border-radius:8px; padding:8px 10px; font-size:14px; background:#fff; outline:none; transition:border .15s, box-shadow .15s; }
+  .input:focus { border-color:#2f6fed; box-shadow:0 0 0 3px rgba(47,111,237,.15); }
+  .btn { display:inline-flex; align-items:center; gap:6px; border-radius:8px; padding:8px 14px; font-size:14px; font-weight:500; border:1px solid transparent; transition:all .15s; cursor:pointer; white-space:nowrap; }
+  .btn-primary { background:#2f6fed; color:#fff; } .btn-primary:hover { background:#1f5ad8; }
+  .btn-ghost { background:#fff; color:#374151; border-color:#d1d5db; } .btn-ghost:hover { background:#f9fafb; }
+  .btn-danger { background:#fff; color:#dc2626; border-color:#fecaca; } .btn-danger:hover { background:#fef2f2; }
+  .btn-sm { padding:5px 10px; font-size:13px; }
+  .badge { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:2px 9px; font-size:11.5px; font-weight:600; border:1px solid; white-space:nowrap; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px; font-size:14px; font-weight:500; color:#4b5563; cursor:pointer; transition:all .12s; }
+  .nav-item:hover { background:#f3f4f6; color:#111827; }
+  .nav-item.active { background:#eef4ff; color:#1f5ad8; }
+  .label { display:block; font-size:12.5px; font-weight:600; color:#374151; margin-bottom:6px; }
+  .section-title { font-size:12px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:.04em; }
+  .fade-in { animation: fade .18s ease-out; }
+  @keyframes fade { from { opacity:0; transform:translateY(4px);} to { opacity:1; transform:none;} }
+  .chip { padding:5px 12px; border-radius:999px; font-size:13px; border:1px solid #e5e7eb; background:#fff; color:#4b5563; cursor:pointer; }
+  .chip.active { background:#1f2937; color:#fff; border-color:#1f2937; }
+  .report-item { border-left:3px solid transparent; cursor:pointer; }
+  .report-item:hover { background:#f9fafb; }
+  .report-item.active { background:#eef4ff; border-left-color:#2f6fed; }
+  textarea.input { min-height:84px; resize:vertical; }
+  .checkbox { width:18px; height:18px; accent-color:#2f6fed; cursor:pointer; }
+</style>
+</head>
+<body class="bg-[#f4f5f7] text-slate-800 text-sm">
+<div id="app"></div>
+<div id="modal"></div>
+<div id="toast" class="fixed bottom-5 right-5 z-[100] flex flex-col gap-2"></div>
+
+<script>
+/* ============================================================
+   HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app
+   Dữ liệu lưu localStorage. Tailwind CDN + Vanilla JS.
+   ============================================================ */
+const STORE_KEY = 'okr_weekly_v1';
+const SESSION_KEY = 'okr_weekly_session';
+const API_KEY = 'okr_weekly_api';
+let DB = null;
+let state = { view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all' };
+let sync = { busy:false, error:null, lastAt:null };
+
+/* ---------- Tiện ích ---------- */
+const uid = () => Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-3);
+const pad = n => String(n).padStart(2,'0');
+const toISO = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const fromISO = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
+const fmt = s => { if(!s) return ''; const d = typeof s === 'string' ? fromISO(s.slice(0,10)) : s; return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`; };
+const fmtDT = iso => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())} ${fmt(d)}`; };
+const addDays = (d,n) => { const r = new Date(d); r.setDate(r.getDate()+n); return r; };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = n => Number(n).toLocaleString('vi-VN');
+function isoWeek(d){
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y = t.getUTCFullYear();
+  return { week: Math.ceil(((t - Date.UTC(y,0,1)) / 864e5 + 1) / 7), year: y };
+}
+function weekStart(week, year){ const j4 = new Date(year,0,4); const day = j4.getDay() || 7; return addDays(addDays(j4, 1-day), (week-1)*7); }
+const weekKey = (w,y) => `${y}-W${pad(w)}`;
+function weekLabel(w, y, short){ const s = weekStart(w,y), e = addDays(s,6); return short ? `Tuần ${w}/${y}` : `Tuần ${w} · ${pad(s.getDate())}/${pad(s.getMonth()+1)} – ${fmt(e)}`; }
+const initials = name => { const p = name.trim().split(/\s+/); return (p.length>1 ? p[p.length-2][0]+p[p.length-1][0] : p[0].slice(0,2)).toUpperCase(); };
+const avatar = (u, size='w-9 h-9 text-xs') => `<div class="${size} rounded-full flex items-center justify-center font-semibold text-white shrink-0" style="background:${u.color}">${initials(u.name)}</div>`;
+
+/* ---------- Dữ liệu mẫu ---------- */
+function seedData(){
+  const now = new Date();
+  const cw = isoWeek(now);
+  const wk = n => { const d = addDays(weekStart(cw.week, cw.year), -7*n); return isoWeek(d); };
+  const at = (n, dayOff, h) => { const d = addDays(weekStart(wk(n).week, wk(n).year), dayOff); d.setHours(h,0,0,0); return d.toISOString(); };
+  const dueIn = (n, dayOff) => toISO(addDays(weekStart(wk(n).week, wk(n).year), dayOff));
+  const q = Math.floor(now.getMonth()/3);
+  const cycle = { name:`Q${q+1}/${now.getFullYear()}`, start: toISO(new Date(now.getFullYear(), q*3, 1)), end: toISO(new Date(now.getFullYear(), q*3+3, 0)) };
+  const w0 = wk(0), w1 = wk(1), w2 = wk(2);
+
+  const users = [
+    { id:'u1', username:'admin',    password:'123456', name:'Nguyễn Minh Quân', role:'manager',  dept:'Ban Giám đốc', title:'Giám đốc điều hành', color:'#1f2937' },
+    { id:'u2', username:'thuha',    password:'123456', name:'Trần Thu Hà',      role:'employee', dept:'Marketing',    title:'Chuyên viên Marketing', color:'#2f6fed' },
+    { id:'u3', username:'hoangnam', password:'123456', name:'Lê Hoàng Nam',     role:'employee', dept:'Kinh doanh',   title:'Trưởng nhóm Kinh doanh', color:'#059669' },
+    { id:'u4', username:'thilan',   password:'123456', name:'Phạm Thị Lan',     role:'employee', dept:'CSKH',         title:'Chuyên viên CSKH', color:'#d97706' },
+    { id:'u5', username:'ducanh',   password:'123456', name:'Vũ Đức Anh',       role:'employee', dept:'Vận hành',     title:'Trưởng kho', color:'#7c3aed' },
+  ];
+  const okrs = [
+    { id:'o1', ownerId:'u2', title:'Tăng trưởng lead chất lượng từ kênh Digital', krs:[
+      { id:'k1', title:'Số lead từ Facebook Ads', current:860, target:1500, unit:'lead' },
+      { id:'k2', title:'Bài viết đăng đều trên fanpage', current:38, target:60, unit:'bài' },
+      { id:'k3', title:'Tỉ lệ lead chất lượng', current:42, target:60, unit:'%' } ]},
+    { id:'o2', ownerId:'u2', title:'Xây dựng kênh TikTok đạt 10.000 follower', krs:[
+      { id:'k4', title:'Lượng follower', current:4200, target:10000, unit:'follower' },
+      { id:'k5', title:'Video đã đăng', current:25, target:45, unit:'video' } ]},
+    { id:'o3', ownerId:'u3', title:'Đạt doanh thu 6 tỷ trong quý', krs:[
+      { id:'k6', title:'Doanh thu đã ghi nhận', current:2400, target:6000, unit:'triệu' },
+      { id:'k7', title:'Đơn hàng mới', current:310, target:800, unit:'đơn' },
+      { id:'k8', title:'Tỉ lệ chốt đơn', current:22, target:30, unit:'%' } ]},
+    { id:'o4', ownerId:'u4', title:'Nâng cao mức độ hài lòng của khách hàng', krs:[
+      { id:'k9', title:'Điểm CSAT', current:86, target:92, unit:'%' },
+      { id:'k10', title:'Khách hàng quay lại mua', current:120, target:300, unit:'khách' },
+      { id:'k11', title:'Phản hồi tin nhắn trong 5 phút', current:78, target:95, unit:'%' } ]},
+    { id:'o5', ownerId:'u5', title:'Tối ưu vận hành kho & giao hàng', krs:[
+      { id:'k12', title:'Đơn giao đúng hẹn', current:91, target:98, unit:'%' },
+      { id:'k13', title:'Kiểm kê kho định kỳ', current:3, target:6, unit:'lần' },
+      { id:'k14', title:'Đối tác vận chuyển mới', current:1, target:2, unit:'đối tác' } ]},
+  ];
+  const reports = [
+    { id:'r1', userId:'u2', week:w2.week, year:w2.year, okrId:'o1', createdAt:at(2,4,16),
+      krUpdates:[{krId:'k1',value:520},{krId:'k2',value:24},{krId:'k3',value:35}],
+      work:'- Chạy 3 chiến dịch Facebook Ads cho dòng sản phẩm mới.\n- Đăng 7 bài fanpage, 2 bài đạt tương tác cao.\n- Phối hợp CSKH chuẩn hoá kịch bản chăm lead.',
+      issues:'CPL tăng 18% so với tháng trước, nhiều lead hỏi giá rồi bỏ.',
+      causes:'Nội dung quảng cáo chưa nhấn mạnh ưu đãi; tệp đối tượng bị trùng giữa các chiến dịch.',
+      solutions:[{id:'s1',text:'Tách lại tệp đối tượng cho 3 chiến dịch, loại trùng',due:dueIn(1,2)},{id:'s2',text:'Làm 3 mẫu quảng cáo mới nhấn mạnh ưu đãi tháng',due:dueIn(1,4)}],
+      comments:[
+        { id:'c1', authorId:'u1', text:'Phân tích đúng vấn đề. Tuần sau ưu tiên tách tệp trước, mẫu quảng cáo làm sau. Nhớ báo lại CPL sau khi tách.', createdAt:at(2,5,9), acknowledged:true, ackAt:at(2,5,10) } ] },
+    { id:'r2', userId:'u2', week:w1.week, year:w1.year, okrId:'o1', createdAt:at(1,4,17),
+      krUpdates:[{krId:'k1',value:860},{krId:'k2',value:38},{krId:'k3',value:42}],
+      work:'- Đã tách tệp đối tượng, CPL giảm 11%.\n- Hoàn thành 3 mẫu quảng cáo mới, đang test A/B.\n- Đăng 7 bài fanpage theo lịch.',
+      issues:'Tỉ lệ lead chất lượng vẫn thấp hơn mục tiêu (42% so với 60%).',
+      causes:'Form đăng ký chưa có câu hỏi lọc nhu cầu nên nhiều lead không đúng đối tượng.',
+      solutions:[{id:'s3',text:'Thêm 2 câu hỏi lọc nhu cầu vào form lead',due:dueIn(0,2)},{id:'s4',text:'Tổng hợp kết quả A/B test 3 mẫu quảng cáo',due:dueIn(0,4)}],
+      comments:[
+        { id:'c2', authorId:'u1', text:'Tốt. Tuần tới gửi thêm bảng so sánh CPL trước/sau khi tách tệp để làm chuẩn cho các nhóm khác.', createdAt:at(1,5,8), acknowledged:true, ackAt:at(1,5,11) } ] },
+    { id:'r3', userId:'u2', week:w0.week, year:w0.year, okrId:'o2', createdAt:at(0,3,15),
+      krUpdates:[{krId:'k4',value:4200},{krId:'k5',value:25}],
+      work:'- Đăng 5 video TikTok, 1 video đạt 40K view.\n- Thử định dạng video review sản phẩm theo xu hướng.',
+      issues:'Tốc độ tăng follower chậm (≈ 300/tuần), khó đạt 10.000 cuối quý.',
+      causes:'Chưa có lịch đăng cố định và chưa đẩy quảng cáo cho video tốt.',
+      solutions:[{id:'s5',text:'Lập lịch đăng cố định 1 video/ngày',due:dueIn(-1,1)},{id:'s6',text:'Chạy thử 2 triệu quảng cáo cho video 40K view',due:dueIn(-1,3)}],
+      comments:[
+        { id:'c3', authorId:'u1', text:'Đồng ý chạy thử ngân sách 2 triệu. Lưu ý đo lường follower đến từ quảng cáo riêng để tuần sau quyết định có tăng ngân sách không.', createdAt:at(0,4,9), acknowledged:false } ] },
+    { id:'r4', userId:'u3', week:w1.week, year:w1.year, okrId:'o3', createdAt:at(1,4,18),
+      krUpdates:[{krId:'k6',value:2100},{krId:'k7',value:270},{krId:'k8',value:21}],
+      work:'- Chốt 48 đơn, doanh thu tuần 380 triệu.\n- Đào tạo kịch bản tư vấn mới cho 3 nhân viên.',
+      issues:'Nhiều khách hẹn xem hàng nhưng không đến.',
+      causes:'Chưa có bước nhắc lịch trước 1 ngày; nhân viên chốt lịch nhưng không xác nhận lại.',
+      solutions:[{id:'s7',text:'Áp dụng quy trình nhắc lịch trước 24h qua Zalo',due:dueIn(0,1)},{id:'s8',text:'Tổng hợp lý do khách không đến trong tuần',due:dueIn(0,4)}],
+      comments:[
+        { id:'c4', authorId:'u1', text:'Quy trình nhắc lịch cần có mẫu tin nhắn thống nhất. Gửi mẫu cho anh duyệt trước khi áp dụng.', createdAt:at(1,5,9), acknowledged:false } ] },
+    { id:'r5', userId:'u3', week:w0.week, year:w0.year, okrId:'o3', createdAt:at(0,3,17),
+      krUpdates:[{krId:'k6',value:2400},{krId:'k7',value:310},{krId:'k8',value:22}],
+      work:'- Chốt 40 đơn, doanh thu 300 triệu.\n- Đã áp dụng nhắc lịch 24h, tỉ lệ khách đến hẹn tăng từ 55% lên 72%.',
+      issues:'Doanh thu tuần giảm nhẹ do thiếu hàng 2 mẫu bán chạy.',
+      causes:'Kho chưa nhập kịp theo dự báo bán hàng.',
+      solutions:[{id:'s9',text:'Gửi dự báo nhu cầu 2 tuần tới cho bộ phận kho',due:dueIn(-1,1)},{id:'s10',text:'Đẩy bán 3 mẫu thay thế có sẵn hàng',due:dueIn(-1,5)}],
+      comments:[] },
+    { id:'r6', userId:'u4', week:w1.week, year:w1.year, okrId:'o4', createdAt:at(1,4,16),
+      krUpdates:[{krId:'k9',value:86},{krId:'k10',value:120},{krId:'k11',value:78}],
+      work:'- Xử lý 412 hội thoại, CSAT 86%.\n- Gọi lại 60 khách đã mua để khảo sát.',
+      issues:'Tỉ lệ phản hồi trong 5 phút thấp vào khung giờ 11h–13h.',
+      causes:'Ca trưa chỉ có 1 nhân viên trực trong khi lượng tin nhắn tăng.',
+      solutions:[{id:'s11',text:'Đề xuất lịch trực ca trưa 2 người',due:dueIn(0,1)},{id:'s12',text:'Cài đặt tin nhắn tự động trả lời khi quá tải',due:dueIn(0,3)}],
+      comments:[
+        { id:'c5', authorId:'u1', text:'Duyệt lịch trực 2 người ca trưa từ tuần sau. Tin nhắn tự động cần ghi rõ thời gian sẽ phản hồi lại.', createdAt:at(1,5,10), acknowledged:true, ackAt:at(1,5,14) } ] },
+    { id:'r7', userId:'u5', week:w1.week, year:w1.year, okrId:'o5', createdAt:at(1,4,15),
+      krUpdates:[{krId:'k12',value:91},{krId:'k13',value:3},{krId:'k14',value:1}],
+      work:'- Giao 520 đơn, 91% đúng hẹn.\n- Hoàn thành kiểm kê kho lần 3.',
+      issues:'Đơn tỉnh xa hay trễ 1–2 ngày.',
+      causes:'Đối tác vận chuyển hiện tại không có kho trung chuyển ở miền Trung.',
+      solutions:[{id:'s13',text:'Lấy báo giá 2 đối tác vận chuyển mới cho tuyến miền Trung',due:dueIn(0,3)}],
+      comments:[
+        { id:'c6', authorId:'u1', text:'Ok, so sánh cả thời gian giao và tỉ lệ hư hỏng, không chỉ giá.', createdAt:at(1,5,9), acknowledged:true, ackAt:at(1,5,9) } ] },
+  ];
+  const tasks = [
+    { id:'t1', title:'Tách lại tệp đối tượng cho 3 chiến dịch, loại trùng', assigneeId:'u2', reportId:'r1', okrId:'o1', week:w2.week, year:w2.year, due:dueIn(1,2), status:'done', createdAt:at(2,4,16) },
+    { id:'t2', title:'Làm 3 mẫu quảng cáo mới nhấn mạnh ưu đãi tháng', assigneeId:'u2', reportId:'r1', okrId:'o1', week:w2.week, year:w2.year, due:dueIn(1,4), status:'done', createdAt:at(2,4,16) },
+    { id:'t3', title:'Thêm 2 câu hỏi lọc nhu cầu vào form lead', assigneeId:'u2', reportId:'r2', okrId:'o1', week:w1.week, year:w1.year, due:dueIn(0,2), status:'done', createdAt:at(1,4,17) },
+    { id:'t4', title:'Tổng hợp kết quả A/B test 3 mẫu quảng cáo', assigneeId:'u2', reportId:'r2', okrId:'o1', week:w1.week, year:w1.year, due:dueIn(0,4), status:'doing', createdAt:at(1,4,17) },
+    { id:'t5', title:'Lập lịch đăng cố định 1 video/ngày', assigneeId:'u2', reportId:'r3', okrId:'o2', week:w0.week, year:w0.year, due:dueIn(-1,1), status:'todo', createdAt:at(0,3,15) },
+    { id:'t6', title:'Chạy thử 2 triệu quảng cáo cho video 40K view', assigneeId:'u2', reportId:'r3', okrId:'o2', week:w0.week, year:w0.year, due:dueIn(-1,3), status:'todo', createdAt:at(0,3,15) },
+    { id:'t7', title:'Áp dụng quy trình nhắc lịch trước 24h qua Zalo', assigneeId:'u3', reportId:'r4', okrId:'o3', week:w1.week, year:w1.year, due:dueIn(0,1), status:'done', createdAt:at(1,4,18) },
+    { id:'t8', title:'Tổng hợp lý do khách không đến trong tuần', assigneeId:'u3', reportId:'r4', okrId:'o3', week:w1.week, year:w1.year, due:dueIn(0,4), status:'doing', createdAt:at(1,4,18) },
+    { id:'t9', title:'Gửi dự báo nhu cầu 2 tuần tới cho bộ phận kho', assigneeId:'u3', reportId:'r5', okrId:'o3', week:w0.week, year:w0.year, due:dueIn(-1,1), status:'todo', createdAt:at(0,3,17) },
+    { id:'t10', title:'Đẩy bán 3 mẫu thay thế có sẵn hàng', assigneeId:'u3', reportId:'r5', okrId:'o3', week:w0.week, year:w0.year, due:dueIn(-1,5), status:'todo', createdAt:at(0,3,17) },
+    { id:'t11', title:'Đề xuất lịch trực ca trưa 2 người', assigneeId:'u4', reportId:'r6', okrId:'o4', week:w1.week, year:w1.year, due:dueIn(0,1), status:'done', createdAt:at(1,4,16) },
+    { id:'t12', title:'Cài đặt tin nhắn tự động trả lời khi quá tải', assigneeId:'u4', reportId:'r6', okrId:'o4', week:w1.week, year:w1.year, due:dueIn(0,3), status:'doing', createdAt:at(1,4,16) },
+    { id:'t13', title:'Lấy báo giá 2 đối tác vận chuyển mới cho tuyến miền Trung', assigneeId:'u5', reportId:'r7', okrId:'o5', week:w1.week, year:w1.year, due:dueIn(0,3), status:'todo', createdAt:at(1,4,15) },
+    { id:'t14', title:'Chuẩn bị số liệu kiểm kê kho lần 4', assigneeId:'u5', reportId:null, okrId:'o5', week:w0.week, year:w0.year, due:dueIn(-1,4), status:'todo', createdAt:at(0,0,9) },
+  ];
+  return { cycle, users, okrs, reports, tasks };
+}
+
+/* ---------- Lưu trữ ---------- */
+function load(){ try { const raw = localStorage.getItem(STORE_KEY); DB = raw ? JSON.parse(raw) : null; } catch(e){ DB = null; } if(!DB){ DB = seedData(); save(); } }
+function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+
+/* ---------- Đồng bộ Google Sheet (Apps Script Web App) ---------- */
+// URL Apps Script dùng mặc định cho cả team (có thể ghi đè trong Cài đặt đồng bộ; để trống = chế độ cục bộ).
+const DEFAULT_API = 'https://script.google.com/macros/s/AKfycbx_BEECWvgjzcw30IuZ1JlyE2NohY7PNO_GE7q55g7bBU3USVXOrG9ujxFo5dkvMGvSZw/exec';
+const apiUrl = () => { const v = localStorage.getItem(API_KEY); return (v === null ? DEFAULT_API : v).trim(); };
+const online = () => !!apiUrl();
+function setBusy(b){ sync.busy = b; const el = document.getElementById('sync-dot'); if(el) el.className = syncDotClass(); }
+const syncDotClass = () => 'w-2 h-2 rounded-full shrink-0 ' + (!online() ? 'bg-gray-400' : sync.error ? 'bg-red-500' : sync.busy ? 'bg-amber-400 animate-pulse' : 'bg-green-500');
+async function apiFetch(url, opts){
+  const res = await fetch(url, opts);
+  const txt = await res.text();
+  let j; try { j = JSON.parse(txt); } catch(e){ throw new Error('Phản hồi không hợp lệ (kiểm tra lại URL Web App và quyền "Bất kỳ ai").'); }
+  if(!j.ok) throw new Error(j.error || 'Lỗi máy chủ');
+  return j;
+}
+async function apiLoad(){
+  if(!online()) return;
+  setBusy(true);
+  try { const j = await apiFetch(apiUrl() + (apiUrl().includes('?') ? '&' : '?') + 't=' + Date.now()); DB = j.db; save(); sync.error = null; sync.lastAt = new Date(); }
+  catch(e){ sync.error = e.message; throw e; }
+  finally { setBusy(false); }
+}
+async function api(action, payload){
+  // POST không đặt Content-Type để tránh preflight CORS; Apps Script vẫn đọc được body.
+  const j = await apiFetch(apiUrl(), { method:'POST', body: JSON.stringify({ action, payload }) });
+  if(j.db){ DB = j.db; save(); sync.error = null; sync.lastAt = new Date(); }
+  return j;
+}
+/* Áp dụng thay đổi ngay tại máy (localFn), rồi đẩy lên Sheet nếu đang bật đồng bộ. */
+async function mutate(action, payload, localFn, successMsg){
+  localFn(); save(); render();
+  if(successMsg) toast(successMsg);
+  if(!online()) return;
+  setBusy(true);
+  try { await api(action, payload); render(); }
+  catch(e){ sync.error = e.message; toast('Không ghi được lên Google Sheet: ' + e.message, 'error'); try { await apiLoad(); } catch(_){} render(); }
+  finally { setBusy(false); }
+}
+async function refreshFromServer(silent){
+  if(!online()) return;
+  const before = JSON.stringify(DB);
+  try { await apiLoad(); if(JSON.stringify(DB) !== before || !silent) render(); if(!silent) toast('Đã tải dữ liệu mới nhất từ Google Sheet.', 'info'); }
+  catch(e){ if(!silent) toast(e.message, 'error'); render(); }
+}
+setInterval(() => {
+  if(!online() || !session() || document.visibilityState !== 'visible' || sync.busy) return;
+  if(document.getElementById('modal').innerHTML.trim()) return;                 // đang mở form
+  const a = document.activeElement; if(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return; // đang gõ
+  refreshFromServer(true);
+}, 60000);
+function session(){ return localStorage.getItem(SESSION_KEY); }
+function me(){ return DB.users.find(u => u.id === session()); }
+const isMgr = () => me() && me().role === 'manager';
+const user = id => DB.users.find(u => u.id === id) || { name:'?', color:'#999', dept:'' };
+const isMgrId = id => user(id).role === 'manager';
+const employees = () => DB.users.filter(u => u.role === 'employee');
+
+/* ---------- Tính toán OKR ---------- */
+const krPct = k => k.target > 0 ? Math.min(100, Math.round(k.current / k.target * 100)) : 0;
+const okrPct = o => o.krs.length ? Math.round(o.krs.reduce((a,k) => a + krPct(k), 0) / o.krs.length) : 0;
+function cycleInfo(){
+  const s = fromISO(DB.cycle.start), e = addDays(fromISO(DB.cycle.end), 1), n = new Date();
+  const total = (e - s) / 864e5; const el = Math.min(Math.max((n - s) / 864e5, 0), total);
+  return { expected: Math.round(el / total * 100), daysLeft: Math.max(0, Math.ceil((e - n) / 864e5)), status: n < s ? 'Sắp bắt đầu' : n >= e ? 'Đã kết thúc' : 'Đang diễn ra' };
+}
+function okrStatus(pct){
+  const ex = cycleInfo().expected;
+  if(pct >= 100) return { t:'Hoàn thành', c:'bg-emerald-50 text-emerald-700 border-emerald-200', bar:'bg-emerald-500' };
+  if(pct >= ex - 10) return { t:'Đúng tiến độ', c:'bg-green-50 text-green-700 border-green-200', bar:'bg-green-500' };
+  if(pct >= ex - 25) return { t:'Cần chú ý', c:'bg-amber-50 text-amber-700 border-amber-200', bar:'bg-amber-500' };
+  return { t:'Rủi ro', c:'bg-red-50 text-red-700 border-red-200', bar:'bg-red-500' };
+}
+function reportStatus(r){
+  const mc = r.comments.filter(c => isMgrId(c.authorId));
+  if(!mc.length) return { t:'Chờ quản lý phản hồi', c:'bg-amber-50 text-amber-700 border-amber-200', key:'pending' };
+  if(mc.some(c => !c.acknowledged)) return { t:'Chờ nhân viên xác nhận', c:'bg-blue-50 text-blue-700 border-blue-200', key:'ack' };
+  return { t:'Đã xác nhận', c:'bg-green-50 text-green-700 border-green-200', key:'done' };
+}
+const TASK_STATUS = { todo:{ t:'Cần làm', c:'bg-slate-100 text-slate-700 border-slate-200' }, doing:{ t:'Đang làm', c:'bg-blue-50 text-blue-700 border-blue-200' }, done:{ t:'Hoàn thành', c:'bg-green-50 text-green-700 border-green-200' } };
+const badge = (t,c) => `<span class="badge ${c}">${t}</span>`;
+const isOverdue = t => t.status !== 'done' && t.due && t.due < toISO(new Date());
+function pendingCount(){
+  if(isMgr()) return DB.reports.filter(r => reportStatus(r).key === 'pending').length;
+  return DB.reports.filter(r => r.userId === me().id).reduce((a,r) => a + r.comments.filter(c => isMgrId(c.authorId) && !c.acknowledged).length, 0);
+}
+const progressBar = (pct, bar='bg-base-500', h='h-2') => `<div class="w-full ${h} bg-gray-100 rounded-full overflow-hidden"><div class="${h} ${bar} rounded-full transition-all" style="width:${pct}%"></div></div>`;
+
+/* ---------- Icons ---------- */
+const I = {
+  dash:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
+  report:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
+  task:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+  plus:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  check:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+  x:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  trash:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>',
+  logout:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
+  refresh:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+  chat:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  flag:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>',
+  gear:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+};
+
+/* ---------- Toast & Modal ---------- */
+function toast(msg, type='success'){
+  const el = document.createElement('div');
+  const color = type === 'error' ? 'bg-red-600' : type === 'info' ? 'bg-slate-800' : 'bg-emerald-600';
+  el.className = `fade-in ${color} text-white text-sm px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2`;
+  el.innerHTML = `${type === 'error' ? I.x : I.check} <span>${esc(msg)}</span>`;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 2800);
+}
+function openModal(html, width='max-w-2xl'){
+  document.getElementById('modal').innerHTML = `
+    <div class="fixed inset-0 z-50 bg-slate-900/40 flex items-start justify-center p-4 overflow-y-auto" onclick="if(event.target===this)A.closeModal()">
+      <div class="card w-full ${width} my-6 fade-in shadow-xl">${html}</div>
+    </div>`;
+}
+const modalHeader = (title, sub='') => `
+  <div class="flex items-start justify-between px-6 py-4 border-b border-gray-200">
+    <div><h3 class="text-base font-semibold text-slate-900">${title}</h3>${sub ? `<p class="text-xs text-gray-500 mt-0.5">${sub}</p>` : ''}</div>
+    <button class="text-gray-400 hover:text-gray-700 p-1 rounded" onclick="A.closeModal()">${I.x}</button>
+  </div>`;
+
+/* ---------- Render gốc ---------- */
+function render(){
+  const app = document.getElementById('app');
+  if(!session() || !me()){ app.innerHTML = viewLogin(); return; }
+  const views = { dashboard: viewDashboard, checkin: viewCheckin, tasks: viewTasks };
+  const titles = { dashboard:'Tổng quan OKRs', checkin:'Báo cáo tuần', tasks:'Quản lý công việc' };
+  const u = me(), ci = cycleInfo(), pc = pendingCount();
+  const navItem = (key, icon, label, count) => `
+    <div class="nav-item ${state.view === key ? 'active' : ''}" onclick="A.nav('${key}')">${icon}<span class="flex-1">${label}</span>${count ? `<span class="bg-red-500 text-white text-[11px] font-semibold px-1.5 py-0.5 rounded-full">${count}</span>` : ''}</div>`;
+  app.innerHTML = `
+  <div class="flex h-screen overflow-hidden">
+    <aside class="w-[232px] bg-white border-r border-gray-200 flex flex-col shrink-0">
+      <div class="h-14 flex items-center gap-2.5 px-4 border-b border-gray-200">
+        <div class="w-8 h-8 rounded-lg bg-base-500 text-white flex items-center justify-center font-bold text-sm">OK</div>
+        <div><div class="font-semibold text-slate-900 leading-tight">OKR Weekly</div><div class="text-[11px] text-gray-500 leading-tight">Quản trị mục tiêu & họp tuần</div></div>
+      </div>
+      <nav class="p-3 space-y-1 flex-1">
+        <div class="section-title px-3 pb-2 pt-1">Menu</div>
+        ${navItem('dashboard', I.dash, 'Tổng quan OKRs')}
+        ${navItem('checkin', I.report, 'Báo cáo tuần', pc)}
+        ${navItem('tasks', I.task, 'Quản lý công việc')}
+        <div class="pt-4">
+          <div class="section-title px-3 pb-2">Chu kỳ hiện tại</div>
+          <div class="mx-1 p-3 rounded-lg bg-gray-50 border border-gray-200">
+            <div class="flex items-center justify-between"><span class="font-semibold text-slate-900">${DB.cycle.name}</span>${badge(ci.status, ci.status === 'Đang diễn ra' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-100 text-gray-600 border-gray-200')}</div>
+            <div class="text-[11.5px] text-gray-500 mt-1">${fmt(DB.cycle.start)} – ${fmt(DB.cycle.end)}</div>
+            <div class="mt-2">${progressBar(ci.expected, 'bg-slate-400', 'h-1.5')}</div>
+            <div class="text-[11px] text-gray-500 mt-1">Đã qua ${ci.expected}% thời gian · còn ${ci.daysLeft} ngày</div>
+          </div>
+        </div>
+      </nav>
+      <div class="p-3 border-t border-gray-200">
+        <div class="flex items-center gap-2.5 px-1">
+          ${avatar(u)}
+          <div class="min-w-0 flex-1"><div class="font-medium text-slate-900 truncate">${esc(u.name)}</div><div class="text-[11.5px] text-gray-500 truncate">${u.role === 'manager' ? 'Quản lý' : 'Nhân viên'} · ${esc(u.dept)}</div></div>
+        </div>
+        <div class="flex items-center gap-2 mt-3 px-1 text-[11.5px] text-gray-500 cursor-pointer hover:text-slate-800" onclick="A.openSettings()" title="Cài đặt đồng bộ">
+          <span id="sync-dot" class="${syncDotClass()}"></span>
+          <span class="truncate">${online() ? (sync.error ? 'Mất kết nối Google Sheet' : 'Đồng bộ Google Sheet' + (sync.lastAt ? ' · ' + pad(sync.lastAt.getHours()) + ':' + pad(sync.lastAt.getMinutes()) : '')) : 'Dữ liệu cục bộ (chưa đồng bộ)'}</span>
+          <span class="ml-auto text-gray-400">${I.gear}</span>
+        </div>
+        <div class="flex gap-1.5 mt-2">
+          <button class="btn btn-ghost btn-sm flex-1 justify-center" onclick="A.logout()">${I.logout} Đăng xuất</button>
+          ${online() ? `<button class="btn btn-ghost btn-sm" title="Tải lại dữ liệu từ Google Sheet" onclick="A.refresh()">${I.refresh}</button>`
+                     : `<button class="btn btn-ghost btn-sm" title="Đặt lại dữ liệu mẫu" onclick="A.resetData()">${I.refresh}</button>`}
+        </div>
+      </div>
+    </aside>
+    <main class="flex-1 flex flex-col min-w-0">
+      <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
+        <div class="flex items-center gap-3"><h1 class="text-base font-semibold text-slate-900">${titles[state.view]}</h1><span class="text-gray-300">|</span><span class="text-gray-500 text-[13px]">${weekLabel(isoWeek(new Date()).week, isoWeek(new Date()).year)}</span></div>
+        <div class="flex items-center gap-3">
+          ${badge(u.role === 'manager' ? 'Quản lý' : 'Nhân viên', u.role === 'manager' ? 'bg-slate-800 text-white border-slate-800' : 'bg-base-50 text-base-700 border-base-100')}
+          ${avatar(u, 'w-8 h-8 text-[11px]')}
+        </div>
+      </header>
+      <div class="flex-1 overflow-y-auto p-6 fade-in" id="content">${views[state.view]()}</div>
+    </main>
+  </div>`;
+}
+
+/* ---------- Màn hình đăng nhập ---------- */
+function viewLogin(){
+  return `
+  <div class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-[880px] grid md:grid-cols-5 card overflow-hidden shadow-sm">
+      <div class="md:col-span-2 bg-slate-900 text-white p-8 flex flex-col justify-between">
+        <div>
+          <div class="w-10 h-10 rounded-lg bg-base-500 flex items-center justify-center font-bold">OK</div>
+          <h2 class="text-xl font-semibold mt-5">OKR Weekly</h2>
+          <p class="text-slate-300 text-[13px] mt-2 leading-relaxed">Hệ thống quản trị OKRs & báo cáo họp tuần dành cho Nhân viên và Quản lý. Theo dõi mục tiêu, check-in tiến độ và biến giải pháp thành đầu việc.</p>
+        </div>
+        <div class="text-[11.5px] text-slate-400">
+          <div class="flex items-center gap-2"><span class="${syncDotClass()}"></span>${online() ? (sync.error ? 'Không kết nối được Google Sheet' : 'Đang đồng bộ với Google Sheet') : 'Dữ liệu lưu trên trình duyệt này (localStorage)'}</div>
+          <a class="inline-flex items-center gap-1 mt-2 text-slate-300 hover:text-white cursor-pointer" onclick="A.openSettings()">${I.gear} Cài đặt đồng bộ Google Sheet</a>
+        </div>
+      </div>
+      <div class="md:col-span-3 p-8">
+        <h3 class="text-lg font-semibold text-slate-900">Đăng nhập</h3>
+        <p class="text-gray-500 text-[13px] mt-1">Chọn một tài khoản mẫu bên dưới hoặc nhập thông tin.</p>
+        <form class="mt-5 space-y-3.5" onsubmit="event.preventDefault();A.login()">
+          <div><label class="label">Tên đăng nhập</label><input id="lg-user" class="input" placeholder="admin" autocomplete="username"></div>
+          <div><label class="label">Mật khẩu</label><input id="lg-pass" type="password" class="input" placeholder="••••••" autocomplete="current-password"></div>
+          <div id="lg-err" class="text-red-600 text-[13px] hidden"></div>
+          <button id="lg-btn" class="btn btn-primary w-full justify-center">Đăng nhập</button>
+        </form>
+        <div class="mt-6">
+          <div class="section-title mb-2">${online() ? 'Tài khoản trong Google Sheet (tab Users)' : 'Tài khoản mẫu (mật khẩu: 123456)'}</div>
+          <div class="border border-gray-200 rounded-lg divide-y divide-gray-100">
+            ${DB.users.map(u => `
+              <div class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer" onclick="A.fillLogin('${u.username}')">
+                ${avatar(u, 'w-7 h-7 text-[10px]')}
+                <div class="flex-1 min-w-0"><span class="font-medium text-slate-800">${esc(u.name)}</span><span class="text-gray-400 mx-1.5">·</span><span class="text-gray-500 text-[12.5px]">${esc(u.dept)}</span></div>
+                <code class="text-[12px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">${u.username}</code>
+                ${badge(u.role === 'manager' ? 'Quản lý' : 'Nhân viên', u.role === 'manager' ? 'bg-slate-800 text-white border-slate-800' : 'bg-base-50 text-base-700 border-base-100')}
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Tổng quan OKRs ---------- */
+function viewDashboard(){
+  const cw = isoWeek(new Date());
+  const emps = employees();
+  const avg = DB.okrs.length ? Math.round(DB.okrs.reduce((a,o) => a + okrPct(o), 0) / DB.okrs.length) : 0;
+  const submitted = new Set(DB.reports.filter(r => r.week === cw.week && r.year === cw.year).map(r => r.userId)).size;
+  const overdue = DB.tasks.filter(isOverdue).length;
+  const ci = cycleInfo();
+  const stat = (label, value, sub, color='text-slate-900') => `<div class="card p-4"><div class="text-[12.5px] text-gray-500">${label}</div><div class="text-2xl font-semibold mt-1 ${color}">${value}</div><div class="text-[12px] text-gray-500 mt-0.5">${sub}</div></div>`;
+  let ordered = [...emps];
+  if(!isMgr()) ordered.sort((a,b) => (a.id === me().id ? -1 : b.id === me().id ? 1 : 0));
+  const list = ordered.filter(u => state.dashUser === 'all' || u.id === state.dashUser);
+
+  return `
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+    ${stat('Mục tiêu (Objectives)', DB.okrs.length, `${DB.okrs.reduce((a,o) => a + o.krs.length, 0)} kết quả then chốt`)}
+    ${stat('Tiến độ trung bình', avg + '%', `Kỳ vọng theo thời gian: ${ci.expected}%`, avg >= ci.expected - 10 ? 'text-green-600' : 'text-amber-600')}
+    ${stat('Báo cáo tuần này', `${submitted}/${emps.length}`, 'nhân viên đã gửi check-in', submitted === emps.length ? 'text-green-600' : 'text-slate-900')}
+    ${stat('Công việc quá hạn', overdue, 'chưa hoàn thành, đã quá ngày', overdue ? 'text-red-600' : 'text-green-600')}
+  </div>
+  <div class="flex items-center gap-2 mb-4 flex-wrap">
+    <span class="chip ${state.dashUser === 'all' ? 'active' : ''}" onclick="A.set('dashUser','all')">Tất cả nhân viên</span>
+    ${emps.map(u => `<span class="chip ${state.dashUser === u.id ? 'active' : ''}" onclick="A.set('dashUser','${u.id}')">${esc(u.name)}</span>`).join('')}
+  </div>
+  <div class="space-y-5">
+    ${list.map(u => {
+      const okrs = DB.okrs.filter(o => o.ownerId === u.id);
+      const upct = okrs.length ? Math.round(okrs.reduce((a,o) => a + okrPct(o), 0) / okrs.length) : 0;
+      const last = DB.reports.filter(r => r.userId === u.id).sort((a,b) => (b.year - a.year) || (b.week - a.week))[0];
+      return `
+      <div class="card">
+        <div class="flex items-center gap-3 px-5 py-3.5 border-b border-gray-100">
+          ${avatar(u)}
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2"><span class="font-semibold text-slate-900">${esc(u.name)}</span>${u.id === (me()||{}).id ? badge('Bạn', 'bg-base-50 text-base-700 border-base-100') : ''}</div>
+            <div class="text-[12px] text-gray-500">${esc(u.title)} · ${esc(u.dept)} · ${okrs.length} mục tiêu${last ? ` · Check-in gần nhất: ${weekLabel(last.week, last.year, true)}` : ' · Chưa có check-in'}</div>
+          </div>
+          <div class="w-48 hidden sm:block">
+            <div class="flex justify-between text-[12px] mb-1"><span class="text-gray-500">Tiến độ chung</span><span class="font-semibold">${upct}%</span></div>
+            ${progressBar(upct, okrStatus(upct).bar)}
+          </div>
+        </div>
+        <div class="p-4 grid md:grid-cols-2 gap-4">
+          ${okrs.length ? okrs.map(o => {
+            const p = okrPct(o), st = okrStatus(p);
+            return `
+            <div class="border border-gray-200 rounded-lg p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex items-start gap-2"><span class="text-base-600 mt-0.5">${I.flag}</span><div class="font-semibold text-slate-900 leading-snug">${esc(o.title)}</div></div>
+                ${badge(st.t, st.c)}
+              </div>
+              <div class="flex items-center gap-3 mt-3"><div class="flex-1">${progressBar(p, st.bar, 'h-2.5')}</div><span class="text-[13px] font-semibold w-10 text-right">${p}%</span></div>
+              <div class="mt-3 space-y-2">
+                ${o.krs.map(k => `
+                <div class="flex items-center gap-3 text-[12.5px]">
+                  <span class="text-gray-400 font-medium w-6 shrink-0">KR</span>
+                  <span class="flex-1 text-slate-700 truncate" title="${esc(k.title)}">${esc(k.title)}</span>
+                  <span class="text-gray-500 whitespace-nowrap">${num(k.current)}/${num(k.target)} ${esc(k.unit)}</span>
+                  <div class="w-20">${progressBar(krPct(k), 'bg-slate-400', 'h-1.5')}</div>
+                  <span class="w-9 text-right font-medium">${krPct(k)}%</span>
+                </div>`).join('')}
+              </div>
+            </div>`;
+          }).join('') : '<div class="text-gray-400 text-[13px] italic col-span-2">Chưa có mục tiêu nào.</div>'}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+/* ---------- Báo cáo tuần ---------- */
+function visibleReports(){
+  let rs = isMgr() ? DB.reports : DB.reports.filter(r => r.userId === me().id);
+  if(state.ckUser !== 'all') rs = rs.filter(r => r.userId === state.ckUser);
+  if(state.ckWeek !== 'all') rs = rs.filter(r => weekKey(r.week, r.year) === state.ckWeek);
+  return [...rs].sort((a,b) => (b.year - a.year) || (b.week - a.week) || b.createdAt.localeCompare(a.createdAt));
+}
+function viewCheckin(){
+  const cw = isoWeek(new Date());
+  const rs = visibleReports();
+  if(state.reportId && !rs.find(r => r.id === state.reportId)) state.reportId = null;
+  if(!state.reportId && rs.length) state.reportId = rs[0].id;
+  const weeks = [...new Set((isMgr() ? DB.reports : DB.reports.filter(r => r.userId === me().id)).map(r => weekKey(r.week, r.year)))].sort().reverse();
+  const sel = DB.reports.find(r => r.id === state.reportId);
+  return `
+  <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+    <div class="flex items-center gap-2 flex-wrap">
+      <select class="input !w-auto" onchange="A.set('ckWeek',this.value)">
+        <option value="all">Tất cả các tuần</option>
+        ${weeks.map(w => { const [y, ww] = w.split('-W'); return `<option value="${w}" ${state.ckWeek === w ? 'selected' : ''}>${weekLabel(+ww, +y)}</option>`; }).join('')}
+      </select>
+      ${isMgr() ? `<select class="input !w-auto" onchange="A.set('ckUser',this.value)">
+        <option value="all">Tất cả nhân viên</option>
+        ${employees().map(u => `<option value="${u.id}" ${state.ckUser === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+      </select>` : ''}
+      <span class="text-gray-500 text-[13px]">${rs.length} báo cáo</span>
+    </div>
+    ${!isMgr() ? `<button class="btn btn-primary" onclick="A.openReportForm()">${I.plus} Tạo báo cáo ${weekLabel(cw.week, cw.year, true)}</button>` : ''}
+  </div>
+  <div class="grid lg:grid-cols-12 gap-4">
+    <div class="lg:col-span-4 card overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 section-title">Danh sách báo cáo</div>
+      <div class="divide-y divide-gray-100 max-h-[calc(100vh-220px)] overflow-y-auto">
+        ${rs.length ? rs.map(r => { const u = user(r.userId), o = DB.okrs.find(o => o.id === r.okrId) || {title:'(OKR đã xoá)'}, st = reportStatus(r); return `
+        <div class="report-item px-4 py-3 ${state.reportId === r.id ? 'active' : ''}" onclick="A.selectReport('${r.id}')">
+          <div class="flex items-center gap-2.5">
+            ${avatar(u, 'w-7 h-7 text-[10px]')}
+            <div class="flex-1 min-w-0"><div class="font-medium text-slate-900 truncate">${esc(u.name)}</div><div class="text-[11.5px] text-gray-500">${weekLabel(r.week, r.year)}</div></div>
+          </div>
+          <div class="text-[12.5px] text-slate-600 mt-2 truncate">${esc(o.title)}</div>
+          <div class="mt-2 flex items-center justify-between">${badge(st.t, st.c)}<span class="text-[11px] text-gray-400 flex items-center gap-1">${I.chat} ${r.comments.length}</span></div>
+        </div>`; }).join('') : `<div class="p-8 text-center text-gray-400 text-[13px]">Chưa có báo cáo nào.${!isMgr() ? '<br>Bấm "Tạo báo cáo" để bắt đầu.' : ''}</div>`}
+      </div>
+    </div>
+    <div class="lg:col-span-8">${sel ? reportDetail(sel) : '<div class="card p-12 text-center text-gray-400">Chọn một báo cáo để xem chi tiết.</div>'}</div>
+  </div>`;
+}
+function reportDetail(r){
+  const u = user(r.userId), o = DB.okrs.find(o => o.id === r.okrId), st = reportStatus(r);
+  const canAck = !isMgr() && me().id === r.userId;
+  const canDelete = !isMgr() && me().id === r.userId && !r.comments.some(c => isMgrId(c.authorId));
+  const sec = (title, body, extra='') => `<div><div class="section-title mb-1.5">${title}</div><div class="text-slate-700 whitespace-pre-line leading-relaxed">${body ? esc(body) : '<span class="text-gray-400 italic">Không có</span>'}</div>${extra}</div>`;
+  return `
+  <div class="card">
+    <div class="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
+      <div class="flex items-center gap-3">
+        ${avatar(u, 'w-10 h-10 text-sm')}
+        <div>
+          <div class="font-semibold text-slate-900">${esc(u.name)} <span class="text-gray-400 font-normal">· ${esc(u.dept)}</span></div>
+          <div class="text-[12.5px] text-gray-500">${weekLabel(r.week, r.year)} · Gửi lúc ${fmtDT(r.createdAt)}</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">${badge(st.t, st.c)}${canDelete ? `<button class="btn btn-danger btn-sm" onclick="A.deleteReport('${r.id}')">${I.trash}</button>` : ''}</div>
+    </div>
+    <div class="p-5 space-y-5">
+      <div class="rounded-lg bg-base-50 border border-base-100 p-4">
+        <div class="flex items-center gap-2 text-[12px] font-semibold text-base-700 uppercase tracking-wide">${I.flag} Mục tiêu liên quan</div>
+        <div class="font-semibold text-slate-900 mt-1">${o ? esc(o.title) : '(OKR đã xoá)'}</div>
+        ${o ? `<div class="flex items-center gap-3 mt-2"><div class="flex-1">${progressBar(okrPct(o), okrStatus(okrPct(o)).bar)}</div><span class="text-[13px] font-semibold">${okrPct(o)}%</span></div>` : ''}
+        ${r.krUpdates.length ? `
+        <table class="w-full mt-3 text-[12.5px]">
+          <thead><tr class="text-gray-500 text-left"><th class="font-medium py-1">Kết quả then chốt</th><th class="font-medium py-1 text-right">Cập nhật</th><th class="font-medium py-1 text-right">Mục tiêu</th><th class="font-medium py-1 text-right w-16">%</th></tr></thead>
+          <tbody>${r.krUpdates.map(ku => { const k = o && o.krs.find(k => k.id === ku.krId); if(!k) return ''; const p = k.target ? Math.min(100, Math.round(ku.value / k.target * 100)) : 0; return `<tr class="border-t border-base-100"><td class="py-1.5 text-slate-700">${esc(k.title)}</td><td class="py-1.5 text-right font-semibold">${num(ku.value)} ${esc(k.unit)}</td><td class="py-1.5 text-right text-gray-500">${num(k.target)} ${esc(k.unit)}</td><td class="py-1.5 text-right font-medium">${p}%</td></tr>`; }).join('')}</tbody>
+        </table>` : ''}
+      </div>
+      ${sec('Công việc đã thực hiện trong tuần', r.work)}
+      <div class="grid md:grid-cols-2 gap-5">
+        ${sec('Vấn đề / Rào cản', r.issues)}
+        ${sec('Nguyên nhân', r.causes)}
+      </div>
+      <div>
+        <div class="section-title mb-1.5">Giải pháp / Hành động tuần tiếp theo <span class="normal-case font-normal text-gray-400">(đã chuyển thành công việc)</span></div>
+        ${r.solutions.length ? `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${r.solutions.map(s => { const t = DB.tasks.find(t => t.reportId === r.id && t.solutionId === s.id); const ts = t ? TASK_STATUS[t.status] : null; return `
+          <div class="flex items-center gap-3 px-3 py-2.5">
+            <input type="checkbox" class="checkbox" ${t && t.status === 'done' ? 'checked' : ''} ${t && (isMgr() || t.assigneeId === me().id) ? `onchange="A.toggleTask('${t.id}')"` : 'disabled'}>
+            <span class="flex-1 ${t && t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span>
+            ${s.due ? `<span class="text-[12px] ${t && isOverdue(t) ? 'text-red-600 font-medium' : 'text-gray-500'}">Hạn ${fmt(s.due)}</span>` : ''}
+            ${ts ? badge(ts.t, ts.c) : badge('Chưa tạo task', 'bg-gray-100 text-gray-500 border-gray-200')}
+          </div>`; }).join('')}</div>` : '<div class="text-gray-400 italic">Không có</div>'}
+      </div>
+      <div class="border-t border-gray-200 pt-5">
+        <div class="section-title mb-3">Phản hồi & Check-in của Quản lý (${r.comments.length})</div>
+        <div class="space-y-3">
+          ${r.comments.length ? r.comments.map(c => { const a = user(c.authorId), mgr = isMgrId(c.authorId); return `
+          <div class="flex gap-3">
+            ${avatar(a, 'w-8 h-8 text-[11px]')}
+            <div class="flex-1">
+              <div class="rounded-lg px-3.5 py-2.5 ${mgr ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50 border border-gray-200'}">
+                <div class="flex items-center gap-2 text-[12px]"><span class="font-semibold text-slate-900">${esc(a.name)}</span>${mgr ? badge('Quản lý', 'bg-slate-800 text-white border-slate-800') : ''}<span class="text-gray-400">${fmtDT(c.createdAt)}</span></div>
+                <div class="text-slate-700 mt-1 whitespace-pre-line leading-relaxed">${esc(c.text)}</div>
+              </div>
+              ${mgr ? (c.acknowledged
+                ? `<div class="mt-1.5 text-[12px] text-green-700 flex items-center gap-1">${I.check} ${esc(u.name)} đã đọc và hiểu chỉ đạo · ${fmtDT(c.ackAt)}</div>`
+                : canAck ? `<button class="btn btn-primary btn-sm mt-2" onclick="A.ack('${r.id}','${c.id}')">${I.check} Đã đọc và hiểu</button>` : `<div class="mt-1.5 text-[12px] text-amber-700">Đang chờ nhân viên xác nhận</div>`) : ''}
+            </div>
+          </div>`; }).join('') : `<div class="text-gray-400 text-[13px] italic">${isMgr() ? 'Bạn chưa phản hồi báo cáo này.' : 'Quản lý chưa phản hồi.'}</div>`}
+        </div>
+        <div class="mt-4 flex gap-3">
+          ${avatar(me(), 'w-8 h-8 text-[11px]')}
+          <div class="flex-1">
+            <textarea id="cm-${r.id}" class="input" placeholder="${isMgr() ? 'Viết nhận xét / chỉ đạo cho nhân viên...' : 'Phản hồi lại quản lý (nếu cần)...'}" style="min-height:70px"></textarea>
+            <div class="flex justify-end mt-2"><button class="btn btn-primary btn-sm" onclick="A.addComment('${r.id}')">${I.chat} Gửi ${isMgr() ? 'phản hồi' : 'trả lời'}</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function openReportForm(){
+  const cw = isoWeek(new Date());
+  const okrs = DB.okrs.filter(o => o.ownerId === me().id);
+  if(!okrs.length){ toast('Bạn chưa được gán OKR nào, không thể tạo báo cáo.', 'error'); return; }
+  openModal(`
+    ${modalHeader(`Báo cáo tuần — ${weekLabel(cw.week, cw.year)}`, 'Sau khi gửi, các giải pháp sẽ tự động trở thành công việc trong Quản lý công việc.')}
+    <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+      <div>
+        <label class="label">Mục tiêu / OKR liên quan <span class="text-red-500">*</span></label>
+        <select id="rf-okr" class="input" onchange="A.renderKrInputs()">${okrs.map(o => `<option value="${o.id}">${esc(o.title)} (${okrPct(o)}%)</option>`).join('')}</select>
+      </div>
+      <div>
+        <label class="label">Cập nhật tiến độ các Kết quả then chốt</label>
+        <div id="rf-krs" class="border border-gray-200 rounded-lg divide-y divide-gray-100"></div>
+      </div>
+      <div><label class="label">Công việc đã thực hiện trong tuần <span class="text-red-500">*</span></label><textarea id="rf-work" class="input" placeholder="- Việc 1...&#10;- Việc 2..."></textarea></div>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div><label class="label">Vấn đề / Rào cản gặp phải</label><textarea id="rf-issues" class="input" placeholder="Khó khăn, điểm nghẽn..."></textarea></div>
+        <div><label class="label">Nguyên nhân của vấn đề</label><textarea id="rf-causes" class="input" placeholder="Vì sao xảy ra vấn đề..."></textarea></div>
+      </div>
+      <div>
+        <div class="flex items-center justify-between mb-1.5"><label class="label !mb-0">Giải pháp / Hành động cho tuần tiếp theo</label><button class="btn btn-ghost btn-sm" onclick="A.addSolRow()">${I.plus} Thêm giải pháp</button></div>
+        <p class="text-[12px] text-gray-500 mb-2">Mỗi dòng sẽ trở thành một công việc riêng, có hạn hoàn thành.</p>
+        <div id="rf-sols" class="space-y-2"></div>
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
+      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-primary" onclick="A.submitReport()">${I.check} Gửi báo cáo</button>
+    </div>`, 'max-w-3xl');
+  A.renderKrInputs(); A.addSolRow();
+}
+function openTaskForm(){
+  openModal(`
+    ${modalHeader('Thêm công việc')}
+    <div class="p-6 space-y-4">
+      <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tf-title" class="input" placeholder="Nhập nội dung công việc..."></div>
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="label">Hạn hoàn thành</label><input id="tf-due" type="date" class="input" value="${toISO(addDays(new Date(), 7))}"></div>
+        <div><label class="label">Người thực hiện</label>${isMgr() ? `<select id="tf-user" class="input">${employees().map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>` : `<input class="input bg-gray-50" value="${esc(me().name)}" disabled>`}</div>
+      </div>
+      <div><label class="label">Gắn với mục tiêu</label><select id="tf-okr" class="input"><option value="">— Không —</option>${DB.okrs.filter(o => isMgr() || o.ownerId === me().id).map(o => `<option value="${o.id}">${esc(o.title)}</option>`).join('')}</select></div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
+      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-primary" onclick="A.submitTask()">${I.plus} Thêm</button>
+    </div>`, 'max-w-lg');
+  setTimeout(() => document.getElementById('tf-title').focus(), 50);
+}
+
+/* ---------- Quản lý công việc ---------- */
+function viewTasks(){
+  let ts = isMgr() ? DB.tasks : DB.tasks.filter(t => t.assigneeId === me().id);
+  if(state.taskUser !== 'all') ts = ts.filter(t => t.assigneeId === state.taskUser);
+  const counts = { all: ts.length, todo: ts.filter(t => t.status === 'todo').length, doing: ts.filter(t => t.status === 'doing').length, done: ts.filter(t => t.status === 'done').length, overdue: ts.filter(isOverdue).length };
+  if(state.taskStatus !== 'all') ts = state.taskStatus === 'overdue' ? ts.filter(isOverdue) : ts.filter(t => t.status === state.taskStatus);
+  const order = { todo:0, doing:1, done:2 };
+  ts = [...ts].sort((a,b) => (order[a.status] - order[b.status]) || (a.due || '9').localeCompare(b.due || '9'));
+  const tab = (key, label, cnt, cls='') => `<span class="chip ${state.taskStatus === key ? 'active' : ''} ${cls}" onclick="A.set('taskStatus','${key}')">${label} <span class="opacity-70">${cnt}</span></span>`;
+  const stat = (label, value, color='text-slate-900') => `<div class="card p-4"><div class="text-[12.5px] text-gray-500">${label}</div><div class="text-2xl font-semibold mt-1 ${color}">${value}</div></div>`;
+  return `
+  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-5">
+    ${stat('Tổng công việc', counts.all)}${stat('Cần làm', counts.todo)}${stat('Đang làm', counts.doing, 'text-blue-600')}${stat('Hoàn thành', counts.done, 'text-green-600')}${stat('Quá hạn', counts.overdue, counts.overdue ? 'text-red-600' : 'text-green-600')}
+  </div>
+  <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+    <div class="flex items-center gap-2 flex-wrap">
+      ${tab('all','Tất cả',counts.all)}${tab('todo','Cần làm',counts.todo)}${tab('doing','Đang làm',counts.doing)}${tab('done','Hoàn thành',counts.done)}${tab('overdue','Quá hạn',counts.overdue)}
+      ${isMgr() ? `<select class="input !w-auto ml-2" onchange="A.set('taskUser',this.value)"><option value="all">Tất cả nhân viên</option>${employees().map(u => `<option value="${u.id}" ${state.taskUser === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
+    </div>
+    <button class="btn btn-primary" onclick="A.openTaskForm()">${I.plus} Thêm công việc</button>
+  </div>
+  <div class="card overflow-hidden">
+    <table class="w-full">
+      <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide">
+        <tr><th class="w-10 py-2.5"></th><th class="text-left font-medium py-2.5 px-2">Công việc</th>${isMgr() ? '<th class="text-left font-medium py-2.5 px-2">Người làm</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Nguồn</th><th class="text-left font-medium py-2.5 px-2">Hạn</th><th class="text-left font-medium py-2.5 px-2 w-36">Trạng thái</th><th class="w-12"></th></tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        ${ts.length ? ts.map(t => { const u = user(t.assigneeId), o = DB.okrs.find(o => o.id === t.okrId), od = isOverdue(t); const can = isMgr() || t.assigneeId === me().id; return `
+        <tr class="hover:bg-gray-50 ${t.status === 'done' ? 'opacity-70' : ''}">
+          <td class="text-center py-3"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} ${can ? `onchange="A.toggleTask('${t.id}')"` : 'disabled'}></td>
+          <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>${o ? `<div class="text-[12px] text-gray-500 mt-0.5 flex items-center gap-1">${I.flag} ${esc(o.title)}</div>` : ''}</td>
+          ${isMgr() ? `<td class="py-3 px-2"><div class="flex items-center gap-2">${avatar(u, 'w-6 h-6 text-[10px]')}<span class="text-slate-700 whitespace-nowrap">${esc(u.name)}</span></div></td>` : ''}
+          <td class="py-3 px-2 text-[12.5px] text-gray-500 whitespace-nowrap">${t.reportId ? `<a class="text-base-600 hover:underline cursor-pointer" onclick="A.gotoReport('${t.reportId}')">Báo cáo ${weekLabel(t.week, t.year, true)}</a>` : 'Thêm thủ công'}</td>
+          <td class="py-3 px-2 text-[12.5px] whitespace-nowrap ${od ? 'text-red-600 font-medium' : 'text-slate-700'}">${t.due ? fmt(t.due) : '—'}${od ? ' · Quá hạn' : ''}</td>
+          <td class="py-3 px-2">${can ? `<select class="input !py-1 !px-2 text-[12.5px]" onchange="A.setTaskStatus('${t.id}',this.value)">${Object.entries(TASK_STATUS).map(([k,v]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select>` : badge(TASK_STATUS[t.status].t, TASK_STATUS[t.status].c)}</td>
+          <td class="py-3 text-center">${can ? `<button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="A.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
+        </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+/* ---------- Hành động ---------- */
+const A = {
+  nav(v){ state.view = v; render(); },
+  set(k, v){ state[k] = v; if(k === 'ckWeek' || k === 'ckUser') state.reportId = null; render(); },
+  closeModal(){ document.getElementById('modal').innerHTML = ''; },
+  fillLogin(un){ const u = DB.users.find(u => u.username === un); document.getElementById('lg-user').value = un; document.getElementById('lg-pass').value = u.password || ''; document.getElementById('lg-pass').focus(); },
+  async login(){
+    const un = document.getElementById('lg-user').value.trim(), pw = document.getElementById('lg-pass').value;
+    const err = document.getElementById('lg-err'), btn = document.getElementById('lg-btn');
+    const fail = m => { err.textContent = m; err.classList.remove('hidden'); };
+    let u;
+    if(online()){
+      btn.disabled = true; btn.textContent = 'Đang đăng nhập...';
+      try { const j = await api('login', { username:un, password:pw }); u = j.user; }
+      catch(e){ btn.disabled = false; btn.textContent = 'Đăng nhập'; return fail(e.message); }
+    } else {
+      u = DB.users.find(u => u.username === un && u.password === pw);
+      if(!u) return fail('Sai tên đăng nhập hoặc mật khẩu.');
+    }
+    localStorage.setItem(SESSION_KEY, u.id); state = { ...state, view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all' };
+    render(); toast(`Xin chào, ${u.name}!`, 'info');
+  },
+  logout(){ localStorage.removeItem(SESSION_KEY); render(); },
+  refresh(){ refreshFromServer(false); },
+  openSettings(){
+    openModal(`
+      ${modalHeader('Cài đặt đồng bộ Google Sheet', 'Nhiều người dùng chung một bộ dữ liệu qua Google Sheet + Apps Script.')}
+      <div class="p-6 space-y-4">
+        <div>
+          <label class="label">URL Ứng dụng web (Apps Script)</label>
+          <input id="st-url" class="input" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(apiUrl())}">
+          <p class="text-[12px] text-gray-500 mt-1.5">Để trống và bấm Lưu để dùng chế độ cục bộ (dữ liệu mẫu, chỉ lưu trên trình duyệt này).${DEFAULT_API && apiUrl() !== DEFAULT_API ? ` <a class="text-base-600 hover:underline cursor-pointer" onclick="document.getElementById('st-url').value='${esc(DEFAULT_API)}'">Dùng lại URL mặc định của team</a>` : ''}</p>
+        </div>
+        <div id="st-status" class="text-[13px] hidden"></div>
+        <details class="text-[12.5px] text-gray-600">
+          <summary class="cursor-pointer font-medium text-slate-700">Hướng dẫn thiết lập (5 phút)</summary>
+          <ol class="list-decimal ml-5 mt-2 space-y-1">
+            <li>Mở Google Sheet <b>OKR Weekly - Data</b> → <b>Tiện ích mở rộng → Apps Script</b>.</li>
+            <li>Xoá nội dung mặc định, dán toàn bộ file <code>Code.gs</code> đi kèm, bấm Lưu.</li>
+            <li><b>Triển khai → Tạo tuỳ chọn triển khai mới</b> → loại <b>Ứng dụng web</b>.</li>
+            <li>Thực thi với tư cách: <b>Tôi</b>; Ai có quyền truy cập: <b>Bất kỳ ai</b> → Triển khai, cấp quyền.</li>
+            <li>Sao chép URL ứng dụng web (kết thúc bằng <code>/exec</code>) dán vào ô trên → <b>Kiểm tra kết nối</b> → <b>Lưu</b>.</li>
+          </ol>
+        </details>
+      </div>
+      <div class="px-6 py-4 border-t border-gray-200 flex justify-between gap-2">
+        <button class="btn btn-ghost" onclick="A.testConnection()">Kiểm tra kết nối</button>
+        <div class="flex gap-2"><button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button><button class="btn btn-primary" onclick="A.saveSettings()">${I.check} Lưu</button></div>
+      </div>`, 'max-w-xl');
+  },
+  async testConnection(){
+    const url = document.getElementById('st-url').value.trim(), st = document.getElementById('st-status');
+    st.className = 'text-[13px] text-gray-500'; st.textContent = 'Đang kiểm tra...';
+    if(!url){ st.className = 'text-[13px] text-red-600'; st.textContent = 'Chưa nhập URL.'; return; }
+    try { const j = await apiFetch(url + (url.includes('?') ? '&' : '?') + 'ping=1&t=' + Date.now()); st.className = 'text-[13px] text-green-700'; st.textContent = '✓ Kết nối thành công' + (j.time ? ' (giờ máy chủ: ' + fmtDT(j.time) + ')' : '') + '.'; }
+    catch(e){ st.className = 'text-[13px] text-red-600'; st.textContent = '✕ ' + e.message; }
+  },
+  async saveSettings(){
+    const url = document.getElementById('st-url').value.trim();
+    if(url && !/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(url) && !/^https?:\/\//.test(url)){ toast('URL không hợp lệ.', 'error'); return; }
+    localStorage.setItem(API_KEY, url); // chuỗi rỗng = tắt đồng bộ, dùng dữ liệu cục bộ
+    sync.error = null; A.closeModal();
+    if(url){ try { await apiLoad(); toast('Đã bật đồng bộ Google Sheet.'); } catch(e){ toast('Lưu URL nhưng chưa kết nối được: ' + e.message, 'error'); } }
+    else { DB = seedData(); save(); toast('Đã chuyển về chế độ dữ liệu cục bộ (dữ liệu mẫu).', 'info'); }
+    localStorage.removeItem(SESSION_KEY); render();
+  },
+  resetData(){ if(!confirm('Đặt lại toàn bộ dữ liệu về dữ liệu mẫu? Mọi thay đổi của bạn sẽ bị xoá.')) return; DB = seedData(); save(); state.reportId = null; render(); toast('Đã đặt lại dữ liệu mẫu.', 'info'); },
+  selectReport(id){ state.reportId = id; render(); },
+  gotoReport(id){ const r = DB.reports.find(r => r.id === id); if(!r) return; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = id; render(); },
+  openReportForm, openTaskForm,
+  renderKrInputs(){
+    const o = DB.okrs.find(o => o.id === document.getElementById('rf-okr').value);
+    document.getElementById('rf-krs').innerHTML = o.krs.map(k => `
+      <div class="flex items-center gap-3 px-3 py-2.5">
+        <div class="flex-1 min-w-0"><div class="text-slate-800 font-medium truncate">${esc(k.title)}</div><div class="text-[12px] text-gray-500">Hiện tại: ${num(k.current)} / Mục tiêu: ${num(k.target)} ${esc(k.unit)}</div></div>
+        <input type="number" min="0" step="any" class="input !w-32 kr-input text-right" data-kr="${k.id}" value="${k.current}">
+        <span class="text-gray-500 text-[12.5px] w-16">${esc(k.unit)}</span>
+      </div>`).join('');
+  },
+  addSolRow(){
+    document.getElementById('rf-sols').insertAdjacentHTML('beforeend', `
+      <div class="sol-row flex items-center gap-2 fade-in">
+        <input class="input sol-text flex-1" placeholder="Hành động cụ thể cho tuần tới...">
+        <input type="date" class="input sol-due !w-40" value="${toISO(addDays(weekStart(isoWeek(new Date()).week, isoWeek(new Date()).year), 11))}">
+        <button class="text-gray-400 hover:text-red-600 p-1.5" onclick="this.closest('.sol-row').remove()">${I.x}</button>
+      </div>`);
+    const rows = document.querySelectorAll('.sol-text'); if(rows.length) rows[rows.length-1].focus();
+  },
+  submitReport(){
+    const cw = isoWeek(new Date());
+    const okrId = document.getElementById('rf-okr').value, work = document.getElementById('rf-work').value.trim();
+    if(!work){ toast('Vui lòng nhập công việc đã thực hiện.', 'error'); return; }
+    if(DB.reports.some(r => r.userId === me().id && r.okrId === okrId && r.week === cw.week && r.year === cw.year)){ toast('Bạn đã gửi báo cáo tuần này cho OKR này rồi.', 'error'); return; }
+    const o = DB.okrs.find(o => o.id === okrId);
+    const krUpdates = [...document.querySelectorAll('.kr-input')].map(i => ({ krId:i.dataset.kr, value:Number(i.value) || 0 }));
+    const solutions = [...document.querySelectorAll('.sol-row')].map(row => ({ id:uid(), text:row.querySelector('.sol-text').value.trim(), due:row.querySelector('.sol-due').value })).filter(s => s.text);
+    const now = new Date().toISOString();
+    const r = { id:uid(), userId:me().id, week:cw.week, year:cw.year, okrId, createdAt:now, krUpdates, work, issues:document.getElementById('rf-issues').value.trim(), causes:document.getElementById('rf-causes').value.trim(), solutions, comments:[] };
+    const tasks = solutions.map(s => ({ id:uid(), title:s.text, assigneeId:me().id, reportId:r.id, solutionId:s.id, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now }));
+    A.closeModal(); state.view = 'checkin'; state.ckWeek = 'all'; state.reportId = r.id;
+    mutate('addReport', { report:r, tasks }, () => {
+      krUpdates.forEach(ku => { const k = o.krs.find(k => k.id === ku.krId); if(k) k.current = ku.value; });
+      DB.reports.push(r); tasks.forEach(t => DB.tasks.push(t));
+    }, `Đã gửi báo cáo${solutions.length ? ` và tạo ${solutions.length} công việc mới` : ''}.`);
+  },
+  deleteReport(id){
+    if(!confirm('Xoá báo cáo này? Các công việc được tạo từ báo cáo cũng sẽ bị xoá.')) return;
+    state.reportId = null;
+    mutate('deleteReport', { id }, () => { DB.reports = DB.reports.filter(r => r.id !== id); DB.tasks = DB.tasks.filter(t => t.reportId !== id); }, 'Đã xoá báo cáo.');
+  },
+  addComment(rid){
+    const ta = document.getElementById('cm-' + rid), text = ta.value.trim();
+    if(!text){ toast('Vui lòng nhập nội dung phản hồi.', 'error'); return; }
+    const c = { id:uid(), reportId:rid, authorId:me().id, text, createdAt:new Date().toISOString(), acknowledged:false };
+    mutate('addComment', { comment:c }, () => { DB.reports.find(r => r.id === rid).comments.push(c); }, isMgr() ? 'Đã gửi phản hồi cho nhân viên.' : 'Đã gửi trả lời.');
+  },
+  ack(rid, cid){
+    const ackAt = new Date().toISOString();
+    mutate('ackComment', { id:cid, ackAt }, () => { const c = DB.reports.find(r => r.id === rid).comments.find(c => c.id === cid); c.acknowledged = true; c.ackAt = ackAt; }, 'Đã xác nhận: Đã đọc và hiểu chỉ đạo.');
+  },
+  toggleTask(id){ const t = DB.tasks.find(t => t.id === id); const s = t.status === 'done' ? 'todo' : 'done'; mutate('updateTask', { id, patch:{ status:s } }, () => { t.status = s; }); },
+  setTaskStatus(id, s){ const t = DB.tasks.find(t => t.id === id); mutate('updateTask', { id, patch:{ status:s } }, () => { t.status = s; }); },
+  deleteTask(id){ if(!confirm('Xoá công việc này?')) return; mutate('deleteTask', { id }, () => { DB.tasks = DB.tasks.filter(t => t.id !== id); }, 'Đã xoá công việc.'); },
+  submitTask(){
+    const title = document.getElementById('tf-title').value.trim();
+    if(!title){ toast('Vui lòng nhập tên công việc.', 'error'); return; }
+    const cw = isoWeek(new Date());
+    const assigneeId = isMgr() ? document.getElementById('tf-user').value : me().id;
+    const t = { id:uid(), title, assigneeId, reportId:null, solutionId:null, okrId:document.getElementById('tf-okr').value || null, week:cw.week, year:cw.year, due:document.getElementById('tf-due').value, status:'todo', createdAt:new Date().toISOString() };
+    A.closeModal();
+    mutate('addTask', { task:t }, () => { DB.tasks.push(t); }, 'Đã thêm công việc.');
+  },
+};
+
+/* ---------- Khởi động ---------- */
+// Gắn solutionId cho task mẫu (để liên kết checkbox trong chi tiết báo cáo)
+function linkSeedTasks(){ let changed = false; DB.tasks.forEach(t => { if(t.reportId && !t.solutionId){ const r = DB.reports.find(r => r.id === t.reportId); const s = r && r.solutions.find(s => s.text === t.title); if(s){ t.solutionId = s.id; changed = true; } } }); if(changed) save(); }
+document.addEventListener('keydown', e => { if(e.key === 'Escape') A.closeModal(); });
+async function init(){
+  load(); linkSeedTasks();
+  if(online()){
+    document.getElementById('app').innerHTML = `<div class="min-h-screen flex items-center justify-center text-gray-500 text-sm"><div class="flex items-center gap-3"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>Đang tải dữ liệu từ Google Sheet...</div></div>`;
+    try { await apiLoad(); } catch(e){ toast('Không tải được từ Google Sheet, đang dùng dữ liệu đã lưu trên máy. ' + e.message, 'error'); }
+  }
+  render();
+}
+init();
+</script>
+</body>
+</html>
