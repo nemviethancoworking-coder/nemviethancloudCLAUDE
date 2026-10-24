@@ -1,6 +1,8 @@
 /**
  * OKR Weekly — Backend Google Apps Script
- * Gắn với Google Sheet "OKR Weekly - Data" (7 tab: Cycle, Users, OKRs, KRs, Reports, Comments, Tasks)
+ * Gắn với Google Sheet "OKR Weekly - Data" (7 tab: Cycles, Users, OKRs, KRs, Reports, Comments, Tasks)
+ * Phiên bản 2: thêm chu kỳ (Cycles), trạng thái duyệt OKR, giá trị đầu kỳ (baseline) của KR.
+ * Sau khi dán code mới: Triển khai → Quản lý tuỳ chọn triển khai → ✏️ → Phiên bản: Mới → Triển khai.
  *
  * Triển khai: Tiện ích mở rộng > Apps Script > dán file này > Triển khai > Ứng dụng web
  *   - Thực thi với tư cách: Tôi (chủ sở hữu Sheet)
@@ -9,16 +11,17 @@
  */
 
 var TABS = {
-  Cycle:    ['name', 'start', 'end'],
+  Cycles:   ['id', 'name', 'start', 'end', 'active'],
   Users:    ['id', 'username', 'password', 'name', 'role', 'dept', 'title', 'color'],
-  OKRs:     ['id', 'ownerId', 'title'],
-  KRs:      ['id', 'okrId', 'title', 'current', 'target', 'unit'],
+  OKRs:     ['id', 'ownerId', 'title', 'cycleId', 'status', 'createdBy', 'reviewNote', 'updatedAt'],
+  KRs:      ['id', 'okrId', 'title', 'current', 'target', 'unit', 'baseline'],
   Reports:  ['id', 'userId', 'week', 'year', 'okrId', 'createdAt', 'work', 'issues', 'causes', 'krUpdates', 'solutions'],
   Comments: ['id', 'reportId', 'authorId', 'text', 'createdAt', 'acknowledged', 'ackAt'],
   Tasks:    ['id', 'title', 'assigneeId', 'reportId', 'solutionId', 'okrId', 'week', 'year', 'due', 'status', 'createdAt']
 };
-var NUMERIC = { week: 1, year: 1, current: 1, target: 1 };
+var NUMERIC = { week: 1, year: 1, current: 1, target: 1, baseline: 1 };
 var DATE_ONLY = { due: 1, start: 1, end: 1 };
+var BOOL = { acknowledged: 1, active: 1 };
 
 /* ---------------- HTTP ---------------- */
 function doGet(e) {
@@ -44,6 +47,12 @@ function doPost(e) {
       case 'addTask':     addTask(p); break;
       case 'updateTask':  updateTask(p); break;
       case 'deleteTask':  deleteTask(p); break;
+      case 'saveOKR':     saveOKR(p); break;
+      case 'reviewOKR':   reviewOKR(p); break;
+      case 'deleteOKR':   deleteOKR(p); break;
+      case 'saveCycle':   saveCycle(p); break;
+      case 'setActiveCycle': setActiveCycle(p); break;
+      case 'deleteCycle': deleteCycle(p); break;
       case 'ping':        return json({ ok: true, ping: 'pong' });
       default: throw new Error('Hành động không hợp lệ: ' + action);
     }
@@ -69,7 +78,7 @@ function sheet(name) {
 function cell(v, col) {
   if (v instanceof Date) return DATE_ONLY[col] ? Utilities.formatDate(v, 'GMT+7', 'yyyy-MM-dd') : v.toISOString();
   if (NUMERIC[col]) return v === '' ? 0 : Number(v);
-  if (col === 'acknowledged') return v === true || String(v).toUpperCase() === 'TRUE';
+  if (BOOL[col]) return v === true || String(v).toUpperCase() === 'TRUE';
   if (v === '') return '';
   return typeof v === 'string' ? v : String(v);
 }
@@ -88,12 +97,15 @@ function readTab(name) {
 function parseJSON(s, fallback) { try { return s ? JSON.parse(s) : fallback; } catch (_) { return fallback; } }
 
 function loadDB() {
-  var cycleRows = readTab('Cycle');
-  var cycle = cycleRows[0] || { name: 'Chu kỳ', start: '', end: '' };
+  var cycles = readTab('Cycles');
+  if (!cycles.length) { appendObj('Cycles', { id: 'c1', name: 'Chu kỳ', start: Utilities.formatDate(new Date(), 'GMT+7', 'yyyy-MM-dd'), end: Utilities.formatDate(new Date(Date.now() + 90 * 864e5), 'GMT+7', 'yyyy-MM-dd'), active: true }); cycles = readTab('Cycles'); }
+  if (!cycles.some(function (c) { return c.active; })) cycles[0].active = true;
+  var activeId = cycles.filter(function (c) { return c.active; })[0].id;
   var users = readTab('Users').map(function (u) { delete u.password; return u; });
   var krs = readTab('KRs');
   var okrs = readTab('OKRs').map(function (o) {
-    o.krs = krs.filter(function (k) { return k.okrId === o.id; }).map(function (k) { return { id: k.id, title: k.title, current: k.current, target: k.target, unit: k.unit }; });
+    o.cycleId = o.cycleId || activeId; o.status = o.status || 'approved'; o.createdBy = o.createdBy || o.ownerId;
+    o.krs = krs.filter(function (k) { return k.okrId === o.id; }).map(function (k) { return { id: k.id, title: k.title, baseline: k.baseline, current: k.current, target: k.target, unit: k.unit }; });
     return o;
   });
   var comments = readTab('Comments');
@@ -109,7 +121,7 @@ function loadDB() {
     t.reportId = t.reportId || null; t.solutionId = t.solutionId || null; t.okrId = t.okrId || null;
     return t;
   });
-  return { cycle: cycle, users: users, okrs: okrs, reports: reports, tasks: tasks, loadedAt: new Date().toISOString() };
+  return { cycles: cycles, users: users, okrs: okrs, reports: reports, tasks: tasks, loadedAt: new Date().toISOString() };
 }
 
 /* ---------------- Ghi dữ liệu ---------------- */
@@ -184,3 +196,50 @@ function ackComment(p) { updateById('Comments', p.id, { acknowledged: true, ackA
 function addTask(p) { appendObj('Tasks', p.task); }
 function updateTask(p) { updateById('Tasks', p.id, p.patch || {}); }
 function deleteTask(p) { deleteWhere('Tasks', function (t) { return t.id === p.id; }); }
+
+/* OKR: tạo mới hoặc cập nhật Objective + đồng bộ danh sách KR */
+function saveOKR(p) {
+  var o = p.okr;
+  if (!o || !o.id || !o.title || !o.ownerId || !o.cycleId) throw new Error('Thiếu dữ liệu OKR.');
+  if (!o.krs || !o.krs.length) throw new Error('OKR cần ít nhất 1 KR.');
+  var row = { id: o.id, ownerId: o.ownerId, title: o.title, cycleId: o.cycleId, status: o.status || 'pending', createdBy: o.createdBy || o.ownerId, reviewNote: o.reviewNote || '', updatedAt: o.updatedAt || new Date().toISOString() };
+  if (findRow('OKRs', o.id) > 0) updateById('OKRs', o.id, row); else appendObj('OKRs', row);
+  var existing = readTab('KRs').filter(function (k) { return k.okrId === o.id; });
+  var keep = {};
+  o.krs.forEach(function (k) {
+    keep[k.id] = true;
+    var old = existing.filter(function (x) { return x.id === k.id; })[0];
+    var rec = { id: k.id, okrId: o.id, title: k.title, baseline: Number(k.baseline) || 0, target: Number(k.target) || 0, unit: k.unit || '',
+                current: old ? old.current : (k.current !== undefined ? Number(k.current) || 0 : Number(k.baseline) || 0) };
+    if (old) updateById('KRs', k.id, rec); else appendObj('KRs', rec);
+  });
+  deleteWhere('KRs', function (k) { return k.okrId === o.id && !keep[k.id]; });
+}
+function reviewOKR(p) {
+  if (!p.id || !p.status) throw new Error('Thiếu dữ liệu duyệt.');
+  updateById('OKRs', p.id, { status: p.status, reviewNote: p.reviewNote || '', updatedAt: p.updatedAt || new Date().toISOString() });
+}
+function deleteOKR(p) {
+  if (readTab('Reports').some(function (r) { return r.okrId === p.id; })) throw new Error('Đã có báo cáo tuần gắn với OKR này, không thể xoá.');
+  deleteWhere('KRs', function (k) { return k.okrId === p.id; });
+  deleteWhere('OKRs', function (o) { return o.id === p.id; });
+  readTab('Tasks').forEach(function (t) { if (t.okrId === p.id) updateById('Tasks', t.id, { okrId: '' }); });
+}
+/* Chu kỳ */
+function saveCycle(p) {
+  var c = p.cycle;
+  if (!c || !c.id || !c.name || !c.start || !c.end) throw new Error('Thiếu dữ liệu chu kỳ.');
+  var rec = { id: c.id, name: c.name, start: c.start, end: c.end, active: !!c.active };
+  if (findRow('Cycles', c.id) > 0) updateById('Cycles', c.id, rec); else appendObj('Cycles', rec);
+  if (c.active) setActiveCycle({ id: c.id });
+  else if (!readTab('Cycles').some(function (x) { return x.active; })) updateById('Cycles', c.id, { active: true });
+}
+function setActiveCycle(p) {
+  readTab('Cycles').forEach(function (c) { updateById('Cycles', c.id, { active: c.id === p.id }); });
+}
+function deleteCycle(p) {
+  if (readTab('OKRs').some(function (o) { return o.cycleId === p.id; })) throw new Error('Chu kỳ đang có OKR, không thể xoá.');
+  var c = readTab('Cycles').filter(function (x) { return x.id === p.id; })[0];
+  if (c && c.active) throw new Error('Không thể xoá chu kỳ đang hoạt động.');
+  deleteWhere('Cycles', function (x) { return x.id === p.id; });
+}
