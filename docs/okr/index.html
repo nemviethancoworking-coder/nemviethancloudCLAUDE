@@ -61,7 +61,7 @@ const STORE_KEY = 'okr_weekly_v1';
 const SESSION_KEY = 'okr_weekly_session';
 const API_KEY = 'okr_weekly_api';
 let DB = null;
-let state = { view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all' };
+let state = { view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all', cycleId:null, okrStatus:'all', okrUser:'all' };
 let sync = { busy:false, error:null, lastAt:null };
 
 /* ---------- Tiện ích ---------- */
@@ -94,8 +94,9 @@ function seedData(){
   const at = (n, dayOff, h) => { const d = addDays(weekStart(wk(n).week, wk(n).year), dayOff); d.setHours(h,0,0,0); return d.toISOString(); };
   const dueIn = (n, dayOff) => toISO(addDays(weekStart(wk(n).week, wk(n).year), dayOff));
   const q = Math.floor(now.getMonth()/3);
-  const cycle = { name:`Q${q+1}/${now.getFullYear()}`, start: toISO(new Date(now.getFullYear(), q*3, 1)), end: toISO(new Date(now.getFullYear(), q*3+3, 0)) };
+  const cycles = [{ id:'c1', name:`Q${q+1}/${now.getFullYear()}`, start: toISO(new Date(now.getFullYear(), q*3, 1)), end: toISO(new Date(now.getFullYear(), q*3+3, 0)), active:true }];
   const w0 = wk(0), w1 = wk(1), w2 = wk(2);
+  const okrMeta = { cycleId:'c1', status:'approved', createdBy:'u1', reviewNote:'', updatedAt: at(3,0,9) };
 
   const users = [
     { id:'u1', username:'admin',    password:'123456', name:'Nguyễn Minh Quân', role:'manager',  dept:'Ban Giám đốc', title:'Giám đốc điều hành', color:'#1f2937' },
@@ -105,25 +106,28 @@ function seedData(){
     { id:'u5', username:'ducanh',   password:'123456', name:'Vũ Đức Anh',       role:'employee', dept:'Vận hành',     title:'Trưởng kho', color:'#7c3aed' },
   ];
   const okrs = [
-    { id:'o1', ownerId:'u2', title:'Tăng trưởng lead chất lượng từ kênh Digital', krs:[
-      { id:'k1', title:'Số lead từ Facebook Ads', current:860, target:1500, unit:'lead' },
-      { id:'k2', title:'Bài viết đăng đều trên fanpage', current:38, target:60, unit:'bài' },
-      { id:'k3', title:'Tỉ lệ lead chất lượng', current:42, target:60, unit:'%' } ]},
-    { id:'o2', ownerId:'u2', title:'Xây dựng kênh TikTok đạt 10.000 follower', krs:[
-      { id:'k4', title:'Lượng follower', current:4200, target:10000, unit:'follower' },
-      { id:'k5', title:'Video đã đăng', current:25, target:45, unit:'video' } ]},
-    { id:'o3', ownerId:'u3', title:'Đạt doanh thu 6 tỷ trong quý', krs:[
-      { id:'k6', title:'Doanh thu đã ghi nhận', current:2400, target:6000, unit:'triệu' },
-      { id:'k7', title:'Đơn hàng mới', current:310, target:800, unit:'đơn' },
-      { id:'k8', title:'Tỉ lệ chốt đơn', current:22, target:30, unit:'%' } ]},
-    { id:'o4', ownerId:'u4', title:'Nâng cao mức độ hài lòng của khách hàng', krs:[
-      { id:'k9', title:'Điểm CSAT', current:86, target:92, unit:'%' },
-      { id:'k10', title:'Khách hàng quay lại mua', current:120, target:300, unit:'khách' },
-      { id:'k11', title:'Phản hồi tin nhắn trong 5 phút', current:78, target:95, unit:'%' } ]},
-    { id:'o5', ownerId:'u5', title:'Tối ưu vận hành kho & giao hàng', krs:[
-      { id:'k12', title:'Đơn giao đúng hẹn', current:91, target:98, unit:'%' },
-      { id:'k13', title:'Kiểm kê kho định kỳ', current:3, target:6, unit:'lần' },
-      { id:'k14', title:'Đối tác vận chuyển mới', current:1, target:2, unit:'đối tác' } ]},
+    { id:'o1', ownerId:'u2', title:'Tăng trưởng lead chất lượng từ kênh Digital', ...okrMeta, krs:[
+      { id:'k1', title:'Số lead từ Facebook Ads', baseline:0, current:860, target:1500, unit:'lead' },
+      { id:'k2', title:'Bài viết đăng đều trên fanpage', baseline:0, current:38, target:60, unit:'bài' },
+      { id:'k3', title:'Tỉ lệ lead chất lượng', baseline:30, current:42, target:60, unit:'%' } ]},
+    { id:'o2', ownerId:'u2', title:'Xây dựng kênh TikTok đạt 10.000 follower', ...okrMeta, krs:[
+      { id:'k4', title:'Lượng follower', baseline:2500, current:4200, target:10000, unit:'follower' },
+      { id:'k5', title:'Video đã đăng', baseline:0, current:25, target:45, unit:'video' } ]},
+    { id:'o3', ownerId:'u3', title:'Đạt doanh thu 6 tỷ trong quý', ...okrMeta, krs:[
+      { id:'k6', title:'Doanh thu đã ghi nhận', baseline:0, current:2400, target:6000, unit:'triệu' },
+      { id:'k7', title:'Đơn hàng mới', baseline:0, current:310, target:800, unit:'đơn' },
+      { id:'k8', title:'Tỉ lệ chốt đơn', baseline:18, current:22, target:30, unit:'%' } ]},
+    { id:'o4', ownerId:'u4', title:'Nâng cao mức độ hài lòng của khách hàng', ...okrMeta, krs:[
+      { id:'k9', title:'Điểm CSAT', baseline:80, current:86, target:92, unit:'%' },
+      { id:'k10', title:'Khách hàng quay lại mua', baseline:0, current:120, target:300, unit:'khách' },
+      { id:'k11', title:'Phản hồi tin nhắn trong 5 phút', baseline:70, current:78, target:95, unit:'%' } ]},
+    { id:'o5', ownerId:'u5', title:'Tối ưu vận hành kho & giao hàng', ...okrMeta, krs:[
+      { id:'k12', title:'Đơn giao đúng hẹn', baseline:85, current:91, target:98, unit:'%' },
+      { id:'k13', title:'Kiểm kê kho định kỳ', baseline:0, current:3, target:6, unit:'lần' },
+      { id:'k14', title:'Đối tác vận chuyển mới', baseline:0, current:1, target:2, unit:'đối tác' } ]},
+    { id:'o6', ownerId:'u4', title:'Xây dựng kho kịch bản chăm sóc khách hàng', ...okrMeta, status:'pending', createdBy:'u4', updatedAt: at(0,2,10), krs:[
+      { id:'k15', title:'Kịch bản theo tình huống đã chuẩn hoá', baseline:0, current:0, target:20, unit:'kịch bản' },
+      { id:'k16', title:'Nhân viên được đào tạo kịch bản', baseline:0, current:0, target:100, unit:'%' } ]},
   ];
   const reports = [
     { id:'r1', userId:'u2', week:w2.week, year:w2.year, okrId:'o1', createdAt:at(2,4,16),
@@ -198,11 +202,20 @@ function seedData(){
     { id:'t13', title:'Lấy báo giá 2 đối tác vận chuyển mới cho tuyến miền Trung', assigneeId:'u5', reportId:'r7', okrId:'o5', week:w1.week, year:w1.year, due:dueIn(0,3), status:'todo', createdAt:at(1,4,15) },
     { id:'t14', title:'Chuẩn bị số liệu kiểm kê kho lần 4', assigneeId:'u5', reportId:null, okrId:'o5', week:w0.week, year:w0.year, due:dueIn(-1,4), status:'todo', createdAt:at(0,0,9) },
   ];
-  return { cycle, users, okrs, reports, tasks };
+  return { cycles, users, okrs, reports, tasks };
+}
+/* Chuẩn hoá dữ liệu cũ (phiên bản 1 chỉ có 1 chu kỳ, KR không có baseline, OKR không có trạng thái) */
+function normalize(db){
+  if(!db || !Array.isArray(db.okrs)) return null;
+  if(!db.cycles){ const c = db.cycle || { name:'Chu kỳ', start: toISO(new Date()), end: toISO(addDays(new Date(), 90)) }; db.cycles = [{ id:'c1', name:c.name, start:c.start, end:c.end, active:true }]; delete db.cycle; }
+  if(!db.cycles.some(c => c.active) && db.cycles.length) db.cycles[0].active = true;
+  const cid = (db.cycles.find(c => c.active) || db.cycles[0] || {}).id;
+  db.okrs.forEach(o => { o.cycleId = o.cycleId || cid; o.status = o.status || 'approved'; o.createdBy = o.createdBy || o.ownerId; o.reviewNote = o.reviewNote || ''; o.updatedAt = o.updatedAt || ''; (o.krs || []).forEach(k => { k.baseline = Number(k.baseline) || 0; k.current = Number(k.current) || 0; k.target = Number(k.target) || 0; }); });
+  return db;
 }
 
 /* ---------- Lưu trữ ---------- */
-function load(){ try { const raw = localStorage.getItem(STORE_KEY); DB = raw ? JSON.parse(raw) : null; } catch(e){ DB = null; } if(!DB){ DB = seedData(); save(); } }
+function load(){ try { const raw = localStorage.getItem(STORE_KEY); DB = normalize(raw ? JSON.parse(raw) : null); } catch(e){ DB = null; } if(!DB){ DB = seedData(); } save(); }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
 
 /* ---------- Đồng bộ Google Sheet (Apps Script Web App) ---------- */
@@ -222,14 +235,14 @@ async function apiFetch(url, opts){
 async function apiLoad(){
   if(!online()) return;
   setBusy(true);
-  try { const j = await apiFetch(apiUrl() + (apiUrl().includes('?') ? '&' : '?') + 't=' + Date.now()); DB = j.db; save(); sync.error = null; sync.lastAt = new Date(); }
+  try { const j = await apiFetch(apiUrl() + (apiUrl().includes('?') ? '&' : '?') + 't=' + Date.now()); DB = normalize(j.db); save(); sync.error = null; sync.lastAt = new Date(); }
   catch(e){ sync.error = e.message; throw e; }
   finally { setBusy(false); }
 }
 async function api(action, payload){
   // POST không đặt Content-Type để tránh preflight CORS; Apps Script vẫn đọc được body.
   const j = await apiFetch(apiUrl(), { method:'POST', body: JSON.stringify({ action, payload }) });
-  if(j.db){ DB = j.db; save(); sync.error = null; sync.lastAt = new Date(); }
+  if(j.db){ DB = normalize(j.db); save(); sync.error = null; sync.lastAt = new Date(); }
   return j;
 }
 /* Áp dụng thay đổi ngay tại máy (localFn), rồi đẩy lên Sheet nếu đang bật đồng bộ. */
@@ -262,15 +275,30 @@ const isMgrId = id => user(id).role === 'manager';
 const employees = () => DB.users.filter(u => u.role === 'employee');
 
 /* ---------- Tính toán OKR ---------- */
-const krPct = k => k.target > 0 ? Math.min(100, Math.round(k.current / k.target * 100)) : 0;
+/* Tiến độ KR tính từ giá trị đầu kỳ (baseline) → mục tiêu; hỗ trợ cả KR giảm (mục tiêu < đầu kỳ) */
+function krPctOf(k, current){
+  const b = Number(k.baseline) || 0, t = Number(k.target) || 0, c = Number(current) || 0;
+  if(t === b) return c === t ? 100 : (t > 0 && c >= t) || (t <= 0 && c <= t) ? 100 : 0;
+  return Math.max(0, Math.min(100, Math.round((c - b) / (t - b) * 100)));
+}
+const krPct = k => krPctOf(k, k.current);
 const okrPct = o => o.krs.length ? Math.round(o.krs.reduce((a,k) => a + krPct(k), 0) / o.krs.length) : 0;
-function cycleInfo(){
-  const s = fromISO(DB.cycle.start), e = addDays(fromISO(DB.cycle.end), 1), n = new Date();
-  const total = (e - s) / 864e5; const el = Math.min(Math.max((n - s) / 864e5, 0), total);
+const OKR_STATUS = { pending:{ t:'Chờ duyệt', c:'bg-amber-50 text-amber-700 border-amber-200' }, approved:{ t:'Đã duyệt', c:'bg-green-50 text-green-700 border-green-200' }, rejected:{ t:'Từ chối', c:'bg-red-50 text-red-700 border-red-200' } };
+const UNITS = ['%','VNĐ','triệu','tỷ','đơn','lead','khách','bài','video','follower','lần','ngày','giờ','người','sản phẩm','điểm'];
+const activeCycle = () => DB.cycles.find(c => c.active) || DB.cycles[0];
+const curCycle = () => DB.cycles.find(c => c.id === state.cycleId) || activeCycle();
+const cycleOf = id => DB.cycles.find(c => c.id === id);
+const okrsOfCycle = (cid, status) => DB.okrs.filter(o => o.cycleId === cid && (!status || o.status === status));
+const approvedOkrs = () => okrsOfCycle(curCycle().id, 'approved');
+function cycleInfo(c){
+  c = c || curCycle();
+  if(!c) return { expected:0, daysLeft:0, status:'—' };
+  const s = fromISO(c.start), e = addDays(fromISO(c.end), 1), n = new Date();
+  const total = Math.max((e - s) / 864e5, 1); const el = Math.min(Math.max((n - s) / 864e5, 0), total);
   return { expected: Math.round(el / total * 100), daysLeft: Math.max(0, Math.ceil((e - n) / 864e5)), status: n < s ? 'Sắp bắt đầu' : n >= e ? 'Đã kết thúc' : 'Đang diễn ra' };
 }
-function okrStatus(pct){
-  const ex = cycleInfo().expected;
+function okrStatus(pct, c){
+  const ex = cycleInfo(c).expected;
   if(pct >= 100) return { t:'Hoàn thành', c:'bg-emerald-50 text-emerald-700 border-emerald-200', bar:'bg-emerald-500' };
   if(pct >= ex - 10) return { t:'Đúng tiến độ', c:'bg-green-50 text-green-700 border-green-200', bar:'bg-green-500' };
   if(pct >= ex - 25) return { t:'Cần chú ý', c:'bg-amber-50 text-amber-700 border-amber-200', bar:'bg-amber-500' };
@@ -289,6 +317,10 @@ function pendingCount(){
   if(isMgr()) return DB.reports.filter(r => reportStatus(r).key === 'pending').length;
   return DB.reports.filter(r => r.userId === me().id).reduce((a,r) => a + r.comments.filter(c => isMgrId(c.authorId) && !c.acknowledged).length, 0);
 }
+function okrPendingCount(){
+  if(isMgr()) return DB.okrs.filter(o => o.status === 'pending').length;
+  return DB.okrs.filter(o => o.ownerId === me().id && o.status === 'rejected').length;
+}
 const progressBar = (pct, bar='bg-base-500', h='h-2') => `<div class="w-full ${h} bg-gray-100 rounded-full overflow-hidden"><div class="${h} ${bar} rounded-full transition-all" style="width:${pct}%"></div></div>`;
 
 /* ---------- Icons ---------- */
@@ -304,6 +336,7 @@ const I = {
   refresh:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
   chat:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   flag:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>',
+  edit:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>',
   gear:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 
@@ -332,9 +365,11 @@ const modalHeader = (title, sub='') => `
 function render(){
   const app = document.getElementById('app');
   if(!session() || !me()){ app.innerHTML = viewLogin(); return; }
-  const views = { dashboard: viewDashboard, checkin: viewCheckin, tasks: viewTasks };
-  const titles = { dashboard:'Tổng quan OKRs', checkin:'Báo cáo tuần', tasks:'Quản lý công việc' };
-  const u = me(), ci = cycleInfo(), pc = pendingCount();
+  const views = { dashboard: viewDashboard, okrs: viewOKRs, checkin: viewCheckin, tasks: viewTasks };
+  const titles = { dashboard:'Tổng quan OKRs', okrs:'Quản lý OKR', checkin:'Báo cáo tuần', tasks:'Quản lý công việc' };
+  if(!curCycle()) { DB.cycles.push({ id:uid(), name:'Chu kỳ mới', start:toISO(new Date()), end:toISO(addDays(new Date(), 90)), active:true }); save(); }
+  state.cycleId = curCycle().id;
+  const u = me(), cyc = curCycle(), ci = cycleInfo(cyc), pc = pendingCount(), oc = okrPendingCount();
   const navItem = (key, icon, label, count) => `
     <div class="nav-item ${state.view === key ? 'active' : ''}" onclick="A.nav('${key}')">${icon}<span class="flex-1">${label}</span>${count ? `<span class="bg-red-500 text-white text-[11px] font-semibold px-1.5 py-0.5 rounded-full">${count}</span>` : ''}</div>`;
   app.innerHTML = `
@@ -347,13 +382,15 @@ function render(){
       <nav class="p-3 space-y-1 flex-1">
         <div class="section-title px-3 pb-2 pt-1">Menu</div>
         ${navItem('dashboard', I.dash, 'Tổng quan OKRs')}
+        ${navItem('okrs', I.flag, 'Quản lý OKR', oc)}
         ${navItem('checkin', I.report, 'Báo cáo tuần', pc)}
         ${navItem('tasks', I.task, 'Quản lý công việc')}
         <div class="pt-4">
-          <div class="section-title px-3 pb-2">Chu kỳ hiện tại</div>
+          <div class="section-title px-3 pb-2 flex items-center justify-between">Chu kỳ đang xem ${isMgr() ? `<a class="normal-case font-medium text-base-600 hover:underline cursor-pointer" onclick="A.openCycles()">Quản lý</a>` : ''}</div>
           <div class="mx-1 p-3 rounded-lg bg-gray-50 border border-gray-200">
-            <div class="flex items-center justify-between"><span class="font-semibold text-slate-900">${DB.cycle.name}</span>${badge(ci.status, ci.status === 'Đang diễn ra' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-100 text-gray-600 border-gray-200')}</div>
-            <div class="text-[11.5px] text-gray-500 mt-1">${fmt(DB.cycle.start)} – ${fmt(DB.cycle.end)}</div>
+            ${DB.cycles.length > 1 ? `<select class="input !py-1 !px-2 text-[13px] font-semibold mb-1.5" onchange="A.setCycle(this.value)">${[...DB.cycles].sort((a,b) => b.start.localeCompare(a.start)).map(c => `<option value="${c.id}" ${c.id === cyc.id ? 'selected' : ''}>${esc(c.name)}${c.active ? ' ●' : ''}</option>`).join('')}</select>`
+              : `<div class="font-semibold text-slate-900">${esc(cyc.name)}</div>`}
+            <div class="flex items-center justify-between gap-2"><div class="text-[11.5px] text-gray-500">${fmt(cyc.start)} – ${fmt(cyc.end)}</div>${badge(cyc.active ? ci.status : 'Lưu trữ', cyc.active && ci.status === 'Đang diễn ra' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-100 text-gray-600 border-gray-200')}</div>
             <div class="mt-2">${progressBar(ci.expected, 'bg-slate-400', 'h-1.5')}</div>
             <div class="text-[11px] text-gray-500 mt-1">Đã qua ${ci.expected}% thời gian · còn ${ci.daysLeft} ngày</div>
           </div>
@@ -435,10 +472,11 @@ function viewLogin(){
 function viewDashboard(){
   const cw = isoWeek(new Date());
   const emps = employees();
-  const avg = DB.okrs.length ? Math.round(DB.okrs.reduce((a,o) => a + okrPct(o), 0) / DB.okrs.length) : 0;
+  const cyc = curCycle(), ci = cycleInfo(cyc);
+  const AO = approvedOkrs(), pendingN = okrsOfCycle(cyc.id, 'pending').length;
+  const avg = AO.length ? Math.round(AO.reduce((a,o) => a + okrPct(o), 0) / AO.length) : 0;
   const submitted = new Set(DB.reports.filter(r => r.week === cw.week && r.year === cw.year).map(r => r.userId)).size;
   const overdue = DB.tasks.filter(isOverdue).length;
-  const ci = cycleInfo();
   const stat = (label, value, sub, color='text-slate-900') => `<div class="card p-4"><div class="text-[12.5px] text-gray-500">${label}</div><div class="text-2xl font-semibold mt-1 ${color}">${value}</div><div class="text-[12px] text-gray-500 mt-0.5">${sub}</div></div>`;
   let ordered = [...emps];
   if(!isMgr()) ordered.sort((a,b) => (a.id === me().id ? -1 : b.id === me().id ? 1 : 0));
@@ -446,7 +484,7 @@ function viewDashboard(){
 
   return `
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
-    ${stat('Mục tiêu (Objectives)', DB.okrs.length, `${DB.okrs.reduce((a,o) => a + o.krs.length, 0)} kết quả then chốt`)}
+    ${stat('Mục tiêu đã duyệt', AO.length, `${AO.reduce((a,o) => a + o.krs.length, 0)} kết quả then chốt${pendingN ? ` · <span class="text-amber-600">${pendingN} chờ duyệt</span>` : ''}`)}
     ${stat('Tiến độ trung bình', avg + '%', `Kỳ vọng theo thời gian: ${ci.expected}%`, avg >= ci.expected - 10 ? 'text-green-600' : 'text-amber-600')}
     ${stat('Báo cáo tuần này', `${submitted}/${emps.length}`, 'nhân viên đã gửi check-in', submitted === emps.length ? 'text-green-600' : 'text-slate-900')}
     ${stat('Công việc quá hạn', overdue, 'chưa hoàn thành, đã quá ngày', overdue ? 'text-red-600' : 'text-green-600')}
@@ -457,7 +495,7 @@ function viewDashboard(){
   </div>
   <div class="space-y-5">
     ${list.map(u => {
-      const okrs = DB.okrs.filter(o => o.ownerId === u.id);
+      const okrs = AO.filter(o => o.ownerId === u.id);
       const upct = okrs.length ? Math.round(okrs.reduce((a,o) => a + okrPct(o), 0) / okrs.length) : 0;
       const last = DB.reports.filter(r => r.userId === u.id).sort((a,b) => (b.year - a.year) || (b.week - a.week))[0];
       return `
@@ -474,31 +512,169 @@ function viewDashboard(){
           </div>
         </div>
         <div class="p-4 grid md:grid-cols-2 gap-4">
-          ${okrs.length ? okrs.map(o => {
-            const p = okrPct(o), st = okrStatus(p);
-            return `
-            <div class="border border-gray-200 rounded-lg p-4">
-              <div class="flex items-start justify-between gap-3">
-                <div class="flex items-start gap-2"><span class="text-base-600 mt-0.5">${I.flag}</span><div class="font-semibold text-slate-900 leading-snug">${esc(o.title)}</div></div>
-                ${badge(st.t, st.c)}
-              </div>
-              <div class="flex items-center gap-3 mt-3"><div class="flex-1">${progressBar(p, st.bar, 'h-2.5')}</div><span class="text-[13px] font-semibold w-10 text-right">${p}%</span></div>
-              <div class="mt-3 space-y-2">
-                ${o.krs.map(k => `
-                <div class="flex items-center gap-3 text-[12.5px]">
-                  <span class="text-gray-400 font-medium w-6 shrink-0">KR</span>
-                  <span class="flex-1 text-slate-700 truncate" title="${esc(k.title)}">${esc(k.title)}</span>
-                  <span class="text-gray-500 whitespace-nowrap">${num(k.current)}/${num(k.target)} ${esc(k.unit)}</span>
-                  <div class="w-20">${progressBar(krPct(k), 'bg-slate-400', 'h-1.5')}</div>
-                  <span class="w-9 text-right font-medium">${krPct(k)}%</span>
-                </div>`).join('')}
-              </div>
-            </div>`;
-          }).join('') : '<div class="text-gray-400 text-[13px] italic col-span-2">Chưa có mục tiêu nào.</div>'}
+          ${okrs.length ? okrs.map(o => okrCard(o, cyc)).join('') : `<div class="text-gray-400 text-[13px] italic col-span-2">Chưa có mục tiêu đã duyệt trong chu kỳ này.${(u.id === (me()||{}).id || isMgr()) ? ` <a class="text-base-600 not-italic hover:underline cursor-pointer" onclick="A.openOkrForm(null,'${u.id}')">Tạo OKR</a>` : ''}</div>`}
         </div>
       </div>`;
     }).join('')}
   </div>`;
+}
+
+/* ---------- Thẻ OKR dùng chung ---------- */
+const krRange = k => `${num(k.baseline)} → ${num(k.target)} ${esc(k.unit)}`;
+function okrCard(o, cyc, opts={}){
+  const p = okrPct(o), st = okrStatus(p, cyc);
+  const approved = o.status === 'approved';
+  return `
+  <div class="border ${approved ? 'border-gray-200' : 'border-dashed border-amber-300 bg-amber-50/30'} rounded-lg p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div class="flex items-start gap-2 min-w-0"><span class="text-base-600 mt-0.5 shrink-0">${I.flag}</span><div class="font-semibold text-slate-900 leading-snug">${esc(o.title)}</div></div>
+      <div class="flex items-center gap-1.5 shrink-0">${approved ? badge(st.t, st.c) : badge(OKR_STATUS[o.status].t, OKR_STATUS[o.status].c)}${opts.actions || ''}</div>
+    </div>
+    ${approved ? `<div class="flex items-center gap-3 mt-3"><div class="flex-1">${progressBar(p, st.bar, 'h-2.5')}</div><span class="text-[13px] font-semibold w-10 text-right">${p}%</span></div>` : ''}
+    <div class="mt-3 space-y-2">
+      ${o.krs.map(k => `
+      <div class="flex items-center gap-3 text-[12.5px]">
+        <span class="text-gray-400 font-medium w-6 shrink-0">KR</span>
+        <span class="flex-1 text-slate-700 truncate" title="${esc(k.title)}">${esc(k.title)}</span>
+        <span class="text-gray-500 whitespace-nowrap" title="Đầu kỳ ${num(k.baseline)} · Hiện tại ${num(k.current)} · Mục tiêu ${num(k.target)}">${approved ? `<b class="text-slate-700">${num(k.current)}</b>/` : ''}${num(k.target)} ${esc(k.unit)}${Number(k.baseline) ? ` <span class="text-gray-400">(từ ${num(k.baseline)})</span>` : ''}</span>
+        ${approved ? `<div class="w-20">${progressBar(krPct(k), 'bg-slate-400', 'h-1.5')}</div><span class="w-9 text-right font-medium">${krPct(k)}%</span>` : ''}
+      </div>`).join('')}
+    </div>
+    ${o.status === 'rejected' && o.reviewNote ? `<div class="mt-3 text-[12.5px] rounded-md bg-red-50 border border-red-100 text-red-700 px-3 py-2"><b>Lý do từ chối:</b> ${esc(o.reviewNote)}</div>` : ''}
+    ${o.status === 'approved' && o.reviewNote ? `<div class="mt-3 text-[12.5px] text-gray-500"><b>Ghi chú duyệt:</b> ${esc(o.reviewNote)}</div>` : ''}
+  </div>`;
+}
+
+/* ---------- Quản lý OKR ---------- */
+function viewOKRs(){
+  const cyc = curCycle();
+  let list = okrsOfCycle(cyc.id);
+  if(!isMgr()) list = list.filter(o => o.ownerId === me().id);
+  const counts = { all:list.length, pending:list.filter(o => o.status === 'pending').length, approved:list.filter(o => o.status === 'approved').length, rejected:list.filter(o => o.status === 'rejected').length };
+  if(state.okrStatus !== 'all') list = list.filter(o => o.status === state.okrStatus);
+  if(isMgr() && state.okrUser !== 'all') list = list.filter(o => o.ownerId === state.okrUser);
+  const order = { pending:0, rejected:1, approved:2 };
+  list = [...list].sort((a,b) => (order[a.status] - order[b.status]) || (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const tab = (key, label, cnt) => `<span class="chip ${state.okrStatus === key ? 'active' : ''}" onclick="A.set('okrStatus','${key}')">${label} <span class="opacity-70">${cnt}</span></span>`;
+  const canEdit = o => isMgr() || o.ownerId === me().id;
+  const canDelete = o => isMgr() || (o.ownerId === me().id && o.status !== 'approved');
+  return `
+  <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+    <div class="flex items-center gap-2 flex-wrap">
+      ${tab('all','Tất cả',counts.all)}${tab('pending','Chờ duyệt',counts.pending)}${tab('approved','Đã duyệt',counts.approved)}${tab('rejected','Từ chối',counts.rejected)}
+      ${isMgr() ? `<select class="input !w-auto ml-2" onchange="A.set('okrUser',this.value)"><option value="all">Tất cả nhân viên</option>${employees().map(u => `<option value="${u.id}" ${state.okrUser === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
+    </div>
+    <button class="btn btn-primary" onclick="A.openOkrForm()">${I.plus} Tạo OKR</button>
+  </div>
+  ${!isMgr() ? `<div class="card px-4 py-3 mb-4 text-[13px] text-slate-600 flex items-start gap-2"><span class="text-base-600 mt-0.5">${I.flag}</span><div>OKR bạn tạo sẽ ở trạng thái <b>Chờ duyệt</b> cho đến khi quản lý duyệt. Sau khi duyệt, mọi chỉnh sửa sẽ cần duyệt lại. Chỉ OKR đã duyệt mới hiện trên Tổng quan và chọn được khi viết báo cáo tuần.</div></div>` : ''}
+  <div class="grid md:grid-cols-2 gap-4">
+    ${list.length ? list.map(o => {
+      const u = user(o.ownerId), cr = user(o.createdBy);
+      const actions = `
+        ${isMgr() && o.status !== 'approved' ? `<button class="btn btn-primary btn-sm" onclick="A.openReview('${o.id}')">${I.check} Duyệt</button>` : ''}
+        ${canEdit(o) ? `<button class="btn btn-ghost btn-sm" title="Sửa" onclick="A.openOkrForm('${o.id}')">${I.edit}</button>` : ''}
+        ${canDelete(o) ? `<button class="btn btn-danger btn-sm" title="Xoá" onclick="A.deleteOkr('${o.id}')">${I.trash}</button>` : ''}`;
+      return `
+      <div class="card p-4">
+        <div class="flex items-center gap-2.5 mb-3 text-[12.5px] text-gray-500">
+          ${avatar(u, 'w-7 h-7 text-[10px]')}
+          <div class="min-w-0 flex-1"><span class="font-medium text-slate-800">${esc(u.name)}</span> · ${esc(u.dept)}</div>
+          <div class="text-right whitespace-nowrap">${o.createdBy !== o.ownerId ? `Tạo bởi ${esc(cr.name)}` : 'Tự đề xuất'}${o.updatedAt ? ` · ${fmt(o.updatedAt)}` : ''}</div>
+        </div>
+        ${okrCard(o, cyc, { actions })}
+      </div>`;
+    }).join('') : `<div class="card p-10 text-center text-gray-400 md:col-span-2">Không có OKR nào${state.okrStatus !== 'all' ? ' ở trạng thái này' : ' trong chu kỳ này'}.</div>`}
+  </div>`;
+}
+function krRowHTML(k = {}){
+  const unitOpts = UNITS.map(u => `<option value="${esc(u)}">`).join('');
+  return `
+  <div class="kr-row grid grid-cols-12 gap-2 items-center fade-in" data-id="${k.id || ''}">
+    <input class="input kr-title col-span-5" placeholder="Tên kết quả then chốt (vd: Số đơn hàng mới)" value="${esc(k.title || '')}">
+    <input type="number" step="any" class="input kr-baseline col-span-2 text-right" placeholder="Đầu kỳ" value="${k.baseline ?? 0}" title="Giá trị đầu kỳ">
+    <input type="number" step="any" class="input kr-target col-span-2 text-right" placeholder="Mục tiêu" value="${k.target ?? ''}" title="Giá trị mục tiêu">
+    <input class="input kr-unit col-span-2" list="unit-list" placeholder="Đơn vị" value="${esc(k.unit || '')}" title="Đơn vị đo lường">
+    <button class="text-gray-400 hover:text-red-600 p-1 justify-self-center" title="Xoá KR" onclick="this.closest('.kr-row').remove()">${I.x}</button>
+  </div>`;
+}
+function openOkrForm(id, ownerId){
+  const o = id ? DB.okrs.find(o => o.id === id) : null;
+  if(o && !(isMgr() || o.ownerId === me().id)) return;
+  const owner = o ? o.ownerId : (isMgr() ? (ownerId || (employees()[0] || me()).id) : me().id);
+  const cycles = [...DB.cycles].sort((a,b) => b.start.localeCompare(a.start));
+  openModal(`
+    ${modalHeader(o ? 'Sửa OKR' : 'Tạo OKR mới', isMgr() ? 'OKR do quản lý tạo hoặc sửa sẽ được duyệt ngay.' : (o && o.status === 'approved' ? 'OKR này đã duyệt — sau khi sửa sẽ chuyển về Chờ duyệt.' : 'Sau khi gửi, OKR sẽ chờ quản lý duyệt.'))}
+    <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+      <div>
+        <label class="label">Mục tiêu (Objective) <span class="text-red-500">*</span></label>
+        <input id="of-title" class="input" placeholder="Mục tiêu định tính, truyền cảm hứng (vd: Trở thành kênh bán hàng online số 1 khu vực)" value="${esc(o ? o.title : '')}">
+      </div>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div><label class="label">Người phụ trách</label>${isMgr() ? `<select id="of-owner" class="input">${DB.users.map(u => `<option value="${u.id}" ${u.id === owner ? 'selected' : ''}>${esc(u.name)} · ${esc(u.dept)}</option>`).join('')}</select>` : `<input class="input bg-gray-50" value="${esc(me().name)}" disabled>`}</div>
+        <div><label class="label">Chu kỳ</label><select id="of-cycle" class="input">${cycles.map(c => `<option value="${c.id}" ${c.id === (o ? o.cycleId : curCycle().id) ? 'selected' : ''}>${esc(c.name)} (${fmt(c.start)} – ${fmt(c.end)})</option>`).join('')}</select></div>
+      </div>
+      <div>
+        <div class="flex items-center justify-between mb-1.5"><label class="label !mb-0">Kết quả then chốt (Key Results) <span class="text-red-500">*</span></label><button class="btn btn-ghost btn-sm" onclick="A.addKrRow()">${I.plus} Thêm KR</button></div>
+        <p class="text-[12px] text-gray-500 mb-2">Mỗi KR là một chỉ số đo được. Tiến độ tính từ <b>giá trị đầu kỳ</b> đến <b>mục tiêu</b> (vd CSAT từ 80% → 92%). Với KR cần giảm (vd CPL), nhập mục tiêu nhỏ hơn đầu kỳ.</p>
+        <div class="grid grid-cols-12 gap-2 text-[11.5px] font-semibold text-gray-500 uppercase tracking-wide px-0.5 mb-1"><div class="col-span-5">Kết quả then chốt</div><div class="col-span-2 text-right">Đầu kỳ</div><div class="col-span-2 text-right">Mục tiêu</div><div class="col-span-2">Đơn vị đo</div><div></div></div>
+        <div id="of-krs" class="space-y-2">${(o ? o.krs : [{}, {}]).map(krRowHTML).join('')}</div>
+        <datalist id="unit-list">${UNITS.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
+      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-primary" onclick="A.submitOkr('${o ? o.id : ''}')">${I.check} ${o ? 'Lưu thay đổi' : (isMgr() ? 'Tạo OKR' : 'Gửi duyệt')}</button>
+    </div>`, 'max-w-3xl');
+  setTimeout(() => { const el = document.getElementById('of-title'); if(el) el.focus(); }, 50);
+}
+function openReview(id){
+  const o = DB.okrs.find(o => o.id === id); if(!o || !isMgr()) return;
+  const u = user(o.ownerId);
+  openModal(`
+    ${modalHeader('Duyệt OKR', `${esc(u.name)} · ${esc(u.dept)} · ${esc(curCycle().name)}`)}
+    <div class="p-6 space-y-4">
+      ${okrCard(o, cycleOf(o.cycleId))}
+      <div><label class="label">Nhận xét / lý do (bắt buộc khi từ chối)</label><textarea id="rv-note" class="input" placeholder="Góp ý cho nhân viên: KR nào cần đo rõ hơn, mục tiêu cao/thấp...">${esc(o.reviewNote || '')}</textarea></div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex justify-between gap-2">
+      <button class="btn btn-ghost" onclick="A.closeModal();A.openOkrForm('${o.id}')">${I.edit} Sửa rồi duyệt</button>
+      <div class="flex gap-2">
+        <button class="btn btn-danger" onclick="A.reviewOkr('${o.id}','rejected')">${I.x} Từ chối</button>
+        <button class="btn btn-primary" onclick="A.reviewOkr('${o.id}','approved')">${I.check} Duyệt</button>
+      </div>
+    </div>`, 'max-w-2xl');
+}
+function openCycles(){
+  if(!isMgr()) return;
+  const cycles = [...DB.cycles].sort((a,b) => b.start.localeCompare(a.start));
+  openModal(`
+    ${modalHeader('Quản lý chu kỳ OKR', 'Chu kỳ đang hoạt động (●) là chu kỳ mặc định khi mở app và khi tạo OKR mới.')}
+    <div class="p-6 space-y-4">
+      <div class="border border-gray-200 rounded-lg divide-y divide-gray-100">
+        ${cycles.map(c => { const n = DB.okrs.filter(o => o.cycleId === c.id).length; return `
+        <div class="flex items-center gap-3 px-3 py-2.5">
+          <div class="flex-1 min-w-0"><div class="font-medium text-slate-900">${esc(c.name)} ${c.active ? badge('Đang hoạt động', 'bg-green-50 text-green-700 border-green-200') : ''}</div><div class="text-[12px] text-gray-500">${fmt(c.start)} – ${fmt(c.end)} · ${n} OKR</div></div>
+          ${!c.active ? `<button class="btn btn-ghost btn-sm" onclick="A.setActiveCycle('${c.id}')">Kích hoạt</button>` : ''}
+          <button class="btn btn-ghost btn-sm" title="Sửa" onclick="A.editCycle('${c.id}')">${I.edit}</button>
+          ${!n && !c.active ? `<button class="btn btn-danger btn-sm" title="Xoá" onclick="A.deleteCycle('${c.id}')">${I.trash}</button>` : ''}
+        </div>`; }).join('')}
+      </div>
+      <div class="rounded-lg bg-gray-50 border border-gray-200 p-4">
+        <div class="section-title mb-2" id="cy-form-title">Thêm chu kỳ mới</div>
+        <input type="hidden" id="cy-id">
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="label">Tên</label><input id="cy-name" class="input" placeholder="Q1/2027"></div>
+          <div><label class="label">Bắt đầu</label><input id="cy-start" type="date" class="input"></div>
+          <div><label class="label">Kết thúc</label><input id="cy-end" type="date" class="input"></div>
+        </div>
+        <div class="flex gap-2 mt-3">
+          ${[1,2,3,4].map(q => `<button class="chip" onclick="A.fillQuarter(${q})">Q${q}</button>`).join('')}
+          <span class="flex-1"></span>
+          <label class="flex items-center gap-1.5 text-[12.5px] text-slate-700"><input type="checkbox" id="cy-active" class="checkbox"> Kích hoạt ngay</label>
+          <button class="btn btn-primary btn-sm" onclick="A.saveCycle()">${I.check} Lưu</button>
+        </div>
+      </div>
+    </div>`, 'max-w-2xl');
 }
 
 /* ---------- Báo cáo tuần ---------- */
@@ -573,7 +749,7 @@ function reportDetail(r){
         ${r.krUpdates.length ? `
         <table class="w-full mt-3 text-[12.5px]">
           <thead><tr class="text-gray-500 text-left"><th class="font-medium py-1">Kết quả then chốt</th><th class="font-medium py-1 text-right">Cập nhật</th><th class="font-medium py-1 text-right">Mục tiêu</th><th class="font-medium py-1 text-right w-16">%</th></tr></thead>
-          <tbody>${r.krUpdates.map(ku => { const k = o && o.krs.find(k => k.id === ku.krId); if(!k) return ''; const p = k.target ? Math.min(100, Math.round(ku.value / k.target * 100)) : 0; return `<tr class="border-t border-base-100"><td class="py-1.5 text-slate-700">${esc(k.title)}</td><td class="py-1.5 text-right font-semibold">${num(ku.value)} ${esc(k.unit)}</td><td class="py-1.5 text-right text-gray-500">${num(k.target)} ${esc(k.unit)}</td><td class="py-1.5 text-right font-medium">${p}%</td></tr>`; }).join('')}</tbody>
+          <tbody>${r.krUpdates.map(ku => { const k = o && o.krs.find(k => k.id === ku.krId); if(!k) return ''; const p = krPctOf(k, ku.value); return `<tr class="border-t border-base-100"><td class="py-1.5 text-slate-700">${esc(k.title)}</td><td class="py-1.5 text-right font-semibold">${num(ku.value)} ${esc(k.unit)}</td><td class="py-1.5 text-right text-gray-500">${num(k.target)} ${esc(k.unit)}</td><td class="py-1.5 text-right font-medium">${p}%</td></tr>`; }).join('')}</tbody>
         </table>` : ''}
       </div>
       ${sec('Công việc đã thực hiện trong tuần', r.work)}
@@ -621,8 +797,8 @@ function reportDetail(r){
 }
 function openReportForm(){
   const cw = isoWeek(new Date());
-  const okrs = DB.okrs.filter(o => o.ownerId === me().id);
-  if(!okrs.length){ toast('Bạn chưa được gán OKR nào, không thể tạo báo cáo.', 'error'); return; }
+  const okrs = DB.okrs.filter(o => o.ownerId === me().id && o.status === 'approved' && o.cycleId === activeCycle().id);
+  if(!okrs.length){ toast('Bạn chưa có OKR nào được duyệt trong chu kỳ hiện tại. Hãy tạo OKR ở mục Quản lý OKR.', 'error'); return; }
   openModal(`
     ${modalHeader(`Báo cáo tuần — ${weekLabel(cw.week, cw.year)}`, 'Sau khi gửi, các giải pháp sẽ tự động trở thành công việc trong Quản lý công việc.')}
     <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
@@ -780,12 +956,87 @@ const A = {
   resetData(){ if(!confirm('Đặt lại toàn bộ dữ liệu về dữ liệu mẫu? Mọi thay đổi của bạn sẽ bị xoá.')) return; DB = seedData(); save(); state.reportId = null; render(); toast('Đã đặt lại dữ liệu mẫu.', 'info'); },
   selectReport(id){ state.reportId = id; render(); },
   gotoReport(id){ const r = DB.reports.find(r => r.id === id); if(!r) return; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = id; render(); },
-  openReportForm, openTaskForm,
+  openReportForm, openTaskForm, openOkrForm, openReview, openCycles,
+  setCycle(id){ state.cycleId = id; state.reportId = null; render(); },
+  addKrRow(){ document.getElementById('of-krs').insertAdjacentHTML('beforeend', krRowHTML()); const rows = document.querySelectorAll('.kr-title'); if(rows.length) rows[rows.length-1].focus(); },
+  submitOkr(id){
+    const title = document.getElementById('of-title').value.trim();
+    if(!title){ toast('Vui lòng nhập Mục tiêu.', 'error'); return; }
+    const krs = [...document.querySelectorAll('.kr-row')].map(row => ({
+      id: row.dataset.id || uid(), title: row.querySelector('.kr-title').value.trim(),
+      baseline: Number(row.querySelector('.kr-baseline').value) || 0, targetRaw: row.querySelector('.kr-target').value.trim(),
+      unit: row.querySelector('.kr-unit').value.trim() })).filter(k => k.title || k.unit || k.targetRaw);   // bỏ dòng trống hoàn toàn
+    if(!krs.length){ toast('Cần ít nhất 1 Kết quả then chốt.', 'error'); return; }
+    for(const k of krs){
+      if(!k.title){ toast('Có KR chưa nhập tên.', 'error'); return; }
+      if(k.targetRaw === '' || Number.isNaN(Number(k.targetRaw))){ toast(`KR "${k.title}" chưa có giá trị mục tiêu.`, 'error'); return; }
+      k.target = Number(k.targetRaw); delete k.targetRaw;
+      if(!k.unit){ toast(`KR "${k.title}" chưa có đơn vị đo.`, 'error'); return; }
+      if(k.target === k.baseline){ toast(`KR "${k.title}": mục tiêu phải khác giá trị đầu kỳ.`, 'error'); return; }
+    }
+    const old = id ? DB.okrs.find(o => o.id === id) : null;
+    const ownerId = isMgr() ? document.getElementById('of-owner').value : me().id;
+    const cycleId = document.getElementById('of-cycle').value;
+    const status = isMgr() ? 'approved' : 'pending';
+    const now = new Date().toISOString();
+    // giữ giá trị hiện tại của KR cũ; KR mới bắt đầu từ baseline
+    krs.forEach(k => { const ok = old && old.krs.find(x => x.id === k.id); k.current = ok ? Number(ok.current) : k.baseline; });
+    const o = { id: id || uid(), ownerId, title, cycleId, status, createdBy: old ? old.createdBy : me().id, reviewNote: isMgr() ? (old ? old.reviewNote : '') : '', updatedAt: now, krs };
+    A.closeModal(); state.view = 'okrs'; state.okrStatus = 'all';
+    mutate('saveOKR', { okr:o }, () => { const i = DB.okrs.findIndex(x => x.id === o.id); if(i >= 0) DB.okrs[i] = o; else DB.okrs.push(o); },
+      isMgr() ? (id ? 'Đã lưu OKR.' : 'Đã tạo OKR (đã duyệt).') : (id ? 'Đã lưu, OKR chuyển về Chờ duyệt.' : 'Đã gửi OKR chờ quản lý duyệt.'));
+  },
+  reviewOkr(id, status){
+    const note = document.getElementById('rv-note').value.trim();
+    if(status === 'rejected' && !note){ toast('Vui lòng nhập lý do từ chối.', 'error'); return; }
+    const now = new Date().toISOString();
+    A.closeModal();
+    mutate('reviewOKR', { id, status, reviewNote:note, updatedAt:now }, () => { const o = DB.okrs.find(o => o.id === id); o.status = status; o.reviewNote = note; o.updatedAt = now; },
+      status === 'approved' ? 'Đã duyệt OKR.' : 'Đã từ chối, nhân viên sẽ thấy lý do để sửa lại.');
+  },
+  deleteOkr(id){
+    const n = DB.reports.filter(r => r.okrId === id).length;
+    if(n){ toast(`Không thể xoá: đã có ${n} báo cáo tuần gắn với OKR này.`, 'error'); return; }
+    if(!confirm('Xoá OKR này cùng toàn bộ KR?')) return;
+    mutate('deleteOKR', { id }, () => { DB.okrs = DB.okrs.filter(o => o.id !== id); DB.tasks.forEach(t => { if(t.okrId === id) t.okrId = null; }); }, 'Đã xoá OKR.');
+  },
+  fillQuarter(q){
+    const base = document.getElementById('cy-start').value ? fromISO(document.getElementById('cy-start').value) : new Date();
+    let y = base.getFullYear(); const curQ = Math.floor(new Date().getMonth()/3) + 1; if(q < curQ && y === new Date().getFullYear() && !document.getElementById('cy-start').value) y += 1;
+    document.getElementById('cy-name').value = `Q${q}/${y}`;
+    document.getElementById('cy-start').value = toISO(new Date(y, (q-1)*3, 1));
+    document.getElementById('cy-end').value = toISO(new Date(y, q*3, 0));
+  },
+  editCycle(id){
+    const c = DB.cycles.find(c => c.id === id);
+    document.getElementById('cy-form-title').textContent = 'Sửa chu kỳ: ' + c.name;
+    document.getElementById('cy-id').value = c.id; document.getElementById('cy-name').value = c.name;
+    document.getElementById('cy-start').value = c.start; document.getElementById('cy-end').value = c.end; document.getElementById('cy-active').checked = !!c.active;
+    document.getElementById('cy-name').focus();
+  },
+  saveCycle(){
+    const id = document.getElementById('cy-id').value || uid(), name = document.getElementById('cy-name').value.trim(), start = document.getElementById('cy-start').value, end = document.getElementById('cy-end').value, active = document.getElementById('cy-active').checked;
+    if(!name || !start || !end){ toast('Nhập đủ tên, ngày bắt đầu và kết thúc.', 'error'); return; }
+    if(end < start){ toast('Ngày kết thúc phải sau ngày bắt đầu.', 'error'); return; }
+    const c = { id, name, start, end, active };
+    A.closeModal();
+    mutate('saveCycle', { cycle:c }, () => {
+      const i = DB.cycles.findIndex(x => x.id === id); if(i >= 0) DB.cycles[i] = { ...DB.cycles[i], ...c }; else DB.cycles.push(c);
+      if(active) DB.cycles.forEach(x => { x.active = x.id === id; }); else if(!DB.cycles.some(x => x.active)) DB.cycles[i >= 0 ? i : DB.cycles.length-1].active = true;
+      state.cycleId = active ? id : state.cycleId;
+    }, 'Đã lưu chu kỳ.');
+  },
+  setActiveCycle(id){ A.closeModal(); state.cycleId = id; mutate('setActiveCycle', { id }, () => { DB.cycles.forEach(x => { x.active = x.id === id; }); }, 'Đã kích hoạt chu kỳ.'); },
+  deleteCycle(id){
+    if(DB.okrs.some(o => o.cycleId === id)){ toast('Chu kỳ đang có OKR, không thể xoá.', 'error'); return; }
+    if(!confirm('Xoá chu kỳ này?')) return;
+    A.closeModal(); mutate('deleteCycle', { id }, () => { DB.cycles = DB.cycles.filter(c => c.id !== id); if(state.cycleId === id) state.cycleId = null; }, 'Đã xoá chu kỳ.');
+  },
   renderKrInputs(){
     const o = DB.okrs.find(o => o.id === document.getElementById('rf-okr').value);
     document.getElementById('rf-krs').innerHTML = o.krs.map(k => `
       <div class="flex items-center gap-3 px-3 py-2.5">
-        <div class="flex-1 min-w-0"><div class="text-slate-800 font-medium truncate">${esc(k.title)}</div><div class="text-[12px] text-gray-500">Hiện tại: ${num(k.current)} / Mục tiêu: ${num(k.target)} ${esc(k.unit)}</div></div>
+        <div class="flex-1 min-w-0"><div class="text-slate-800 font-medium truncate">${esc(k.title)}</div><div class="text-[12px] text-gray-500">Đầu kỳ ${num(k.baseline)} · Hiện tại ${num(k.current)} · Mục tiêu ${num(k.target)} ${esc(k.unit)}</div></div>
         <input type="number" min="0" step="any" class="input !w-32 kr-input text-right" data-kr="${k.id}" value="${k.current}">
         <span class="text-gray-500 text-[12.5px] w-16">${esc(k.unit)}</span>
       </div>`).join('');
