@@ -54,10 +54,10 @@
 
 <script>
 /* ============================================================
-   HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v3)
-   Phân quyền: Giám đốc · Quản lý · Nhân viên (theo quản lý trực tiếp).
+   HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
+   Sơ đồ tổ chức: Giám đốc → Trưởng phòng → Quản lý → Nhân viên (cột managerId = cấp trên trực tiếp).
    - OKR & báo cáo tuần: cả đội xem được của nhau.
-   - Công việc: nhân viên xem việc của mình; quản lý xem việc của mình + nhân viên trực thuộc; Giám đốc xem tất cả.
+   - Công việc: mỗi người xem việc của mình + toàn bộ cấp dưới (Trưởng phòng: cả phòng); Giám đốc xem tất cả.
    Dữ liệu lưu localStorage hoặc Google Sheet (Apps Script). Tailwind CDN + Vanilla JS.
    ============================================================ */
 const STORE_KEY = 'okr_weekly_v1';
@@ -104,12 +104,14 @@ function seedData(){
 
   const users = [
     { id:'u1', username:'admin',     password:'123456', name:'Nguyễn Minh Quân', role:'director', managerId:'',   dept:'Ban Giám đốc',          title:'Giám đốc điều hành', color:'#1f2937' },
-    { id:'u6', username:'thanhtung', password:'123456', name:'Đỗ Thanh Tùng',    role:'manager',  managerId:'u1', dept:'Kinh doanh & Marketing', title:'Trưởng phòng Kinh doanh – Marketing', color:'#0891b2' },
-    { id:'u7', username:'baongoc',   password:'123456', name:'Ngô Bảo Ngọc',     role:'manager',  managerId:'u1', dept:'Vận hành & CSKH',        title:'Trưởng phòng Vận hành – CSKH', color:'#db2777' },
-    { id:'u2', username:'thuha',     password:'123456', name:'Trần Thu Hà',      role:'employee', managerId:'u6', dept:'Marketing',    title:'Chuyên viên Marketing', color:'#2f6fed' },
-    { id:'u3', username:'hoangnam',  password:'123456', name:'Lê Hoàng Nam',     role:'employee', managerId:'u6', dept:'Kinh doanh',   title:'Trưởng nhóm Kinh doanh', color:'#059669' },
-    { id:'u4', username:'thilan',    password:'123456', name:'Phạm Thị Lan',     role:'employee', managerId:'u7', dept:'CSKH',         title:'Chuyên viên CSKH', color:'#d97706' },
-    { id:'u5', username:'ducanh',    password:'123456', name:'Vũ Đức Anh',       role:'employee', managerId:'u7', dept:'Vận hành',     title:'Trưởng kho', color:'#7c3aed' },
+    { id:'u6', username:'thanhtung', password:'123456', name:'Đỗ Thanh Tùng',    role:'head',     managerId:'u1', dept:'Kinh doanh & Marketing', title:'Trưởng phòng Kinh doanh – Marketing', color:'#0891b2' },
+    { id:'u7', username:'baongoc',   password:'123456', name:'Ngô Bảo Ngọc',     role:'head',     managerId:'u1', dept:'Vận hành & CSKH',        title:'Trưởng phòng Vận hành – CSKH', color:'#db2777' },
+    { id:'u8', username:'quocbao',   password:'123456', name:'Mai Quốc Bảo',     role:'manager',  managerId:'u6', dept:'Kinh doanh & Marketing', title:'Quản lý nhóm Kinh doanh – Marketing', color:'#4f46e5' },
+    { id:'u9', username:'thutrang',  password:'123456', name:'Lý Thu Trang',     role:'manager',  managerId:'u7', dept:'Vận hành & CSKH',        title:'Quản lý nhóm Vận hành – CSKH', color:'#65a30d' },
+    { id:'u2', username:'thuha',     password:'123456', name:'Trần Thu Hà',      role:'employee', managerId:'u8', dept:'Marketing',    title:'Chuyên viên Marketing', color:'#2f6fed' },
+    { id:'u3', username:'hoangnam',  password:'123456', name:'Lê Hoàng Nam',     role:'employee', managerId:'u8', dept:'Kinh doanh',   title:'Trưởng nhóm Kinh doanh', color:'#059669' },
+    { id:'u4', username:'thilan',    password:'123456', name:'Phạm Thị Lan',     role:'employee', managerId:'u9', dept:'CSKH',         title:'Chuyên viên CSKH', color:'#d97706' },
+    { id:'u5', username:'ducanh',    password:'123456', name:'Vũ Đức Anh',       role:'employee', managerId:'u9', dept:'Vận hành',     title:'Trưởng kho', color:'#7c3aed' },
   ];
   const okrs = [
     { id:'o1', ownerId:'u2', title:'Tăng trưởng lead chất lượng từ kênh Digital', ...okrMeta, krs:[
@@ -209,14 +211,18 @@ function seedData(){
     { id:'t14', title:'Chuẩn bị số liệu kiểm kê kho lần 4', assigneeId:'u5', reportId:null, okrId:'o5', week:w0.week, year:w0.year, due:dueIn(-1,4), status:'todo', createdAt:at(0,0,9) },
     { id:'t15', title:'Duyệt kế hoạch khuyến mãi tháng sau với phòng Marketing', assigneeId:'u6', reportId:null, okrId:null, week:w0.week, year:w0.year, due:dueIn(-1,2), status:'todo', createdAt:at(0,0,10) },
     { id:'t16', title:'Họp giao ban kho & CSKH đầu tuần', assigneeId:'u7', reportId:null, okrId:null, week:w0.week, year:w0.year, due:dueIn(-1,0), status:'doing', createdAt:at(0,0,8) },
+    { id:'t17', title:'Kèm cặp Hà & Nam viết báo cáo tuần', assigneeId:'u8', reportId:null, okrId:null, week:w0.week, year:w0.year, due:dueIn(-1,3), status:'todo', createdAt:at(0,0,9) },
+    { id:'t18', title:'Lên lịch trực ca CSKH tháng tới', assigneeId:'u9', reportId:null, okrId:null, week:w0.week, year:w0.year, due:dueIn(-1,4), status:'todo', createdAt:at(0,0,9) },
   ];
   return { cycles, users, okrs, reports, tasks };
 }
-/* Vai trò: director / manager / employee. Dữ liệu cũ chưa có Giám đốc → quản lý không có cấp trên được coi là Giám đốc. */
-const ROLE_KEYS = ['director','manager','employee'];
+/* Vai trò: director / head / manager / employee. Dữ liệu cũ chưa có Giám đốc → quản lý / trưởng phòng không có cấp trên được coi là Giám đốc. */
+const ROLE_KEYS = ['director','head','manager','employee'];
+const ROLE_RANK = { director:0, head:1, manager:2, employee:3 };
+const PARENT_ROLE = { head:'director', manager:'head', employee:'manager' };      // cấp trên trực tiếp bắt buộc (khớp Code.gs)
 function normalizeUsers(users){
   users.forEach(u => { u.role = String(u.role || '').trim().toLowerCase(); if(!ROLE_KEYS.includes(u.role)) u.role = 'employee'; u.managerId = u.managerId || ''; });
-  if(!users.some(u => u.role === 'director')) users.forEach(u => { if(u.role === 'manager' && !u.managerId) u.role = 'director'; });
+  if(!users.some(u => u.role === 'director')) users.forEach(u => { if((u.role === 'manager' || u.role === 'head') && !u.managerId) u.role = 'director'; });
 }
 /* Chuẩn hoá dữ liệu cũ (phiên bản 1 chỉ có 1 chu kỳ, KR không có baseline, OKR không có trạng thái, user chưa có quản lý) */
 function normalize(db){
@@ -241,16 +247,17 @@ const token = () => (sess() || {}).token || '';
 function setSession(id, tok){ localStorage.setItem(SESSION_KEY, JSON.stringify({ id, token: tok || '' })); }
 
 /* ---------- Đồng bộ Google Sheet (Apps Script Web App) ---------- */
-// URL Apps Script dùng mặc định cho cả team (có thể ghi đè trong Cài đặt đồng bộ; để trống = chế độ cục bộ).
+// URL Apps Script cố định cho cả team. Không có giao diện để xem/sửa URL; mọi override cũ trong trình duyệt bị bỏ qua.
 const DEFAULT_API = 'https://script.google.com/macros/s/AKfycbx_BEECWvgjzcw30IuZ1JlyE2NohY7PNO_GE7q55g7bBU3USVXOrG9ujxFo5dkvMGvSZw/exec';
-const apiUrl = () => { const v = localStorage.getItem(API_KEY); return (v === null ? DEFAULT_API : v).trim(); };
+const apiUrl = () => DEFAULT_API.trim();
+try { localStorage.removeItem(API_KEY); } catch(e){}
 const online = () => !!apiUrl();
 function setBusy(b){ sync.busy = b; const el = document.getElementById('sync-dot'); if(el) el.className = syncDotClass(); }
 const syncDotClass = () => 'w-2 h-2 rounded-full shrink-0 ' + (!online() ? 'bg-gray-400' : sync.error ? 'bg-red-500' : sync.busy ? 'bg-amber-400 animate-pulse' : 'bg-green-500');
 async function apiFetch(url, opts){
   const res = await fetch(url, opts);
   const txt = await res.text();
-  let j; try { j = JSON.parse(txt); } catch(e){ throw new Error('Phản hồi không hợp lệ (kiểm tra lại URL Web App và quyền "Bất kỳ ai").'); }
+  let j; try { j = JSON.parse(txt); } catch(e){ throw new Error('Không kết nối được máy chủ dữ liệu, vui lòng thử lại.'); }
   if(!j.ok){ const err = new Error(j.error || 'Lỗi máy chủ'); err.auth = !!j.auth; throw err; }
   return j;
 }
@@ -287,14 +294,14 @@ async function mutate(action, payload, localFn, successMsg){
   try { await api(action, payload); render(); }
   catch(e){
     if(e.auth){ setBusy(false); forceLogout(e.message); return; }
-    sync.error = e.message; toast('Không ghi được lên Google Sheet: ' + e.message, 'error'); try { await apiLoad(); } catch(_){} render();
+    sync.error = e.message; toast('Không lưu được dữ liệu: ' + e.message, 'error'); try { await apiLoad(); } catch(_){} render();
   }
   finally { setBusy(false); }
 }
 async function refreshFromServer(silent){
   if(!online()) return;
   const before = JSON.stringify(DB);
-  try { await apiLoad(); if(JSON.stringify(DB) !== before || !silent) render(); if(!silent) toast('Đã tải dữ liệu mới nhất từ Google Sheet.', 'info'); }
+  try { await apiLoad(); if(JSON.stringify(DB) !== before || !silent) render(); if(!silent) toast('Đã tải dữ liệu mới nhất.', 'info'); }
   catch(e){ if(e.auth){ forceLogout(e.message); return; } if(!silent) toast(e.message, 'error'); render(); }
 }
 setInterval(() => {
@@ -309,20 +316,27 @@ function me(){ return DB.users.find(u => u.id === session()); }
 const user = id => DB.users.find(u => u.id === id) || { id, name:'?', color:'#999', dept:'', role:'employee', managerId:'' };
 const ROLES = {
   director:{ t:'Giám đốc', c:'bg-slate-800 text-white border-slate-800' },
+  head:    { t:'Trưởng phòng', c:'bg-indigo-600 text-white border-indigo-600' },
   manager: { t:'Quản lý',  c:'bg-indigo-50 text-indigo-700 border-indigo-200' },
   employee:{ t:'Nhân viên', c:'bg-base-50 text-base-700 border-base-100' },
 };
 const roleBadge = u => badge((ROLES[u.role] || ROLES.employee).t, (ROLES[u.role] || ROLES.employee).c);
 const isDir = () => !!me() && me().role === 'director';
-const isMgr = () => !!me() && me().role !== 'employee';           // Giám đốc hoặc Quản lý (có đội để quản lý)
-/* viewer quản lý được targetId: Giám đốc → tất cả; Quản lý → nhân viên trực thuộc (không gồm chính mình). Khớp với Code.gs. */
+const isMgr = () => !!me() && me().role !== 'employee';           // Giám đốc, Trưởng phòng hoặc Quản lý (có cấp dưới)
+/* viewer quản lý được targetId: Giám đốc → tất cả; Trưởng phòng / Quản lý → toàn bộ cấp dưới trực tiếp và gián tiếp. Khớp với Code.gs. */
 function canManage(targetId, viewer){
   viewer = viewer || me(); if(!viewer) return false;
   if(viewer.role === 'director') return true;
-  const t = DB.users.find(u => u.id === targetId);
-  return viewer.role === 'manager' && !!t && t.id !== viewer.id && t.managerId === viewer.id;
+  if(viewer.role !== 'head' && viewer.role !== 'manager') return false;
+  let t = DB.users.find(u => u.id === targetId); const seen = new Set();
+  if(!t || t.id === viewer.id) return false;
+  while(t && t.managerId && !seen.has(t.id)){
+    if(t.managerId === viewer.id) return true;
+    seen.add(t.id); t = DB.users.find(u => u.id === t.managerId);
+  }
+  return false;
 }
-/* Phản hồi là "chỉ đạo" (cần xác nhận) khi người viết là quản lý trực tiếp của chủ báo cáo hoặc Giám đốc. */
+/* Phản hồi là "chỉ đạo" (cần xác nhận) khi người viết là cấp trên (trực tiếp/gián tiếp) của chủ báo cáo hoặc Giám đốc. */
 const isDirective = (authorId, ownerId) => authorId !== ownerId && canManage(ownerId, user(authorId));
 const staffOf = id => DB.users.filter(u => u.managerId === id);
 const scopeUsers = () => { const m = me(); return [m, ...DB.users.filter(u => u.id !== m.id && canManage(u.id))]; };   // phạm vi công việc
@@ -339,7 +353,7 @@ function userFilterSelect(key, cur, list){
   return `<select class="input !w-auto" onchange="A.set('${key}',this.value)">
     <option value="all">Tất cả mọi người</option>
     <option value="mine" ${cur === 'mine' ? 'selected' : ''}>Của tôi</option>
-    ${isMgr() && !isDir() ? `<option value="team" ${cur === 'team' ? 'selected' : ''}>Nhân viên của tôi</option>` : ''}
+    ${isMgr() && !isDir() ? `<option value="team" ${cur === 'team' ? 'selected' : ''}>Cấp dưới của tôi</option>` : ''}
     <optgroup label="Theo người">${(list || members()).map(u => `<option value="${u.id}" ${cur === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</optgroup>
   </select>`;
 }
@@ -479,15 +493,13 @@ function render(){
           ${avatar(u)}
           <div class="min-w-0 flex-1"><div class="font-medium text-slate-900 truncate">${esc(u.name)}</div><div class="text-[11.5px] text-gray-500 truncate" title="${mgr ? 'Quản lý trực tiếp: ' + esc(mgr.name) : ''}">${ROLES[u.role].t} · ${esc(u.dept)}</div></div>
         </div>
-        <div class="flex items-center gap-2 mt-3 px-1 text-[11.5px] text-gray-500 cursor-pointer hover:text-slate-800" onclick="A.openSettings()" title="Cài đặt đồng bộ">
+        <div class="flex items-center gap-2 mt-3 px-1 text-[11.5px] text-gray-500" id="sync-status">
           <span id="sync-dot" class="${syncDotClass()}"></span>
-          <span class="truncate">${online() ? (sync.error ? 'Mất kết nối Google Sheet' : 'Đồng bộ Google Sheet' + (sync.lastAt ? ' · ' + pad(sync.lastAt.getHours()) + ':' + pad(sync.lastAt.getMinutes()) : '')) : 'Dữ liệu cục bộ (chưa đồng bộ)'}</span>
-          <span class="ml-auto text-gray-400">${I.gear}</span>
+          <span class="truncate">${online() ? (sync.error ? 'Mất kết nối máy chủ' : 'Đã đồng bộ' + (sync.lastAt ? ' · ' + pad(sync.lastAt.getHours()) + ':' + pad(sync.lastAt.getMinutes()) : '')) : 'Chế độ ngoại tuyến'}</span>
         </div>
         <div class="flex gap-1.5 mt-2">
           <button class="btn btn-ghost btn-sm flex-1 justify-center" onclick="A.logout()">${I.logout} Đăng xuất</button>
-          ${online() ? `<button class="btn btn-ghost btn-sm" title="Tải lại dữ liệu từ Google Sheet" onclick="A.refresh()">${I.refresh}</button>`
-                     : `<button class="btn btn-ghost btn-sm" title="Đặt lại dữ liệu mẫu" onclick="A.resetData()">${I.refresh}</button>`}
+          ${online() ? `<button class="btn btn-ghost btn-sm" title="Tải lại dữ liệu mới nhất" onclick="A.refresh()">${I.refresh}</button>` : ''}
         </div>
       </div>
     </aside>
@@ -507,8 +519,7 @@ function render(){
 
 /* ---------- Màn hình đăng nhập ---------- */
 function viewLogin(){
-  const order = { director:0, manager:1, employee:2 };
-  const list = [...DB.users].sort((a,b) => order[a.role] - order[b.role]);
+  const list = [...DB.users].sort((a,b) => ROLE_RANK[a.role] - ROLE_RANK[b.role]);
   return `
   <div class="min-h-screen flex items-center justify-center p-4">
     <div class="w-full max-w-[880px] grid md:grid-cols-5 card overflow-hidden shadow-sm">
@@ -519,8 +530,7 @@ function viewLogin(){
           <p class="text-slate-300 text-[13px] mt-2 leading-relaxed">Hệ thống quản trị OKRs & báo cáo họp tuần dành cho Nhân viên, Quản lý và Giám đốc. Theo dõi mục tiêu, check-in tiến độ và biến giải pháp thành đầu việc.</p>
         </div>
         <div class="text-[11.5px] text-slate-400">
-          <div class="flex items-center gap-2"><span class="${syncDotClass()}"></span>${online() ? (sync.error ? 'Không kết nối được Google Sheet' : 'Đang đồng bộ với Google Sheet') : 'Dữ liệu lưu trên trình duyệt này (localStorage)'}</div>
-          <a class="inline-flex items-center gap-1 mt-2 text-slate-300 hover:text-white cursor-pointer" onclick="A.openSettings()">${I.gear} Cài đặt đồng bộ Google Sheet</a>
+          <div class="flex items-center gap-2"><span class="${syncDotClass()}"></span>${online() ? (sync.error ? 'Không kết nối được máy chủ' : 'Đã kết nối máy chủ') : 'Chế độ ngoại tuyến'}</div>
         </div>
       </div>
       <div class="md:col-span-3 p-8">
@@ -533,7 +543,7 @@ function viewLogin(){
           <button id="lg-btn" class="btn btn-primary w-full justify-center">Đăng nhập</button>
         </form>
         <div class="mt-6">
-          <div class="section-title mb-2">${online() ? 'Tài khoản trong Google Sheet (tab Users)' : 'Tài khoản mẫu (mật khẩu: 123456)'}</div>
+          <div class="section-title mb-2">${online() ? 'Tài khoản' : 'Tài khoản mẫu (mật khẩu: 123456)'}</div>
           <div class="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-[300px] overflow-y-auto">
             ${list.map(u => `
               <div class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer" onclick="A.fillLogin('${esc(u.username)}')">
@@ -570,11 +580,11 @@ function viewDashboard(){
     ${stat('Mục tiêu đã duyệt', AO.length, `${AO.reduce((a,o) => a + o.krs.length, 0)} kết quả then chốt${pendingN ? ` · <span class="text-amber-600">${pendingN} chờ duyệt</span>` : ''}`)}
     ${stat('Tiến độ trung bình', avg + '%', `Kỳ vọng theo thời gian: ${ci.expected}%`, avg >= ci.expected - 10 ? 'text-green-600' : 'text-amber-600')}
     ${stat('Báo cáo tuần này', `${submitted}/${reporters.length}`, 'người có OKR đã gửi check-in', submitted === reporters.length ? 'text-green-600' : 'text-slate-900')}
-    ${stat('Công việc quá hạn', overdue, isDir() ? 'toàn công ty' : isMgr() ? 'của bạn & nhân viên trực thuộc' : 'của bạn', overdue ? 'text-red-600' : 'text-green-600')}
+    ${stat('Công việc quá hạn', overdue, isDir() ? 'toàn công ty' : isMgr() ? 'của bạn & cấp dưới' : 'của bạn', overdue ? 'text-red-600' : 'text-green-600')}
   </div>
   <div class="flex items-center gap-2 mb-4 flex-wrap">
     <span class="chip ${state.dashUser === 'all' ? 'active' : ''}" onclick="A.set('dashUser','all')">Cả đội</span>
-    ${isMgr() && !isDir() ? `<span class="chip ${state.dashUser === 'team' ? 'active' : ''}" onclick="A.set('dashUser','team')">Nhân viên của tôi</span>` : ''}
+    ${isMgr() && !isDir() ? `<span class="chip ${state.dashUser === 'team' ? 'active' : ''}" onclick="A.set('dashUser','team')">Cấp dưới của tôi</span>` : ''}
     ${people.map(u => `<span class="chip ${state.dashUser === u.id ? 'active' : ''}" onclick="A.set('dashUser','${u.id}')">${esc(u.name)}</span>`).join('')}
   </div>
   <div class="space-y-5">
@@ -650,7 +660,7 @@ function viewOKRs(){
     </div>
     <button class="btn btn-primary" onclick="A.openOkrForm()">${I.plus} Tạo OKR</button>
   </div>
-  ${!isDir() ? `<div class="card px-4 py-3 mb-4 text-[13px] text-slate-600 flex items-start gap-2"><span class="text-base-600 mt-0.5">${I.flag}</span><div>Cả đội xem được OKR của nhau. OKR của bạn sẽ ở trạng thái <b>Chờ duyệt</b> cho đến khi ${m ? `<b>${esc(m.name)}</b> (quản lý trực tiếp)` : 'quản lý trực tiếp'} hoặc Giám đốc duyệt; sửa OKR đã duyệt sẽ cần duyệt lại.${isMgr() ? ' OKR bạn tạo/sửa cho nhân viên trực thuộc được duyệt ngay.' : ''}</div></div>` : ''}
+  ${!isDir() ? `<div class="card px-4 py-3 mb-4 text-[13px] text-slate-600 flex items-start gap-2"><span class="text-base-600 mt-0.5">${I.flag}</span><div>Cả đội xem được OKR của nhau. OKR của bạn sẽ ở trạng thái <b>Chờ duyệt</b> cho đến khi ${m ? `<b>${esc(m.name)}</b> (cấp trên trực tiếp)` : 'cấp trên'}, cấp trên của họ hoặc Giám đốc duyệt; sửa OKR đã duyệt sẽ cần duyệt lại.${isMgr() ? ' OKR bạn tạo/sửa cho cấp dưới được duyệt ngay.' : ''}</div></div>` : ''}
   <div class="grid md:grid-cols-2 gap-4">
     ${list.length ? list.map(o => {
       const u = user(o.ownerId), cr = user(o.createdBy);
@@ -687,8 +697,8 @@ function openOkrForm(id, ownerId){
   const owner = o ? o.ownerId : (ownerId && owners.some(u => u.id === ownerId) ? ownerId : (isMgr() && !isDir() ? me().id : (owners.find(u => u.role !== 'director') || me()).id));
   const cycles = [...DB.cycles].sort((a,b) => b.start.localeCompare(a.start));
   const sub = isMgr()
-    ? 'OKR của nhân viên bạn quản lý được duyệt ngay. ' + (isDir() ? '' : 'OKR của chính bạn sẽ chờ cấp trên duyệt.')
-    : (o && o.status === 'approved' ? 'OKR này đã duyệt — sau khi sửa sẽ chuyển về Chờ duyệt.' : 'Sau khi gửi, OKR sẽ chờ quản lý trực tiếp duyệt.');
+    ? 'OKR của cấp dưới được duyệt ngay. ' + (isDir() ? '' : 'OKR của chính bạn sẽ chờ cấp trên duyệt.')
+    : (o && o.status === 'approved' ? 'OKR này đã duyệt — sau khi sửa sẽ chuyển về Chờ duyệt.' : 'Sau khi gửi, OKR sẽ chờ cấp trên duyệt.');
   openModal(`
     ${modalHeader(o ? 'Sửa OKR' : 'Tạo OKR mới', sub)}
     <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
@@ -853,7 +863,7 @@ function reportDetail(r){
             ${s.due ? `<span class="text-[12px] ${t && isOverdue(t) ? 'text-red-600 font-medium' : 'text-gray-500'}">Hạn ${fmt(s.due)}</span>` : ''}
             ${taskScope ? (ts ? badge(ts.t, ts.c) : badge('Chưa tạo task', 'bg-gray-100 text-gray-500 border-gray-200')) : ''}
           </div>`; }).join('')}</div>
-          ${!taskScope ? `<div class="text-[12px] text-gray-400 mt-1.5 flex items-center gap-1">${I.lock} Trạng thái công việc chỉ hiển thị với người làm, quản lý trực tiếp và Giám đốc.</div>` : ''}` : '<div class="text-gray-400 italic">Không có</div>'}
+          ${!taskScope ? `<div class="text-[12px] text-gray-400 mt-1.5 flex items-center gap-1">${I.lock} Trạng thái công việc chỉ hiển thị với người làm, các cấp trên của họ và Giám đốc.</div>` : ''}` : '<div class="text-gray-400 italic">Không có</div>'}
       </div>
       <div class="border-t border-gray-200 pt-5">
         <div class="section-title mb-3">Phản hồi & Check-in của Quản lý (${r.comments.length})</div>
@@ -879,7 +889,7 @@ function reportDetail(r){
             <textarea id="cm-${r.id}" class="input" placeholder="${manages ? 'Viết nhận xét / chỉ đạo cho nhân viên...' : 'Phản hồi lại quản lý (nếu cần)...'}" style="min-height:70px"></textarea>
             <div class="flex justify-end mt-2"><button class="btn btn-primary btn-sm" onclick="A.addComment('${r.id}')">${I.chat} Gửi ${manages ? 'phản hồi' : 'trả lời'}</button></div>
           </div>
-        </div>` : `<div class="mt-4 text-[12.5px] text-gray-400 flex items-center gap-1.5" id="comment-locked">${I.lock} Chỉ ${m ? esc(m.name) + ' (quản lý trực tiếp)' : 'quản lý trực tiếp'} hoặc Giám đốc được phản hồi báo cáo này.</div>`}
+        </div>` : `<div class="mt-4 text-[12.5px] text-gray-400 flex items-center gap-1.5" id="comment-locked">${I.lock} Chỉ cấp trên của ${esc(u.name)}${m ? ' (' + esc(m.name) + '…)' : ''} hoặc Giám đốc được phản hồi báo cáo này.</div>`}
       </div>
     </div>
   </div>`;
@@ -919,7 +929,7 @@ function openReportForm(){
 function openTaskForm(){
   const assignees = scopeUsers();
   openModal(`
-    ${modalHeader('Thêm công việc', isMgr() ? 'Bạn giao được việc cho chính mình hoặc nhân viên trực thuộc.' : '')}
+    ${modalHeader('Thêm công việc', isMgr() ? 'Bạn giao được việc cho chính mình hoặc cấp dưới.' : '')}
     <div class="p-6 space-y-4">
       <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tf-title" class="input" placeholder="Nhập nội dung công việc..."></div>
       <div class="grid grid-cols-2 gap-4">
@@ -949,7 +959,7 @@ function viewTasks(){
   const stat = (label, value, color='text-slate-900') => `<div class="card p-4"><div class="text-[12.5px] text-gray-500">${label}</div><div class="text-2xl font-semibold mt-1 ${color}">${value}</div></div>`;
   const staffN = scope.length - 1;
   const scopeNote = isDir() ? 'Bạn là Giám đốc: xem được công việc của toàn bộ nhân sự.'
-    : isMgr() ? `Bạn xem được công việc của mình và <b>${staffN}</b> nhân viên trực thuộc${staffN ? ` (${scope.slice(1).map(u => esc(u.name)).join(', ')})` : ''}.`
+    : isMgr() ? `Bạn xem được công việc của mình và <b>${staffN}</b> người cấp dưới${me().role === 'head' ? ' trong phòng' : ''}${staffN ? ` (${scope.slice(1).map(u => esc(u.name)).join(', ')})` : ''}.`
     : 'Bạn chỉ xem được công việc của chính mình.';
   return `
   <div class="card px-4 py-2.5 mb-4 text-[13px] text-slate-600 flex items-center gap-2" id="task-scope">${I.lock}<span>${scopeNote}</span></div>
@@ -959,7 +969,7 @@ function viewTasks(){
   <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
     <div class="flex items-center gap-2 flex-wrap">
       ${tab('all','Tất cả',counts.all)}${tab('todo','Cần làm',counts.todo)}${tab('doing','Đang làm',counts.doing)}${tab('done','Hoàn thành',counts.done)}${tab('overdue','Quá hạn',counts.overdue)}
-      ${isMgr() ? `<select class="input !w-auto ml-2" onchange="A.set('taskUser',this.value)"><option value="all">${isDir() ? 'Tất cả nhân sự' : 'Tôi & nhân viên của tôi'}</option>${scope.map(u => `<option value="${u.id}" ${state.taskUser === u.id ? 'selected' : ''}>${esc(u.name)}${u.id === session() ? ' (tôi)' : ''}</option>`).join('')}</select>` : ''}
+      ${isMgr() ? `<select class="input !w-auto ml-2" onchange="A.set('taskUser',this.value)"><option value="all">${isDir() ? 'Tất cả nhân sự' : 'Tôi & cấp dưới'}</option>${scope.map(u => `<option value="${u.id}" ${state.taskUser === u.id ? 'selected' : ''}>${esc(u.name)}${u.id === session() ? ' (tôi)' : ''}</option>`).join('')}</select>` : ''}
     </div>
     <button class="btn btn-primary" onclick="A.openTaskForm()">${I.plus} Thêm công việc</button>
   </div>
@@ -985,29 +995,48 @@ function viewTasks(){
 }
 
 /* ---------- Nhân sự & phân quyền (chỉ Giám đốc) ---------- */
+function orgNode(u, depth, seen){
+  if(seen.has(u.id)) return ''; seen.add(u.id);
+  const kids = staffOf(u.id).sort((a,b) => (ROLE_RANK[a.role] - ROLE_RANK[b.role]) || a.name.localeCompare(b.name));
+  const bad = u.managerId && PARENT_ROLE[u.role] && user(u.managerId).role !== PARENT_ROLE[u.role];
+  return `
+  <div class="${depth ? 'ml-6 pl-4 border-l-2 border-gray-200' : ''}">
+    <div class="flex items-center gap-2.5 py-1.5" data-node="${u.id}">
+      ${avatar(u, 'w-7 h-7 text-[10px]')}
+      <span class="font-medium text-slate-900">${esc(u.name)}</span>${roleBadge(u)}
+      <span class="text-[12px] text-gray-500 truncate">${esc(u.title || u.dept)}</span>
+      ${kids.length ? `<span class="text-[11.5px] text-gray-400">· ${kids.length} trực thuộc</span>` : ''}
+      ${bad ? `<span class="text-[11.5px] text-amber-700">· cấp trên chưa đúng cấp</span>` : ''}
+      <button class="ml-auto text-gray-400 hover:text-slate-700 p-1" title="Sửa" onclick="A.openUserForm('${u.id}')">${I.edit}</button>
+    </div>
+    ${kids.map(k => orgNode(k, depth + 1, seen)).join('')}
+  </div>`;
+}
 function viewPeople(){
-  const leaders = DB.users.filter(u => u.role !== 'employee');
-  const orphans = DB.users.filter(u => u.role !== 'director' && !u.managerId);
-  const order = { director:0, manager:1, employee:2 };
-  const rows = [...DB.users].sort((a,b) => (order[a.role] - order[b.role]) || (a.managerId || '').localeCompare(b.managerId || '') || a.name.localeCompare(b.name));
+  const seen = new Set();
+  const roots = DB.users.filter(u => u.role === 'director');
+  const tree = roots.map(r => orgNode(r, 0, seen)).join('');
+  const orphans = DB.users.filter(u => !seen.has(u.id));
+  const rows = [...DB.users].sort((a,b) => (ROLE_RANK[a.role] - ROLE_RANK[b.role]) || a.name.localeCompare(b.name));
+  const counts = ROLE_KEYS.map(k => `${ROLES[k].t}: <b>${DB.users.filter(u => u.role === k).length}</b>`).join(' · ');
   return `
   <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
-    <div class="text-[13px] text-slate-600 max-w-3xl">Gán <b>quản lý trực tiếp</b> cho từng người. Quản lý chỉ xem và giao được công việc của nhân viên trực thuộc, duyệt OKR và viết chỉ đạo cho họ. OKR và báo cáo tuần thì cả đội xem được của nhau.</div>
+    <div class="text-[13px] text-slate-600 max-w-3xl">Sơ đồ <b>Giám đốc → Trưởng phòng → Quản lý → Nhân viên</b>. Mỗi người gán đúng một <b>cấp trên trực tiếp</b> ở cấp ngay trên. Cấp trên xem và giao được công việc, duyệt OKR, viết chỉ đạo cho toàn bộ cấp dưới của mình. OKR và báo cáo tuần thì cả đội xem được của nhau.</div>
     <button class="btn btn-primary" onclick="A.openUserForm()">${I.plus} Thêm nhân sự</button>
   </div>
-  ${orphans.length ? `<div class="card px-4 py-3 mb-4 text-[13px] border-amber-200 bg-amber-50 text-amber-800">${orphans.length} người chưa có quản lý trực tiếp (${orphans.map(u => esc(u.name)).join(', ')}) — chỉ Giám đốc xem được công việc của họ.</div>` : ''}
-  <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-4 mb-5" id="org-groups">
-    ${leaders.map(l => { const st = staffOf(l.id); return `
-    <div class="card p-4" data-leader="${l.id}">
-      <div class="flex items-center gap-2.5">${avatar(l, 'w-8 h-8 text-[11px]')}<div class="flex-1 min-w-0"><div class="font-semibold text-slate-900 truncate">${esc(l.name)}</div><div class="text-[12px] text-gray-500 truncate">${esc(l.title || l.dept)}</div></div>${roleBadge(l)}</div>
-      <div class="mt-3 text-[12px] text-gray-500 mb-1.5">${st.length} người trực thuộc</div>
-      <div class="flex flex-wrap gap-1.5">${st.length ? st.map(s => `<span class="inline-flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full pl-1 pr-2.5 py-0.5 text-[12.5px]">${avatar(s, 'w-5 h-5 text-[9px]')}${esc(s.name)}</span>`).join('') : '<span class="text-gray-400 text-[12.5px] italic">Chưa có ai</span>'}</div>
-    </div>`; }).join('')}
+  <div class="card p-5 mb-5" id="org-tree">
+    <div class="flex items-center justify-between mb-2"><div class="section-title">Sơ đồ tổ chức</div><div class="text-[12px] text-gray-500">${counts}</div></div>
+    ${tree || '<div class="text-gray-400 italic">Chưa có Giám đốc.</div>'}
+    ${orphans.length ? `
+    <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3" id="org-orphans">
+      <div class="text-[13px] text-amber-800 mb-1">${orphans.length} người chưa gắn vào sơ đồ (chưa có cấp trên) — chỉ Giám đốc xem được công việc của họ:</div>
+      ${orphans.map(o => orgNode(o, 0, seen)).join('')}
+    </div>` : ''}
   </div>
   <div class="card overflow-hidden">
     <table class="w-full">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide">
-        <tr><th class="text-left font-medium py-2.5 px-4">Nhân sự</th><th class="text-left font-medium py-2.5 px-2">Vai trò</th><th class="text-left font-medium py-2.5 px-2">Quản lý trực tiếp</th><th class="text-left font-medium py-2.5 px-2">Tên đăng nhập</th><th class="w-16"></th></tr>
+        <tr><th class="text-left font-medium py-2.5 px-4">Nhân sự</th><th class="text-left font-medium py-2.5 px-2">Vai trò</th><th class="text-left font-medium py-2.5 px-2">Cấp trên trực tiếp</th><th class="text-left font-medium py-2.5 px-2">Tên đăng nhập</th><th class="w-16"></th></tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
         ${rows.map(u => { const m = u.managerId ? user(u.managerId) : null; return `
@@ -1022,21 +1051,27 @@ function viewPeople(){
     </table>
   </div>`;
 }
+/* Danh sách cấp trên hợp lệ theo vai trò: NV → Quản lý, Quản lý → Trưởng phòng, Trưởng phòng → Giám đốc. */
+function parentOptions(role, selfId, selected){
+  const pr = PARENT_ROLE[role];
+  if(!pr) return '<option value="">— Không có (Giám đốc là cấp cao nhất) —</option>';
+  const list = DB.users.filter(x => x.role === pr && x.id !== selfId);
+  return `<option value="">— Chưa gán —</option>` + list.map(l => `<option value="${l.id}" ${selected === l.id ? 'selected' : ''}>${esc(l.name)} · ${esc(l.dept || ROLES[l.role].t)}</option>`).join('');
+}
 function openUserForm(id){
   if(!isDir()) return;
   const u = id ? DB.users.find(x => x.id === id) : null;
-  const leaders = DB.users.filter(x => x.role !== 'employee' && x.id !== id);
   const role = u ? u.role : 'employee';
   openModal(`
-    ${modalHeader(u ? 'Sửa nhân sự' : 'Thêm nhân sự', 'Quản lý trực tiếp quyết định ai xem và giao được công việc của người này.')}
+    ${modalHeader(u ? 'Sửa nhân sự' : 'Thêm nhân sự', 'Cấp trên trực tiếp quyết định ai xem và giao được công việc của người này.')}
     <div class="p-6 space-y-4">
       <div class="grid grid-cols-2 gap-4">
         <div><label class="label">Họ tên <span class="text-red-500">*</span></label><input id="uf-name" class="input" value="${esc(u ? u.name : '')}" placeholder="Nguyễn Văn A"></div>
         <div><label class="label">Tên đăng nhập <span class="text-red-500">*</span></label><input id="uf-username" class="input" value="${esc(u ? u.username : '')}" placeholder="vana" autocomplete="off"></div>
       </div>
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="label">Vai trò</label><select id="uf-role" class="input">${ROLE_KEYS.map(k => `<option value="${k}" ${k === role ? 'selected' : ''}>${ROLES[k].t}</option>`).join('')}</select></div>
-        <div><label class="label">Quản lý trực tiếp</label><select id="uf-manager" class="input"><option value="">— Không có —</option>${leaders.map(l => `<option value="${l.id}" ${u && u.managerId === l.id ? 'selected' : ''}>${esc(l.name)} · ${ROLES[l.role].t}</option>`).join('')}</select></div>
+        <div><label class="label">Vai trò</label><select id="uf-role" class="input" onchange="A.onRoleChange('${u ? u.id : ''}')">${ROLE_KEYS.map(k => `<option value="${k}" ${k === role ? 'selected' : ''}>${ROLES[k].t}</option>`).join('')}</select></div>
+        <div><label class="label" id="uf-manager-label">Cấp trên trực tiếp${PARENT_ROLE[role] ? ` (${ROLES[PARENT_ROLE[role]].t})` : ''}</label><select id="uf-manager" class="input">${parentOptions(role, id, u ? u.managerId : '')}</select></div>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="label">Phòng ban</label><input id="uf-dept" class="input" value="${esc(u ? u.dept : '')}"></div>
@@ -1065,7 +1100,7 @@ const A = {
       btn.disabled = true; btn.textContent = 'Đang đăng nhập...';
       try { const j = await api('login', { username:un, password:pw }); u = j.user; tk = j.token || ''; }
       catch(e){ btn.disabled = false; btn.textContent = 'Đăng nhập'; return fail(e.message); }
-      if(!tk){ btn.disabled = false; btn.textContent = 'Đăng nhập'; return fail('Máy chủ chưa cập nhật Code.gs phiên bản 3 (phân quyền). Hãy triển khai lại Apps Script.'); }
+      if(!tk){ btn.disabled = false; btn.textContent = 'Đăng nhập'; return fail('Máy chủ chưa cập nhật Code.gs mới (phân quyền). Hãy triển khai lại Apps Script.'); }
     } else {
       u = DB.users.find(u => u.username === un && u.password === pw);
       if(!u) return fail('Sai tên đăng nhập hoặc mật khẩu.');
@@ -1075,53 +1110,14 @@ const A = {
   },
   logout(){ localStorage.removeItem(SESSION_KEY); if(online()){ DB.tasks = []; save(); } render(); },
   refresh(){ refreshFromServer(false); },
-  openSettings(){
-    openModal(`
-      ${modalHeader('Cài đặt đồng bộ Google Sheet', 'Nhiều người dùng chung một bộ dữ liệu qua Google Sheet + Apps Script.')}
-      <div class="p-6 space-y-4">
-        <div>
-          <label class="label">URL Ứng dụng web (Apps Script)</label>
-          <input id="st-url" class="input" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(apiUrl())}">
-          <p class="text-[12px] text-gray-500 mt-1.5">Để trống và bấm Lưu để dùng chế độ cục bộ (dữ liệu mẫu, chỉ lưu trên trình duyệt này).${DEFAULT_API && apiUrl() !== DEFAULT_API ? ` <a class="text-base-600 hover:underline cursor-pointer" onclick="document.getElementById('st-url').value='${esc(DEFAULT_API)}'">Dùng lại URL mặc định của team</a>` : ''}</p>
-        </div>
-        <div id="st-status" class="text-[13px] hidden"></div>
-        <details class="text-[12.5px] text-gray-600">
-          <summary class="cursor-pointer font-medium text-slate-700">Hướng dẫn thiết lập (5 phút)</summary>
-          <ol class="list-decimal ml-5 mt-2 space-y-1">
-            <li>Mở Google Sheet <b>OKR Weekly - Data</b> → <b>Tiện ích mở rộng → Apps Script</b>.</li>
-            <li>Xoá nội dung mặc định, dán toàn bộ file <code>Code.gs</code> đi kèm, bấm Lưu.</li>
-            <li><b>Triển khai → Tạo tuỳ chọn triển khai mới</b> → loại <b>Ứng dụng web</b>.</li>
-            <li>Thực thi với tư cách: <b>Tôi</b>; Ai có quyền truy cập: <b>Bất kỳ ai</b> → Triển khai, cấp quyền.</li>
-            <li>Sao chép URL ứng dụng web (kết thúc bằng <code>/exec</code>) dán vào ô trên → <b>Kiểm tra kết nối</b> → <b>Lưu</b>.</li>
-          </ol>
-        </details>
-      </div>
-      <div class="px-6 py-4 border-t border-gray-200 flex justify-between gap-2">
-        <button class="btn btn-ghost" onclick="A.testConnection()">Kiểm tra kết nối</button>
-        <div class="flex gap-2"><button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button><button class="btn btn-primary" onclick="A.saveSettings()">${I.check} Lưu</button></div>
-      </div>`, 'max-w-xl');
-  },
-  async testConnection(){
-    const url = document.getElementById('st-url').value.trim(), st = document.getElementById('st-status');
-    st.className = 'text-[13px] text-gray-500'; st.textContent = 'Đang kiểm tra...';
-    if(!url){ st.className = 'text-[13px] text-red-600'; st.textContent = 'Chưa nhập URL.'; return; }
-    try { const j = await apiFetch(url + (url.includes('?') ? '&' : '?') + 'ping=1&t=' + Date.now()); st.className = 'text-[13px] text-green-700'; st.textContent = '✓ Kết nối thành công' + (j.time ? ' (giờ máy chủ: ' + fmtDT(j.time) + ')' : '') + (j.version >= 3 ? ' · Code.gs v3 (có phân quyền).' : ' · ⚠ Code.gs cũ, cần triển khai bản v3.'); }
-    catch(e){ st.className = 'text-[13px] text-red-600'; st.textContent = '✕ ' + e.message; }
-  },
-  async saveSettings(){
-    const url = document.getElementById('st-url').value.trim();
-    if(url && !/^https?:\/\//.test(url)){ toast('URL không hợp lệ.', 'error'); return; }
-    localStorage.setItem(API_KEY, url); // chuỗi rỗng = tắt đồng bộ, dùng dữ liệu cục bộ
-    sync.error = null; A.closeModal();
-    localStorage.removeItem(SESSION_KEY);
-    if(url){ try { await apiLoad(); toast('Đã bật đồng bộ Google Sheet.'); } catch(e){ toast('Lưu URL nhưng chưa kết nối được: ' + e.message, 'error'); } }
-    else { DB = seedData(); save(); toast('Đã chuyển về chế độ dữ liệu cục bộ (dữ liệu mẫu).', 'info'); }
-    render();
-  },
-  resetData(){ if(!confirm('Đặt lại toàn bộ dữ liệu về dữ liệu mẫu? Mọi thay đổi của bạn sẽ bị xoá.')) return; DB = seedData(); save(); state.reportId = null; render(); toast('Đã đặt lại dữ liệu mẫu.', 'info'); },
   selectReport(id){ state.reportId = id; render(); },
   gotoReport(id){ const r = DB.reports.find(r => r.id === id); if(!r) return; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = id; render(); },
   openReportForm, openTaskForm, openOkrForm, openReview, openCycles, openUserForm,
+  onRoleChange(id){
+    const role = document.getElementById('uf-role').value, cur = document.getElementById('uf-manager').value;
+    document.getElementById('uf-manager').innerHTML = parentOptions(role, id, cur);
+    document.getElementById('uf-manager-label').textContent = 'Cấp trên trực tiếp' + (PARENT_ROLE[role] ? ` (${ROLES[PARENT_ROLE[role]].t})` : '');
+  },
   setCycle(id){ state.cycleId = id; state.reportId = null; render(); },
   addKrRow(){ document.getElementById('of-krs').insertAdjacentHTML('beforeend', krRowHTML()); const rows = document.querySelectorAll('.kr-title'); if(rows.length) rows[rows.length-1].focus(); },
   submitOkr(id){
@@ -1277,8 +1273,10 @@ const A = {
     if(DB.users.some(x => x.username === u.username && x.id !== u.id)){ toast(`Tên đăng nhập "${u.username}" đã được dùng.`, 'error'); return; }
     if(!old && !u.password){ toast('Tài khoản mới cần có mật khẩu.', 'error'); return; }
     if(old && old.id === session() && u.role !== 'director'){ toast('Không thể tự bỏ vai trò Giám đốc của chính mình.', 'error'); return; }
-    if(u.managerId === u.id){ toast('Không thể tự làm quản lý của chính mình.', 'error'); return; }
-    if(old && old.role !== 'employee' && u.role === 'employee'){ const n = staffOf(old.id).length; if(n){ toast(`Còn ${n} nhân sự đang trực thuộc người này. Hãy chuyển họ sang quản lý khác trước.`, 'error'); return; } }
+    if(u.role === 'director') u.managerId = '';
+    if(u.managerId === u.id){ toast('Không thể tự làm cấp trên của chính mình.', 'error'); return; }
+    if(u.managerId && user(u.managerId).role !== PARENT_ROLE[u.role]){ toast(`${ROLES[u.role].t} phải trực thuộc một ${ROLES[PARENT_ROLE[u.role]].t}.`, 'error'); return; }
+    if(old && old.role !== u.role){ const wrong = staffOf(old.id).filter(x => PARENT_ROLE[x.role] !== u.role).length; if(wrong){ toast(`Còn ${wrong} người trực thuộc không hợp với vai trò mới. Hãy chuyển họ sang cấp trên khác trước.`, 'error'); return; } }
     u.color = old ? old.color : PALETTE[DB.users.length % PALETTE.length];
     if(!u.password) delete u.password;
     A.closeModal();
@@ -1299,9 +1297,9 @@ async function init(){
   load(); linkSeedTasks();
   if(online()){
     if(session() && !token()) localStorage.removeItem(SESSION_KEY);       // phiên cũ (trước v3) không có token → đăng nhập lại
-    document.getElementById('app').innerHTML = `<div class="min-h-screen flex items-center justify-center text-gray-500 text-sm"><div class="flex items-center gap-3"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>Đang tải dữ liệu từ Google Sheet...</div></div>`;
+    document.getElementById('app').innerHTML = `<div class="min-h-screen flex items-center justify-center text-gray-500 text-sm"><div class="flex items-center gap-3"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>Đang tải dữ liệu...</div></div>`;
     try { await apiLoad(); }
-    catch(e){ if(e.auth){ localStorage.removeItem(SESSION_KEY); DB.tasks = []; save(); toast(e.message, 'error'); } else toast('Không tải được từ Google Sheet, đang dùng dữ liệu đã lưu trên máy. ' + e.message, 'error'); }
+    catch(e){ if(e.auth){ localStorage.removeItem(SESSION_KEY); DB.tasks = []; save(); toast(e.message, 'error'); } else toast('Không tải được dữ liệu mới, đang dùng dữ liệu đã lưu trên máy. ' + e.message, 'error'); }
   }
   render();
 }

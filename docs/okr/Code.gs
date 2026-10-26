@@ -1,12 +1,13 @@
 /**
  * OKR Weekly — Backend Google Apps Script
  * Gắn với Google Sheet "OKR Weekly - Data" (7 tab: Cycles, Users, OKRs, KRs, Reports, Comments, Tasks)
- * Phiên bản 3: phân quyền theo quản lý trực tiếp.
- *   - Vai trò: director (Giám đốc) · manager (Quản lý) · employee (Nhân viên); cột Users.managerId = quản lý trực tiếp.
+ * Phiên bản 4: sơ đồ tổ chức 4 cấp Giám đốc → Trưởng phòng → Quản lý → Nhân viên.
+ *   - Vai trò: director (Giám đốc) · head (Trưởng phòng) · manager (Quản lý) · employee (Nhân viên);
+ *     cột Users.managerId = cấp trên trực tiếp, bắt buộc đúng cấp: NV → Quản lý → Trưởng phòng → Giám đốc.
+ *   - Cấp trên (trực tiếp hoặc gián tiếp) quản lý được toàn bộ cấp dưới của mình: Trưởng phòng thấy cả phòng.
  *   - OKR và báo cáo tuần: cả đội xem được của nhau.
- *   - Công việc (Tasks): lọc NGAY TẠI MÁY CHỦ — nhân viên chỉ nhận việc của mình, quản lý nhận việc của mình + nhân viên trực thuộc,
- *     Giám đốc nhận tất cả. Người không đăng nhập (không có token) không nhận được công việc nào.
- *   - Duyệt OKR, viết chỉ đạo trên báo cáo, giao/sửa công việc: chỉ quản lý trực tiếp hoặc Giám đốc.
+ *   - Công việc (Tasks): lọc NGAY TẠI MÁY CHỦ — mỗi người nhận việc của mình + toàn bộ cấp dưới; Giám đốc nhận tất cả. Người không đăng nhập (không có token) không nhận được công việc nào.
+ *   - Duyệt OKR, viết chỉ đạo trên báo cáo, giao/sửa công việc: cấp trên trong chuỗi quản lý hoặc Giám đốc.
  *   - Đăng nhập trả về token ký HMAC (hạn 30 ngày); mọi thao tác ghi đều kiểm tra token và quyền.
  * Sau khi dán code mới: Triển khai → Quản lý tuỳ chọn triển khai → ✏️ → Phiên bản: Mới → Triển khai (URL /exec không đổi).
  *
@@ -27,16 +28,18 @@ var TABS = {
 var NUMERIC = { week: 1, year: 1, current: 1, target: 1, baseline: 1 };
 var DATE_ONLY = { due: 1, start: 1, end: 1 };
 var BOOL = { acknowledged: 1, active: 1 };
-var ROLES = ['director', 'manager', 'employee'];
+var ROLES = ['director', 'head', 'manager', 'employee'];
+var PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };   // cấp trên trực tiếp bắt buộc
 var TOKEN_DAYS = 30;
 var SCHEMA_VERSION = '3';
+var ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
 
 /* ---------------- HTTP ---------------- */
 function doGet(e) {
   try {
     ensureSchema_();
     var p = (e && e.parameter) || {};
-    if (p.ping) return json({ ok: true, ping: 'pong', version: 3, time: new Date().toISOString() });
+    if (p.ping) return json({ ok: true, ping: 'pong', version: 4, time: new Date().toISOString() });
     var viewer = p.token ? verifyToken(p.token) : null;   // không token: vẫn xem OKR/báo cáo, nhưng không có công việc
     return json({ ok: true, db: loadDB(viewer) });
   } catch (err) { return errJson(err); }
@@ -48,7 +51,7 @@ function doPost(e) {
     ensureSchema_();
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var action = body.action, p = body.payload || {};
-    if (action === 'ping') return json({ ok: true, ping: 'pong', version: 3 });
+    if (action === 'ping') return json({ ok: true, ping: 'pong', version: 4 });
     lock.waitLock(15000);
     var extra = {}, viewer;
     if (action === 'login') {
@@ -130,9 +133,9 @@ function normalizeRoles_(users) {
     if (ROLES.indexOf(u.role) < 0) u.role = 'employee';
     u.managerId = u.managerId || '';
   });
-  // Dữ liệu cũ chưa có Giám đốc: quản lý không có cấp trên được coi là Giám đốc.
+  // Dữ liệu cũ chưa có Giám đốc: quản lý / trưởng phòng không có cấp trên được coi là Giám đốc.
   if (!users.some(function (u) { return u.role === 'director'; }))
-    users.forEach(function (u) { if (u.role === 'manager' && !u.managerId) u.role = 'director'; });
+    users.forEach(function (u) { if ((u.role === 'manager' || u.role === 'head') && !u.managerId) u.role = 'director'; });
   return users;
 }
 function getUsers(withPassword) {
@@ -145,11 +148,17 @@ function ctx_(viewer) {
   users.forEach(function (u) { byId[u.id] = u; });
   return { me: byId[viewer.id] || viewer, users: users, byId: byId };
 }
-/* viewer có quyền quản lý targetId: Giám đốc quản lý tất cả; Quản lý chỉ quản lý nhân viên trực thuộc (không gồm chính mình). */
+/* viewer quản lý được targetId khi là Giám đốc, hoặc là cấp trên (trực tiếp/gián tiếp) của target trong chuỗi managerId. */
 function canManage_(c, targetId) {
   if (c.me.role === 'director') return true;
-  var t = c.byId[targetId];
-  return c.me.role === 'manager' && !!t && t.id !== c.me.id && t.managerId === c.me.id;
+  if (c.me.role !== 'head' && c.me.role !== 'manager') return false;
+  var t = c.byId[targetId], seen = {};
+  if (!t || t.id === c.me.id) return false;
+  while (t && t.managerId && !seen[t.id]) {
+    if (t.managerId === c.me.id) return true;
+    seen[t.id] = 1; t = c.byId[t.managerId];
+  }
+  return false;
 }
 function canSeeTaskOf_(c, assigneeId) { return assigneeId === c.me.id || canManage_(c, assigneeId); }
 function requireDirector_(c) { if (c.me.role !== 'director') throw new Error('Chỉ Giám đốc được thực hiện thao tác này.'); }
@@ -304,7 +313,7 @@ function addComment(c, p) {
   var cm = p.comment;
   if (!cm || !cm.reportId || !cm.text) throw new Error('Thiếu nội dung phản hồi.');
   var r = byId_('Reports', cm.reportId); if (!r) throw new Error('Báo cáo không còn tồn tại.');
-  if (r.userId !== c.me.id && !canManage_(c, r.userId)) deny_('Chỉ quản lý trực tiếp hoặc Giám đốc được phản hồi báo cáo này.');
+  if (r.userId !== c.me.id && !canManage_(c, r.userId)) deny_('Chỉ cấp trên của người viết hoặc Giám đốc được phản hồi báo cáo này.');
   appendObj('Comments', { id: cm.id, reportId: cm.reportId, authorId: c.me.id, text: cm.text, createdAt: cm.createdAt, acknowledged: false, ackAt: '' });
 }
 function ackComment(c, p) {
@@ -361,7 +370,7 @@ function saveOKR(c, p) {
 function reviewOKR(c, p) {
   if (!p.id || ['approved', 'rejected'].indexOf(p.status) < 0) throw new Error('Thiếu dữ liệu duyệt.');
   var o = byId_('OKRs', p.id); if (!o) throw new Error('Không tìm thấy OKR.');
-  if (!canManage_(c, o.ownerId)) deny_('Chỉ quản lý trực tiếp hoặc Giám đốc được duyệt OKR này.');
+  if (!canManage_(c, o.ownerId)) deny_('Chỉ cấp trên của người phụ trách hoặc Giám đốc được duyệt OKR này.');
   updateById('OKRs', p.id, { status: p.status, reviewNote: p.reviewNote || '', updatedAt: p.updatedAt || new Date().toISOString() });
 }
 function deleteOKR(c, p) {
@@ -385,14 +394,15 @@ function saveUser(c, p) {
   if (all.some(function (x) { return x.username === username && x.id !== id; })) throw new Error('Tên đăng nhập "' + username + '" đã được dùng.');
   if (!old && !u.password) throw new Error('Tài khoản mới cần có mật khẩu.');
   if (old && old.id === c.me.id && role !== 'director') throw new Error('Không thể tự bỏ vai trò Giám đốc của chính mình.');
-  var mgrId = u.managerId || '';
+  var mgrId = role === 'director' ? '' : (u.managerId || '');
   if (mgrId) {
     var m = all.filter(function (x) { return x.id === mgrId; })[0];
-    if (!m || m.id === id || (m.role !== 'manager' && m.role !== 'director')) throw new Error('Quản lý trực tiếp không hợp lệ.');
+    if (!m || m.id === id) throw new Error('Cấp trên trực tiếp không hợp lệ.');
+    if (m.role !== PARENT_ROLE[role]) throw new Error(ROLE_NAME[role] + ' phải trực thuộc một ' + ROLE_NAME[PARENT_ROLE[role]] + '.');
   }
-  if (old && old.role !== 'employee' && role === 'employee') {
-    var n = all.filter(function (x) { return x.managerId === old.id; }).length;
-    if (n) throw new Error('Còn ' + n + ' nhân sự đang trực thuộc người này. Hãy chuyển họ sang quản lý khác trước.');
+  if (old && old.role !== role) {
+    var wrong = all.filter(function (x) { return x.managerId === old.id && PARENT_ROLE[x.role] !== role; });
+    if (wrong.length) throw new Error('Còn ' + wrong.length + ' người trực thuộc không hợp với vai trò mới. Hãy chuyển họ sang cấp trên khác trước.');
   }
   var rec = { id: id, username: username, name: name, role: role, dept: u.dept || '', title: u.title || '', color: u.color || (old && old.color) || '#2f6fed', managerId: mgrId };
   if (u.password) rec.password = String(u.password);
