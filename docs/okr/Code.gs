@@ -1,18 +1,23 @@
 /**
  * OKR Weekly — Backend Google Apps Script
  * Gắn với Google Sheet "OKR Weekly - Data" (7 tab: Cycles, Users, OKRs, KRs, Reports, Comments, Tasks)
- * Phiên bản 2: thêm chu kỳ (Cycles), trạng thái duyệt OKR, giá trị đầu kỳ (baseline) của KR.
- * Sau khi dán code mới: Triển khai → Quản lý tuỳ chọn triển khai → ✏️ → Phiên bản: Mới → Triển khai.
+ * Phiên bản 3: phân quyền theo quản lý trực tiếp.
+ *   - Vai trò: director (Giám đốc) · manager (Quản lý) · employee (Nhân viên); cột Users.managerId = quản lý trực tiếp.
+ *   - OKR và báo cáo tuần: cả đội xem được của nhau.
+ *   - Công việc (Tasks): lọc NGAY TẠI MÁY CHỦ — nhân viên chỉ nhận việc của mình, quản lý nhận việc của mình + nhân viên trực thuộc,
+ *     Giám đốc nhận tất cả. Người không đăng nhập (không có token) không nhận được công việc nào.
+ *   - Duyệt OKR, viết chỉ đạo trên báo cáo, giao/sửa công việc: chỉ quản lý trực tiếp hoặc Giám đốc.
+ *   - Đăng nhập trả về token ký HMAC (hạn 30 ngày); mọi thao tác ghi đều kiểm tra token và quyền.
+ * Sau khi dán code mới: Triển khai → Quản lý tuỳ chọn triển khai → ✏️ → Phiên bản: Mới → Triển khai (URL /exec không đổi).
  *
- * Triển khai: Tiện ích mở rộng > Apps Script > dán file này > Triển khai > Ứng dụng web
+ * Triển khai lần đầu: Tiện ích mở rộng > Apps Script > dán file này > Triển khai > Ứng dụng web
  *   - Thực thi với tư cách: Tôi (chủ sở hữu Sheet)
  *   - Ai có quyền truy cập: Bất kỳ ai
- * Dán URL ứng dụng web (…/exec) vào mục "Cài đặt đồng bộ" của index.html.
  */
 
 var TABS = {
   Cycles:   ['id', 'name', 'start', 'end', 'active'],
-  Users:    ['id', 'username', 'password', 'name', 'role', 'dept', 'title', 'color'],
+  Users:    ['id', 'username', 'password', 'name', 'role', 'dept', 'title', 'color', 'managerId'],
   OKRs:     ['id', 'ownerId', 'title', 'cycleId', 'status', 'createdBy', 'reviewNote', 'updatedAt'],
   KRs:      ['id', 'okrId', 'title', 'current', 'target', 'unit', 'baseline'],
   Reports:  ['id', 'userId', 'week', 'year', 'okrId', 'createdAt', 'work', 'issues', 'causes', 'krUpdates', 'solutions'],
@@ -22,51 +27,133 @@ var TABS = {
 var NUMERIC = { week: 1, year: 1, current: 1, target: 1, baseline: 1 };
 var DATE_ONLY = { due: 1, start: 1, end: 1 };
 var BOOL = { acknowledged: 1, active: 1 };
+var ROLES = ['director', 'manager', 'employee'];
+var TOKEN_DAYS = 30;
+var SCHEMA_VERSION = '3';
 
 /* ---------------- HTTP ---------------- */
 function doGet(e) {
   try {
-    if (e && e.parameter && e.parameter.ping) return json({ ok: true, ping: 'pong', time: new Date().toISOString() });
-    return json({ ok: true, db: loadDB() });
-  } catch (err) { return json({ ok: false, error: String(err) }); }
+    ensureSchema_();
+    var p = (e && e.parameter) || {};
+    if (p.ping) return json({ ok: true, ping: 'pong', version: 3, time: new Date().toISOString() });
+    var viewer = p.token ? verifyToken(p.token) : null;   // không token: vẫn xem OKR/báo cáo, nhưng không có công việc
+    return json({ ok: true, db: loadDB(viewer) });
+  } catch (err) { return errJson(err); }
 }
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(15000);
-    var body = JSON.parse(e.postData.contents || '{}');
+    ensureSchema_();
+    var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var action = body.action, p = body.payload || {};
-    var extra = {};
-    switch (action) {
-      case 'login':       extra.user = login(p); break;
-      case 'addReport':   addReport(p); break;
-      case 'deleteReport': deleteReport(p); break;
-      case 'addComment':  addComment(p); break;
-      case 'ackComment':  ackComment(p); break;
-      case 'addTask':     addTask(p); break;
-      case 'updateTask':  updateTask(p); break;
-      case 'deleteTask':  deleteTask(p); break;
-      case 'saveOKR':     saveOKR(p); break;
-      case 'reviewOKR':   reviewOKR(p); break;
-      case 'deleteOKR':   deleteOKR(p); break;
-      case 'saveCycle':   saveCycle(p); break;
-      case 'setActiveCycle': setActiveCycle(p); break;
-      case 'deleteCycle': deleteCycle(p); break;
-      case 'ping':        return json({ ok: true, ping: 'pong' });
-      default: throw new Error('Hành động không hợp lệ: ' + action);
+    if (action === 'ping') return json({ ok: true, ping: 'pong', version: 3 });
+    lock.waitLock(15000);
+    var extra = {}, viewer;
+    if (action === 'login') {
+      viewer = login(p);
+      extra.user = viewer; extra.token = makeToken(viewer.id);
+    } else {
+      viewer = verifyToken(body.token);
+      var c = ctx_(viewer);
+      switch (action) {
+        case 'addReport':      addReport(c, p); break;
+        case 'deleteReport':   deleteReport(c, p); break;
+        case 'addComment':     addComment(c, p); break;
+        case 'ackComment':     ackComment(c, p); break;
+        case 'addTask':        addTask(c, p); break;
+        case 'updateTask':     updateTask(c, p); break;
+        case 'deleteTask':     deleteTask(c, p); break;
+        case 'saveOKR':        saveOKR(c, p); break;
+        case 'reviewOKR':      reviewOKR(c, p); break;
+        case 'deleteOKR':      deleteOKR(c, p); break;
+        case 'saveCycle':      requireDirector_(c); saveCycle(p); break;
+        case 'setActiveCycle': requireDirector_(c); setActiveCycle(p); break;
+        case 'deleteCycle':    requireDirector_(c); deleteCycle(p); break;
+        case 'saveUser':       saveUser(c, p); break;
+        default: throw new Error('Hành động không hợp lệ: ' + action);
+      }
+      viewer = getUsers().filter(function (u) { return u.id === viewer.id; })[0] || viewer;   // vai trò có thể vừa đổi
     }
-    var out = { ok: true, db: loadDB() };
+    var out = { ok: true, db: loadDB(viewer) };
     for (var k in extra) out[k] = extra[k];
     return json(out);
   } catch (err) {
-    return json({ ok: false, error: String(err && err.message || err) });
+    return errJson(err);
   } finally { try { lock.releaseLock(); } catch (_) {} }
 }
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
+function errJson(err) {
+  return json({ ok: false, error: String(err && err.message || err), auth: !!(err && err.auth) });
+}
+
+/* ---------------- Token đăng nhập (HMAC, không cần lưu phiên) ---------------- */
+function secret_() {
+  var props = PropertiesService.getScriptProperties();
+  var s = props.getProperty('TOKEN_SECRET');
+  if (!s) { s = Utilities.getUuid() + Utilities.getUuid(); props.setProperty('TOKEN_SECRET', s); }
+  return s;
+}
+function sign_(data) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(data, secret_())).replace(/=+$/, '');
+}
+function makeToken(userId) {
+  var data = userId + '.' + (Date.now() + TOKEN_DAYS * 864e5);
+  return data + '.' + sign_(data);
+}
+function authError_(msg) {
+  var e = new Error(msg || 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.');
+  e.auth = true;
+  return e;
+}
+function verifyToken(tok) {
+  if (!tok) throw authError_('Vui lòng đăng nhập lại để tiếp tục.');
+  tok = String(tok);
+  var i = tok.lastIndexOf('.'); if (i < 0) throw authError_();
+  var data = tok.slice(0, i), sig = tok.slice(i + 1);
+  var j = data.lastIndexOf('.'); if (j < 0) throw authError_();
+  var uid = data.slice(0, j), exp = Number(data.slice(j + 1));
+  if (sign_(data) !== sig || !(exp > Date.now())) throw authError_();
+  var u = getUsers().filter(function (x) { return x.id === uid; })[0];
+  if (!u) throw authError_('Tài khoản không còn tồn tại.');
+  return u;
+}
+
+/* ---------------- Phân quyền ---------------- */
+function normalizeRoles_(users) {
+  users.forEach(function (u) {
+    u.role = String(u.role || '').trim().toLowerCase();
+    if (ROLES.indexOf(u.role) < 0) u.role = 'employee';
+    u.managerId = u.managerId || '';
+  });
+  // Dữ liệu cũ chưa có Giám đốc: quản lý không có cấp trên được coi là Giám đốc.
+  if (!users.some(function (u) { return u.role === 'director'; }))
+    users.forEach(function (u) { if (u.role === 'manager' && !u.managerId) u.role = 'director'; });
+  return users;
+}
+function getUsers(withPassword) {
+  var users = normalizeRoles_(readTab('Users'));
+  if (!withPassword) users.forEach(function (u) { delete u.password; });
+  return users;
+}
+function ctx_(viewer) {
+  var users = getUsers(), byId = {};
+  users.forEach(function (u) { byId[u.id] = u; });
+  return { me: byId[viewer.id] || viewer, users: users, byId: byId };
+}
+/* viewer có quyền quản lý targetId: Giám đốc quản lý tất cả; Quản lý chỉ quản lý nhân viên trực thuộc (không gồm chính mình). */
+function canManage_(c, targetId) {
+  if (c.me.role === 'director') return true;
+  var t = c.byId[targetId];
+  return c.me.role === 'manager' && !!t && t.id !== c.me.id && t.managerId === c.me.id;
+}
+function canSeeTaskOf_(c, assigneeId) { return assigneeId === c.me.id || canManage_(c, assigneeId); }
+function requireDirector_(c) { if (c.me.role !== 'director') throw new Error('Chỉ Giám đốc được thực hiện thao tác này.'); }
+function deny_(msg) { throw new Error(msg || 'Bạn không có quyền thực hiện thao tác này.'); }
 
 /* ---------------- Đọc dữ liệu ---------------- */
 function ss() { return SpreadsheetApp.getActiveSpreadsheet(); }
@@ -74,6 +161,17 @@ function sheet(name) {
   var s = ss().getSheetByName(name);
   if (!s) throw new Error('Thiếu tab "' + name + '" trong Sheet');
   return s;
+}
+/* Bổ sung tiêu đề cột mới (vd Users.managerId) cho Sheet cũ — chạy một lần cho mỗi phiên bản. */
+function ensureSchema_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('SCHEMA') === SCHEMA_VERSION) return;
+  Object.keys(TABS).forEach(function (name) {
+    var s = ss().getSheetByName(name); if (!s) return;
+    var cols = TABS[name], head = s.getRange(1, 1, 1, cols.length).getValues()[0];
+    cols.forEach(function (col, i) { if (head[i] === '' || head[i] === null || head[i] === undefined) s.getRange(1, i + 1).setValue(col); });
+  });
+  props.setProperty('SCHEMA', SCHEMA_VERSION);
 }
 function cell(v, col) {
   if (v instanceof Date) return DATE_ONLY[col] ? Utilities.formatDate(v, 'GMT+7', 'yyyy-MM-dd') : v.toISOString();
@@ -89,19 +187,20 @@ function readTab(name) {
   for (var i = 1; i < rows.length; i++) {
     if (rows[i][0] === '' || rows[i][0] === null) continue;
     var o = {};
-    for (var c = 0; c < cols.length; c++) o[cols[c]] = cell(rows[i][c] === undefined ? '' : rows[i][c], cols[c]);
+    for (var c = 0; c < cols.length; c++) o[cols[c]] = cell(rows[i][c] === undefined || rows[i][c] === null ? '' : rows[i][c], cols[c]);
     out.push(o);
   }
   return out;
 }
 function parseJSON(s, fallback) { try { return s ? JSON.parse(s) : fallback; } catch (_) { return fallback; } }
 
-function loadDB() {
+/* viewer = người đang đăng nhập (null nếu chưa đăng nhập). Tasks được lọc theo quyền của viewer. */
+function loadDB(viewer) {
   var cycles = readTab('Cycles');
   if (!cycles.length) { appendObj('Cycles', { id: 'c1', name: 'Chu kỳ', start: Utilities.formatDate(new Date(), 'GMT+7', 'yyyy-MM-dd'), end: Utilities.formatDate(new Date(Date.now() + 90 * 864e5), 'GMT+7', 'yyyy-MM-dd'), active: true }); cycles = readTab('Cycles'); }
   if (!cycles.some(function (c) { return c.active; })) cycles[0].active = true;
   var activeId = cycles.filter(function (c) { return c.active; })[0].id;
-  var users = readTab('Users').map(function (u) { delete u.password; return u; });
+  var users = getUsers();
   var krs = readTab('KRs');
   var okrs = readTab('OKRs').map(function (o) {
     o.cycleId = o.cycleId || activeId; o.status = o.status || 'approved'; o.createdBy = o.createdBy || o.ownerId;
@@ -117,11 +216,15 @@ function loadDB() {
     });
     return r;
   });
-  var tasks = readTab('Tasks').map(function (t) {
-    t.reportId = t.reportId || null; t.solutionId = t.solutionId || null; t.okrId = t.okrId || null;
-    return t;
-  });
-  return { cycles: cycles, users: users, okrs: okrs, reports: reports, tasks: tasks, loadedAt: new Date().toISOString() };
+  var tasks = [];
+  if (viewer) {
+    var c = ctx_(viewer);
+    tasks = readTab('Tasks').filter(function (t) { return canSeeTaskOf_(c, t.assigneeId); }).map(function (t) {
+      t.reportId = t.reportId || null; t.solutionId = t.solutionId || null; t.okrId = t.okrId || null;
+      return t;
+    });
+  }
+  return { cycles: cycles, users: users, okrs: okrs, reports: reports, tasks: tasks, viewerId: viewer ? viewer.id : null, loadedAt: new Date().toISOString() };
 }
 
 /* ---------------- Ghi dữ liệu ---------------- */
@@ -161,17 +264,23 @@ function deleteWhere(name, pred) {
   }
   return n;
 }
+function byId_(name, id) { return readTab(name).filter(function (x) { return x.id === id; })[0]; }
 
 /* ---------------- Hành động ---------------- */
 function login(p) {
-  var u = readTab('Users').filter(function (x) { return x.username === String(p.username || '').trim() && String(x.password) === String(p.password || ''); })[0];
+  var u = getUsers(true).filter(function (x) { return x.username === String(p.username || '').trim() && String(x.password) === String(p.password || ''); })[0];
   if (!u) throw new Error('Sai tên đăng nhập hoặc mật khẩu.');
   delete u.password;
   return u;
 }
-function addReport(p) {
+
+/* Báo cáo tuần: chỉ chủ báo cáo được gửi; công việc sinh ra luôn giao cho chính người gửi. */
+function addReport(c, p) {
   var r = p.report, tasks = p.tasks || [];
-  if (!r || !r.id || !r.userId || !r.okrId) throw new Error('Thiếu dữ liệu báo cáo.');
+  if (!r || !r.id || !r.okrId) throw new Error('Thiếu dữ liệu báo cáo.');
+  r.userId = c.me.id;
+  var okr = byId_('OKRs', r.okrId);
+  if (!okr || okr.ownerId !== c.me.id) deny_('Chỉ gửi được báo cáo cho OKR của chính bạn.');
   var dup = readTab('Reports').some(function (x) { return x.userId === r.userId && x.okrId === r.okrId && Number(x.week) === Number(r.week) && Number(x.year) === Number(r.year); });
   if (dup) throw new Error('Đã có báo cáo tuần này cho OKR này.');
   appendObj('Reports', {
@@ -179,52 +288,117 @@ function addReport(p) {
     work: r.work, issues: r.issues, causes: r.causes,
     krUpdates: JSON.stringify(r.krUpdates || []), solutions: JSON.stringify(r.solutions || [])
   });
-  (r.krUpdates || []).forEach(function (ku) { updateById('KRs', ku.krId, { current: Number(ku.value) || 0 }); });
-  tasks.forEach(function (t) { appendObj('Tasks', t); });
+  var krIds = {}; readTab('KRs').forEach(function (k) { if (k.okrId === okr.id) krIds[k.id] = 1; });
+  (r.krUpdates || []).forEach(function (ku) { if (krIds[ku.krId]) updateById('KRs', ku.krId, { current: Number(ku.value) || 0 }); });
+  tasks.forEach(function (t) { t.assigneeId = c.me.id; t.reportId = r.id; appendObj('Tasks', t); });
 }
-function deleteReport(p) {
+function deleteReport(c, p) {
+  var r = byId_('Reports', p.id); if (!r) return;
+  if (r.userId !== c.me.id && c.me.role !== 'director') deny_('Chỉ người viết báo cáo hoặc Giám đốc được xoá báo cáo.');
   deleteWhere('Tasks', function (t) { return t.reportId === p.id; });
-  deleteWhere('Comments', function (c) { return c.reportId === p.id; });
-  deleteWhere('Reports', function (r) { return r.id === p.id; });
+  deleteWhere('Comments', function (x) { return x.reportId === p.id; });
+  deleteWhere('Reports', function (x) { return x.id === p.id; });
 }
-function addComment(p) {
-  var c = p.comment;
-  if (!c || !c.reportId || !c.text) throw new Error('Thiếu nội dung phản hồi.');
-  appendObj('Comments', { id: c.id, reportId: c.reportId, authorId: c.authorId, text: c.text, createdAt: c.createdAt, acknowledged: false, ackAt: '' });
+/* Phản hồi: chủ báo cáo, quản lý trực tiếp của họ, hoặc Giám đốc. */
+function addComment(c, p) {
+  var cm = p.comment;
+  if (!cm || !cm.reportId || !cm.text) throw new Error('Thiếu nội dung phản hồi.');
+  var r = byId_('Reports', cm.reportId); if (!r) throw new Error('Báo cáo không còn tồn tại.');
+  if (r.userId !== c.me.id && !canManage_(c, r.userId)) deny_('Chỉ quản lý trực tiếp hoặc Giám đốc được phản hồi báo cáo này.');
+  appendObj('Comments', { id: cm.id, reportId: cm.reportId, authorId: c.me.id, text: cm.text, createdAt: cm.createdAt, acknowledged: false, ackAt: '' });
 }
-function ackComment(p) { updateById('Comments', p.id, { acknowledged: true, ackAt: p.ackAt || new Date().toISOString() }); }
-function addTask(p) { appendObj('Tasks', p.task); }
-function updateTask(p) { updateById('Tasks', p.id, p.patch || {}); }
-function deleteTask(p) { deleteWhere('Tasks', function (t) { return t.id === p.id; }); }
+function ackComment(c, p) {
+  var cm = byId_('Comments', p.id); if (!cm) throw new Error('Không tìm thấy phản hồi.');
+  var r = byId_('Reports', cm.reportId);
+  if (!r || r.userId !== c.me.id) deny_('Chỉ người viết báo cáo được xác nhận chỉ đạo.');
+  updateById('Comments', p.id, { acknowledged: true, ackAt: p.ackAt || new Date().toISOString() });
+}
+/* Công việc: chỉ trong phạm vi của mình (bản thân + nhân viên trực thuộc; Giám đốc: tất cả). */
+function addTask(c, p) {
+  var t = p.task;
+  if (!t || !t.id || !t.title) throw new Error('Thiếu dữ liệu công việc.');
+  t.assigneeId = t.assigneeId || c.me.id;
+  if (!canSeeTaskOf_(c, t.assigneeId)) deny_('Bạn chỉ giao được việc cho chính mình hoặc nhân viên trực thuộc.');
+  appendObj('Tasks', t);
+}
+function updateTask(c, p) {
+  var t = byId_('Tasks', p.id); if (!t) throw new Error('Không tìm thấy công việc.');
+  if (!canSeeTaskOf_(c, t.assigneeId)) deny_();
+  var patch = {}, src = p.patch || {};
+  ['status', 'title', 'due'].forEach(function (k) { if (src[k] !== undefined) patch[k] = src[k]; });
+  updateById('Tasks', p.id, patch);
+}
+function deleteTask(c, p) {
+  var t = byId_('Tasks', p.id); if (!t) return;
+  if (!canSeeTaskOf_(c, t.assigneeId)) deny_();
+  deleteWhere('Tasks', function (x) { return x.id === p.id; });
+}
 
-/* OKR: tạo mới hoặc cập nhật Objective + đồng bộ danh sách KR */
-function saveOKR(p) {
+/* OKR: chủ OKR tự đề xuất (chờ duyệt), hoặc quản lý trực tiếp/Giám đốc tạo-sửa (duyệt ngay). */
+function saveOKR(c, p) {
   var o = p.okr;
   if (!o || !o.id || !o.title || !o.ownerId || !o.cycleId) throw new Error('Thiếu dữ liệu OKR.');
   if (!o.krs || !o.krs.length) throw new Error('OKR cần ít nhất 1 KR.');
-  var row = { id: o.id, ownerId: o.ownerId, title: o.title, cycleId: o.cycleId, status: o.status || 'pending', createdBy: o.createdBy || o.ownerId, reviewNote: o.reviewNote || '', updatedAt: o.updatedAt || new Date().toISOString() };
-  if (findRow('OKRs', o.id) > 0) updateById('OKRs', o.id, row); else appendObj('OKRs', row);
+  if (!c.byId[o.ownerId]) throw new Error('Người phụ trách không tồn tại.');
+  var old = byId_('OKRs', o.id);
+  var allowed = function (ownerId) { return ownerId === c.me.id || canManage_(c, ownerId); };
+  if (!allowed(o.ownerId) || (old && !allowed(old.ownerId))) deny_('Bạn chỉ tạo/sửa được OKR của chính mình hoặc nhân viên trực thuộc.');
+  var approved = canManage_(c, o.ownerId);
+  var row = { id: o.id, ownerId: o.ownerId, title: o.title, cycleId: o.cycleId, status: approved ? 'approved' : 'pending',
+              createdBy: old ? (old.createdBy || old.ownerId) : c.me.id, reviewNote: approved && old ? old.reviewNote : '', updatedAt: o.updatedAt || new Date().toISOString() };
+  if (old) updateById('OKRs', o.id, row); else appendObj('OKRs', row);
   var existing = readTab('KRs').filter(function (k) { return k.okrId === o.id; });
   var keep = {};
   o.krs.forEach(function (k) {
     keep[k.id] = true;
-    var old = existing.filter(function (x) { return x.id === k.id; })[0];
+    var oldK = existing.filter(function (x) { return x.id === k.id; })[0];
     var rec = { id: k.id, okrId: o.id, title: k.title, baseline: Number(k.baseline) || 0, target: Number(k.target) || 0, unit: k.unit || '',
-                current: old ? old.current : (k.current !== undefined ? Number(k.current) || 0 : Number(k.baseline) || 0) };
-    if (old) updateById('KRs', k.id, rec); else appendObj('KRs', rec);
+                current: oldK ? oldK.current : (k.current !== undefined ? Number(k.current) || 0 : Number(k.baseline) || 0) };
+    if (oldK) updateById('KRs', k.id, rec); else appendObj('KRs', rec);
   });
   deleteWhere('KRs', function (k) { return k.okrId === o.id && !keep[k.id]; });
 }
-function reviewOKR(p) {
-  if (!p.id || !p.status) throw new Error('Thiếu dữ liệu duyệt.');
+function reviewOKR(c, p) {
+  if (!p.id || ['approved', 'rejected'].indexOf(p.status) < 0) throw new Error('Thiếu dữ liệu duyệt.');
+  var o = byId_('OKRs', p.id); if (!o) throw new Error('Không tìm thấy OKR.');
+  if (!canManage_(c, o.ownerId)) deny_('Chỉ quản lý trực tiếp hoặc Giám đốc được duyệt OKR này.');
   updateById('OKRs', p.id, { status: p.status, reviewNote: p.reviewNote || '', updatedAt: p.updatedAt || new Date().toISOString() });
 }
-function deleteOKR(p) {
+function deleteOKR(c, p) {
+  var o = byId_('OKRs', p.id); if (!o) return;
+  if (!canManage_(c, o.ownerId) && !(o.ownerId === c.me.id && o.status !== 'approved')) deny_('Bạn không được xoá OKR này.');
   if (readTab('Reports').some(function (r) { return r.okrId === p.id; })) throw new Error('Đã có báo cáo tuần gắn với OKR này, không thể xoá.');
   deleteWhere('KRs', function (k) { return k.okrId === p.id; });
-  deleteWhere('OKRs', function (o) { return o.id === p.id; });
+  deleteWhere('OKRs', function (x) { return x.id === p.id; });
   readTab('Tasks').forEach(function (t) { if (t.okrId === p.id) updateById('Tasks', t.id, { okrId: '' }); });
 }
+
+/* Nhân sự (chỉ Giám đốc): thêm/sửa tài khoản, vai trò, quản lý trực tiếp. */
+function saveUser(c, p) {
+  requireDirector_(c);
+  var u = p.user || {};
+  var name = String(u.name || '').trim(), username = String(u.username || '').trim();
+  if (!name || !username) throw new Error('Nhập đủ họ tên và tên đăng nhập.');
+  var role = ROLES.indexOf(u.role) >= 0 ? u.role : 'employee';
+  var all = getUsers(true), old = u.id ? all.filter(function (x) { return x.id === u.id; })[0] : null;
+  var id = old ? old.id : (u.id || ('u' + Utilities.getUuid().replace(/-/g, '').slice(0, 8)));
+  if (all.some(function (x) { return x.username === username && x.id !== id; })) throw new Error('Tên đăng nhập "' + username + '" đã được dùng.');
+  if (!old && !u.password) throw new Error('Tài khoản mới cần có mật khẩu.');
+  if (old && old.id === c.me.id && role !== 'director') throw new Error('Không thể tự bỏ vai trò Giám đốc của chính mình.');
+  var mgrId = u.managerId || '';
+  if (mgrId) {
+    var m = all.filter(function (x) { return x.id === mgrId; })[0];
+    if (!m || m.id === id || (m.role !== 'manager' && m.role !== 'director')) throw new Error('Quản lý trực tiếp không hợp lệ.');
+  }
+  if (old && old.role !== 'employee' && role === 'employee') {
+    var n = all.filter(function (x) { return x.managerId === old.id; }).length;
+    if (n) throw new Error('Còn ' + n + ' nhân sự đang trực thuộc người này. Hãy chuyển họ sang quản lý khác trước.');
+  }
+  var rec = { id: id, username: username, name: name, role: role, dept: u.dept || '', title: u.title || '', color: u.color || (old && old.color) || '#2f6fed', managerId: mgrId };
+  if (u.password) rec.password = String(u.password);
+  if (old) updateById('Users', id, rec); else appendObj('Users', rec);
+}
+
 /* Chu kỳ */
 function saveCycle(p) {
   var c = p.cycle;
