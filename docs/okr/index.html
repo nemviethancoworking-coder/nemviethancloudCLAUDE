@@ -471,16 +471,18 @@ function toast(msg, type='success'){
   document.getElementById('toast').appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 2800);
 }
+let modalDirty = false;   // đã nhập/sửa gì trong khung đang mở chưa
 function openModal(html, width='max-w-2xl'){
+  modalDirty = false;
   document.getElementById('modal').innerHTML = `
-    <div class="fixed inset-0 z-50 bg-slate-900/40 flex items-start justify-center p-4 overflow-y-auto" onclick="if(event.target===this)A.closeModal()">
+    <div class="fixed inset-0 z-50 bg-slate-900/40 flex items-start justify-center p-4 overflow-y-auto">
       <div class="card w-full ${width} my-6 fade-in shadow-xl">${html}</div>
     </div>`;
 }
 const modalHeader = (title, sub='') => `
   <div class="flex items-start justify-between px-6 py-4 border-b border-gray-200">
     <div><h3 class="text-base font-semibold text-slate-900">${title}</h3>${sub ? `<p class="text-xs text-gray-500 mt-0.5">${sub}</p>` : ''}</div>
-    <button class="text-gray-400 hover:text-gray-700 p-1 rounded" onclick="A.closeModal()">${I.x}</button>
+    <button class="text-gray-400 hover:text-gray-700 p-1 rounded" onclick="A.cancelModal()">${I.x}</button>
   </div>`;
 
 /* ---------- Render gốc ---------- */
@@ -754,7 +756,7 @@ function openOkrForm(id, ownerId){
       </div>
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
-      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
       <button class="btn btn-primary" id="of-submit" onclick="A.submitOkr('${o ? o.id : ''}')">${I.check} ${o ? 'Lưu thay đổi' : (isMgr() ? 'Tạo OKR' : 'Gửi duyệt')}</button>
     </div>`, 'max-w-3xl');
   setTimeout(() => { const el = document.getElementById('of-title'); if(el) el.focus(); }, 50);
@@ -956,7 +958,7 @@ function openReportForm(){
       </div>
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
-      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
       <button class="btn btn-primary" id="rf-submit" onclick="A.submitReport()">${I.check} Gửi báo cáo</button>
     </div>`, 'max-w-3xl');
   A.renderKrInputs(); A.addSolRow();
@@ -974,7 +976,7 @@ function openTaskForm(){
       <div><label class="label">Gắn với mục tiêu</label><select id="tf-okr" class="input"><option value="">— Không —</option>${DB.okrs.filter(o => o.ownerId === session() || canManage(o.ownerId)).map(o => `<option value="${o.id}">${esc(o.title)}</option>`).join('')}</select></div>
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
-      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
       <button class="btn btn-primary" id="tf-submit" onclick="A.submitTask()">${I.plus} Thêm</button>
     </div>`, 'max-w-lg');
   setTimeout(() => { const el = document.getElementById('tf-title'); if(el) el.focus(); }, 50);
@@ -1138,7 +1140,7 @@ function openUserForm(id, presetRole){
       <div><label class="label">Mật khẩu ${u ? '' : '<span class="text-red-500">*</span>'}</label><input id="uf-password" class="input" type="text" autocomplete="new-password" placeholder="${u ? 'Để trống để giữ mật khẩu hiện tại' : 'Mật khẩu đăng nhập'}"></div>
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
-      <button class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+      <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
       <button class="btn btn-primary" id="uf-submit" onclick="A.saveUser('${u ? u.id : ''}')">${I.check} Lưu</button>
     </div>`, 'max-w-xl');
 }
@@ -1154,7 +1156,7 @@ function openPasswordForm(){
       <div><label class="label">Nhập lại mật khẩu mới</label><input id="pw-new2" type="password" class="input" autocomplete="new-password"></div>
       <div id="pw-err" class="text-red-600 text-[13px] hidden"></div>
       <div class="flex justify-end gap-2 pt-2">
-        <button type="button" class="btn btn-ghost" onclick="A.closeModal()">Huỷ</button>
+        <button type="button" class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
         <button class="btn btn-primary" id="pw-submit">${I.check} Đổi mật khẩu</button>
       </div>
     </form>`, 'max-w-md');
@@ -1166,7 +1168,12 @@ const A = {
   nav(v){ state.view = v; state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; render(); },
   set(k, v){ state[k] = v; if(k === 'ckWeek' || k === 'ckUser') state.reportId = null; if(k !== 'reportLimit' && k !== 'taskLimit'){ state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; } render(); },
   more(k){ state[k] += PAGE[k]; render(); },
-  closeModal(){ document.getElementById('modal').innerHTML = ''; },
+  closeModal(){ document.getElementById('modal').innerHTML = ''; modalDirty = false; },
+  cancelModal(){   // đóng do người dùng bấm X / Huỷ / Esc → hỏi lại nếu đang nhập dở
+    if(!document.getElementById('modal').innerHTML.trim()) return;
+    if(modalDirty && !confirm('Bạn có chắc muốn đóng? Nội dung đang nhập chưa được lưu sẽ bị mất.')) return;
+    A.closeModal();
+  },
   fillLogin(un){ const u = DB.users.find(u => u.username === un); document.getElementById('lg-user').value = un; document.getElementById('lg-pass').value = (u && u.password) || ''; document.getElementById('lg-pass').focus(); },
   async login(){
     const un = document.getElementById('lg-user').value.trim(), pw = document.getElementById('lg-pass').value;
@@ -1409,7 +1416,8 @@ const A = {
 /* ---------- Khởi động ---------- */
 // Gắn solutionId cho task mẫu (để liên kết checkbox trong chi tiết báo cáo)
 function linkSeedTasks(){ let changed = false; DB.tasks.forEach(t => { if(t.reportId && !t.solutionId){ const r = DB.reports.find(r => r.id === t.reportId); const s = r && r.solutions.find(s => s.text === t.title); if(s){ t.solutionId = s.id; changed = true; } } }); if(changed) save(); }
-document.addEventListener('keydown', e => { if(e.key === 'Escape') A.closeModal(); });
+document.addEventListener('keydown', e => { if(e.key === 'Escape') A.cancelModal(); });
+['input','change'].forEach(ev => document.getElementById('modal').addEventListener(ev, () => { modalDirty = true; }));
 async function init(){
   load(); linkSeedTasks();
   if(online()){
