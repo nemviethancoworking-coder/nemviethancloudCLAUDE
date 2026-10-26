@@ -28,6 +28,9 @@ asks() { local a=""; if [ -r /dev/tty ]; then read -r -s -p "$1" a < /dev/tty ||
 rand() { local r; r=$(head -c 96 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' || true); printf '%s' "${r:0:$1}"; }
 dc()   { docker compose -f "$DIR/docker-compose.yml" --env-file "$DIR/.env" "$@"; }
 
+# Toàn bộ phần chạy nằm trong main() và chỉ được gọi ở dòng cuối: khi chạy kiểu "curl | bash",
+# bash phải đọc hết script trước, nên không lệnh nào (vd docker compose exec) "nuốt" mất phần còn lại.
+main() {
 [ "$(id -u)" = 0 ] || die "Cần chạy bằng root."
 command -v docker >/dev/null || die "Chưa có Docker."
 docker compose version >/dev/null 2>&1 || die "Chưa có Docker Compose."
@@ -88,8 +91,8 @@ ok "PostgreSQL: $PG_IMAGE · Node: $NODE_IMAGE · API ở 127.0.0.1:$API_PORT"
 
 # ---------------------------------------------------------------- 3. Chạy cụm Docker
 say "3/6 Khởi động cụm Docker 'okr'"
-dc up -d --remove-orphans
-dc restart api >/dev/null
+dc up -d --remove-orphans < /dev/null
+dc restart api < /dev/null >/dev/null
 for i in $(seq 1 60); do curl -fsS "http://127.0.0.1:$API_PORT/health" >/dev/null 2>&1 && break; sleep 2; done
 curl -fsS "http://127.0.0.1:$API_PORT/health" >/dev/null 2>&1 || { dc logs --tail 40 api; die "API chưa chạy được (xem log ở trên)."; }
 ok "API đang chạy: $(curl -fsS "http://127.0.0.1:$API_PORT/health")"
@@ -137,13 +140,13 @@ else
   die "Đã hoàn tác Nginx về như cũ. Gửi phần lỗi ở trên cho người hỗ trợ."
 fi
 sleep 1
-if curl -fsS "https://$DOMAIN/okr-api/health" >/dev/null 2>&1; then ok "Truy cập được https://$DOMAIN/okr-api/health"
+if curl -fsS "https://$DOMAIN/okr-api/health" 2>/dev/null | grep -q '"ok":true'; then ok "Truy cập được https://$DOMAIN/okr-api/health"
 else warn "Chưa gọi được https://$DOMAIN/okr-api/health từ chính máy chủ (có thể do DNS nội bộ) — hãy mở thử trên trình duyệt."; fi
 curl -fsS -o /dev/null "https://$DOMAIN/" 2>/dev/null && ok "n8n vẫn hoạt động bình thường" || warn "Hãy mở thử n8n trên trình duyệt để chắc chắn."
 
 # ---------------------------------------------------------------- 5. Dữ liệu
 say "5/6 Dữ liệu"
-NUSERS=$(dc exec -T api node /app/server.js count-users 2>/dev/null | tail -1 || echo 0)
+NUSERS=$(dc exec -T api node /app/server.js count-users < /dev/null 2>/dev/null | tail -1 || true); NUSERS=${NUSERS:-0}
 if [ "${NUSERS:-0}" != "0" ]; then
   ok "CSDL đã có $NUSERS người dùng — giữ nguyên dữ liệu."
 else
@@ -153,14 +156,14 @@ else
     if [ -n "${OKR_ADMIN_PASS:-}" ]; then GU="${OKR_ADMIN_USER:-admin}"; GP="$OKR_ADMIN_PASS"
     else GU=$(ask "  Tên đăng nhập [admin]: " "admin"); GP=$(asks "  Mật khẩu: "); fi
     [ -n "$GP" ] || die "Chưa nhập mật khẩu. Chạy lại lệnh cài để thử lại (an toàn, không mất gì)."
-    dc exec -T -e GAS_URL="$GAS_URL" -e GAS_USER="$GU" -e GAS_PASS="$GP" api node /app/server.js import-gas \
+    dc exec -T -e GAS_URL="$GAS_URL" -e GAS_USER="$GU" -e GAS_PASS="$GP" api node /app/server.js import-gas < /dev/null \
       || die "Chuyển dữ liệu thất bại. Chạy lại lệnh cài để thử lại."
     ok "Đã chuyển dữ liệu. Tài khoản $GU giữ nguyên mật khẩu vừa nhập."
   else
     echo "  Tạo tài khoản Giám đốc đầu tiên:"
     GU=$(ask "  Tên đăng nhập [admin]: " "admin"); GP=$(asks "  Mật khẩu (>= 6 ký tự): ")
     [ ${#GP} -ge 6 ] || die "Mật khẩu quá ngắn. Chạy lại lệnh cài để thử lại."
-    dc exec -T api node /app/server.js create-director "$GU" "$GP" "Giám đốc"
+    dc exec -T api node /app/server.js create-director "$GU" "$GP" "Giám đốc" < /dev/null
   fi
 fi
 
@@ -168,7 +171,7 @@ fi
 say "6/6 Sao lưu tự động"
 echo "30 2 * * * root $DIR/backup.sh >> $DIR/backups/backup.log 2>&1" > /etc/cron.d/okr-backup
 chmod 644 /etc/cron.d/okr-backup
-"$DIR/backup.sh" | sed 's/^/  /'
+"$DIR/backup.sh" < /dev/null | sed 's/^/  /'
 ok "Sao lưu mỗi ngày lúc 02:30, giữ 14 bản trong $DIR/backups"
 
 printf '\n\033[1;32m==================== CÀI ĐẶT XONG ====================\033[0m\n'
@@ -178,3 +181,6 @@ echo "  Thư mục:    $DIR   (dữ liệu: $DIR/pgdata, sao lưu: $DIR/backups)
 echo "  Xem log:    docker compose -f $DIR/docker-compose.yml logs -f api"
 echo "  Cập nhật:   chạy lại đúng lệnh cài này (dữ liệu giữ nguyên)"
 echo "  Đổi mật khẩu khẩn cấp: docker compose -f $DIR/docker-compose.yml exec api node /app/server.js set-password <tên> <mật khẩu mới>"
+}
+
+main "$@"
