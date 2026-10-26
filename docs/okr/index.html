@@ -58,14 +58,15 @@
    Sơ đồ tổ chức: Giám đốc → Trưởng phòng → Quản lý → Nhân viên (cột managerId = cấp trên trực tiếp).
    - OKR & báo cáo tuần: cả đội xem được của nhau.
    - Công việc: mỗi người xem việc của mình + toàn bộ cấp dưới (Trưởng phòng: cả phòng); Giám đốc xem tất cả.
-   Dữ liệu lưu localStorage hoặc Google Sheet (Apps Script). Tailwind CDN + Vanilla JS.
+   Dữ liệu lưu trên máy chủ riêng (API Node.js + PostgreSQL). Tailwind CDN + Vanilla JS.
    ============================================================ */
 const STORE_KEY = 'okr_weekly_v1';
 const SESSION_KEY = 'okr_weekly_session';
 const API_KEY = 'okr_weekly_api';
 let DB = null;
-let state = { view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all', cycleId:null, okrStatus:'all', okrUser:'all' };
-let sync = { busy:false, error:null, lastAt:null };
+let state = { view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all', cycleId:null, okrStatus:'all', okrUser:'all', reportLimit:100, taskLimit:200 };
+const PAGE = { reportLimit:100, taskLimit:200 };
+let sync = { busy:false, error:null, lastAt:null, version:null };
 
 /* ---------- Tiện ích ---------- */
 const uid = () => Math.random().toString(36).slice(2,9) + Date.now().toString(36).slice(-3);
@@ -238,7 +239,11 @@ function normalize(db){
 
 /* ---------- Lưu trữ ---------- */
 function load(){ try { const raw = localStorage.getItem(STORE_KEY); DB = normalize(raw ? JSON.parse(raw) : null); } catch(e){ DB = null; } if(!DB){ DB = seedData(); } save(); }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+function save(){
+  // Bản sao trong trình duyệt chỉ để mở app nhanh; nếu vượt dung lượng (~5MB) thì bỏ qua, dữ liệu gốc vẫn ở máy chủ.
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+  catch(e){ try { localStorage.removeItem(STORE_KEY); } catch(_){} }
+}
 
 /* ---------- Phiên đăng nhập: { id, token } ---------- */
 function sess(){ try { const s = JSON.parse(localStorage.getItem(SESSION_KEY)); return s && typeof s === 'object' && s.id ? s : null; } catch(e){ return null; } }
@@ -246,9 +251,9 @@ function session(){ const s = sess(); return s ? s.id : null; }
 const token = () => (sess() || {}).token || '';
 function setSession(id, tok){ localStorage.setItem(SESSION_KEY, JSON.stringify({ id, token: tok || '' })); }
 
-/* ---------- Đồng bộ Google Sheet (Apps Script Web App) ---------- */
-// URL Apps Script cố định cho cả team. Không có giao diện để xem/sửa URL; mọi override cũ trong trình duyệt bị bỏ qua.
-const DEFAULT_API = 'https://script.google.com/macros/s/AKfycbx_BEECWvgjzcw30IuZ1JlyE2NohY7PNO_GE7q55g7bBU3USVXOrG9ujxFo5dkvMGvSZw/exec';
+/* ---------- Đồng bộ máy chủ (API Node.js + PostgreSQL) ---------- */
+// URL máy chủ cố định cho cả team. Không có giao diện để xem/sửa URL; mọi override cũ trong trình duyệt bị bỏ qua.
+const DEFAULT_API = 'https://ttpemqkjp.tino.page/okr-api/';
 const apiUrl = () => DEFAULT_API.trim();
 try { localStorage.removeItem(API_KEY); } catch(e){}
 const online = () => !!apiUrl();
@@ -266,21 +271,29 @@ async function apiLoad(){
   setBusy(true);
   try {
     const u = apiUrl(), tk = token();
-    const j = await apiFetch(u + (u.includes('?') ? '&' : '?') + 't=' + Date.now() + (tk ? '&token=' + encodeURIComponent(tk) : ''));
-    DB = normalize(j.db); save(); sync.error = null; sync.lastAt = new Date();
+    const v = sync.version && DB ? '&v=' + encodeURIComponent(sync.version) : '';
+    const j = await apiFetch(u + (u.includes('?') ? '&' : '?') + 't=' + Date.now() + (tk ? '&token=' + encodeURIComponent(tk) : '') + v);
+    if(!j.unchanged){ DB = normalize(j.db); save(); sync.version = j.version || null; }      // không có gì mới → giữ nguyên
+    sync.error = null; sync.lastAt = new Date();
   }
   catch(e){ sync.error = e.auth ? null : e.message; throw e; }
   finally { setBusy(false); }
 }
 async function api(action, payload){
   // POST không đặt Content-Type để tránh preflight CORS; Apps Script vẫn đọc được body.
-  const j = await apiFetch(apiUrl(), { method:'POST', body: JSON.stringify({ action, payload, token: token() }) });
-  if(j.db){ DB = normalize(j.db); save(); sync.error = null; sync.lastAt = new Date(); }
+  // Thao tác ghi dùng chế độ gọn (lite): máy chủ chỉ trả "ok", app đã tự cập nhật tại chỗ rồi tải lại dữ liệu mới sau ít giây.
+  const j = await apiFetch(apiUrl(), { method:'POST', body: JSON.stringify({ action, payload, token: token(), lite: action !== 'login' }) });
+  if(j.db){ DB = normalize(j.db); save(); sync.version = j.version || null; }
+  else scheduleRefresh();
+  sync.error = null; sync.lastAt = new Date();
   return j;
+}
+let refreshTimer = null;
+function scheduleRefresh(){ clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if(!sync.busy) refreshFromServer(true); else scheduleRefresh(); }, 1500);
 }
 /* Token hết hạn / không hợp lệ → đăng xuất, yêu cầu đăng nhập lại. */
 function forceLogout(msg){
-  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(SESSION_KEY); sync.version = null;
   if(online() && DB){ DB.tasks = []; save(); }
   document.getElementById('modal').innerHTML = '';
   render(); toast(msg || 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.', 'error');
@@ -312,8 +325,18 @@ setInterval(() => {
 }, 60000);
 
 /* ---------- Người dùng & phân quyền ---------- */
-function me(){ return DB.users.find(u => u.id === session()); }
-const user = id => DB.users.find(u => u.id === id) || { id, name:'?', color:'#999', dept:'', role:'employee', managerId:'' };
+/* Chỉ mục tra cứu nhanh, dựng lại mỗi lần render (vài ms kể cả khi có hàng chục nghìn công việc). */
+let IX = null;
+function buildIndex(){
+  IX = { users:new Map(), okrs:new Map(), taskBySol:new Map(), staff:new Map(), cm:new Map() };
+  DB.users.forEach(u => { IX.users.set(u.id, u); if(u.managerId){ if(!IX.staff.has(u.managerId)) IX.staff.set(u.managerId, []); IX.staff.get(u.managerId).push(u); } });
+  DB.okrs.forEach(o => IX.okrs.set(o.id, o));
+  DB.tasks.forEach(t => { if(t.reportId) IX.taskBySol.set(t.reportId + '|' + t.solutionId, t); });
+}
+const findUser = id => IX ? IX.users.get(id) : DB.users.find(u => u.id === id);
+const okrById = id => IX ? IX.okrs.get(id) : DB.okrs.find(o => o.id === id);
+function me(){ return findUser(session()); }
+const user = id => findUser(id) || { id, name:'?', color:'#999', dept:'', role:'employee', managerId:'' };
 const ROLES = {
   director:{ t:'Giám đốc', c:'bg-slate-800 text-white border-slate-800' },
   head:    { t:'Trưởng phòng', c:'bg-indigo-600 text-white border-indigo-600' },
@@ -328,17 +351,21 @@ function canManage(targetId, viewer){
   viewer = viewer || me(); if(!viewer) return false;
   if(viewer.role === 'director') return true;
   if(viewer.role !== 'head' && viewer.role !== 'manager') return false;
-  let t = DB.users.find(u => u.id === targetId); const seen = new Set();
-  if(!t || t.id === viewer.id) return false;
-  while(t && t.managerId && !seen.has(t.id)){
-    if(t.managerId === viewer.id) return true;
-    seen.add(t.id); t = DB.users.find(u => u.id === t.managerId);
+  const key = viewer.id + '>' + targetId;
+  if(IX && IX.cm.has(key)) return IX.cm.get(key);
+  let t = findUser(targetId), ok = false; const seen = new Set();
+  if(t && t.id !== viewer.id){
+    while(t && t.managerId && !seen.has(t.id)){
+      if(t.managerId === viewer.id){ ok = true; break; }
+      seen.add(t.id); t = findUser(t.managerId);
+    }
   }
-  return false;
+  if(IX) IX.cm.set(key, ok);
+  return ok;
 }
 /* Phản hồi là "chỉ đạo" (cần xác nhận) khi người viết là cấp trên (trực tiếp/gián tiếp) của chủ báo cáo hoặc Giám đốc. */
 const isDirective = (authorId, ownerId) => authorId !== ownerId && canManage(ownerId, user(authorId));
-const staffOf = id => DB.users.filter(u => u.managerId === id);
+const staffOf = id => IX ? [...(IX.staff.get(id) || [])] : DB.users.filter(u => u.managerId === id);
 const scopeUsers = () => { const m = me(); return [m, ...DB.users.filter(u => u.id !== m.id && canManage(u.id))]; };   // phạm vi công việc
 const canSeeTask = t => t.assigneeId === session() || canManage(t.assigneeId);
 const visibleTasks = () => DB.tasks.filter(canSeeTask);
@@ -453,6 +480,7 @@ const modalHeader = (title, sub='') => `
 /* ---------- Render gốc ---------- */
 function render(){
   const app = document.getElementById('app');
+  buildIndex();
   if(!session() || !me()){ app.innerHTML = viewLogin(); return; }
   if(state.view === 'people' && !isDir()) state.view = 'dashboard';
   const views = { dashboard: viewDashboard, okrs: viewOKRs, checkin: viewCheckin, tasks: viewTasks, people: viewPeople };
@@ -803,7 +831,7 @@ function viewCheckin(){
     <div class="lg:col-span-4 card overflow-hidden">
       <div class="px-4 py-3 border-b border-gray-100 section-title">Danh sách báo cáo</div>
       <div class="divide-y divide-gray-100 max-h-[calc(100vh-220px)] overflow-y-auto">
-        ${rs.length ? rs.map(r => { const u = user(r.userId), o = DB.okrs.find(o => o.id === r.okrId) || {title:'(OKR đã xoá)'}, st = reportStatus(r); return `
+        ${rs.length ? rs.slice(0, state.reportLimit).map(r => { const u = user(r.userId), o = okrById(r.okrId) || {title:'(OKR đã xoá)'}, st = reportStatus(r); return `
         <div class="report-item px-4 py-3 ${state.reportId === r.id ? 'active' : ''}" data-report="${r.id}" onclick="A.selectReport('${r.id}')">
           <div class="flex items-center gap-2.5">
             ${avatar(u, 'w-7 h-7 text-[10px]')}
@@ -811,7 +839,7 @@ function viewCheckin(){
           </div>
           <div class="text-[12.5px] text-slate-600 mt-2 truncate">${esc(o.title)}</div>
           <div class="mt-2 flex items-center justify-between">${badge(st.t, st.c)}<span class="text-[11px] text-gray-400 flex items-center gap-1">${I.chat} ${r.comments.length}</span></div>
-        </div>`; }).join('') : `<div class="p-8 text-center text-gray-400 text-[13px]">Chưa có báo cáo nào.${!isDir() ? '<br>Bấm "Tạo báo cáo" để bắt đầu.' : ''}</div>`}
+        </div>`; }).join('') + (rs.length > state.reportLimit ? `<div class="p-3 text-center"><button class="btn btn-ghost btn-sm" id="more-reports" onclick="A.more('reportLimit')">Xem thêm ${Math.min(PAGE.reportLimit, rs.length - state.reportLimit)} báo cáo (còn ${rs.length - state.reportLimit})</button></div>` : '') : `<div class="p-8 text-center text-gray-400 text-[13px]">Chưa có báo cáo nào.${!isDir() ? '<br>Bấm "Tạo báo cáo" để bắt đầu.' : ''}</div>`}
       </div>
     </div>
     <div class="lg:col-span-8">${sel ? reportDetail(sel) : '<div class="card p-12 text-center text-gray-400">Chọn một báo cáo để xem chi tiết.</div>'}</div>
@@ -819,7 +847,7 @@ function viewCheckin(){
 }
 function reportDetail(r){
   const id = session();
-  const u = user(r.userId), o = DB.okrs.find(o => o.id === r.okrId), st = reportStatus(r);
+  const u = user(r.userId), o = okrById(r.okrId), st = reportStatus(r);
   const own = r.userId === id, manages = canManage(r.userId);
   const canComment = own || manages;
   const taskScope = own || manages;                     // có quyền xem trạng thái công việc sinh ra từ báo cáo này
@@ -856,7 +884,7 @@ function reportDetail(r){
       </div>
       <div>
         <div class="section-title mb-1.5">Giải pháp / Hành động tuần tiếp theo <span class="normal-case font-normal text-gray-400">${taskScope ? '(đã chuyển thành công việc)' : ''}</span></div>
-        ${r.solutions.length ? `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${r.solutions.map(s => { const t = taskScope ? DB.tasks.find(t => t.reportId === r.id && t.solutionId === s.id) : null; const ts = t ? TASK_STATUS[t.status] : null; return `
+        ${r.solutions.length ? `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${r.solutions.map(s => { const t = taskScope ? IX.taskBySol.get(r.id + '|' + s.id) : null; const ts = t ? TASK_STATUS[t.status] : null; return `
           <div class="flex items-center gap-3 px-3 py-2.5">
             ${taskScope ? `<input type="checkbox" class="checkbox" ${t && t.status === 'done' ? 'checked' : ''} ${t ? `onchange="A.toggleTask('${t.id}')"` : 'disabled'}>` : `<span class="text-gray-300">•</span>`}
             <span class="flex-1 ${t && t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span>
@@ -979,7 +1007,7 @@ function viewTasks(){
         <tr><th class="w-10 py-2.5"></th><th class="text-left font-medium py-2.5 px-2">Công việc</th>${isMgr() ? '<th class="text-left font-medium py-2.5 px-2">Người làm</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Nguồn</th><th class="text-left font-medium py-2.5 px-2">Hạn</th><th class="text-left font-medium py-2.5 px-2 w-36">Trạng thái</th><th class="w-12"></th></tr>
       </thead>
       <tbody class="divide-y divide-gray-100" id="task-rows">
-        ${ts.length ? ts.map(t => { const u = user(t.assigneeId), o = DB.okrs.find(o => o.id === t.okrId), od = isOverdue(t); return `
+        ${ts.length ? ts.slice(0, state.taskLimit).map(t => { const u = user(t.assigneeId), o = okrById(t.okrId), od = isOverdue(t); return `
         <tr class="hover:bg-gray-50 ${t.status === 'done' ? 'opacity-70' : ''}" data-task="${t.id}" data-assignee="${t.assigneeId}">
           <td class="text-center py-3"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} onchange="A.toggleTask('${t.id}')"></td>
           <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>${o ? `<div class="text-[12px] text-gray-500 mt-0.5 flex items-center gap-1">${I.flag} ${esc(o.title)}</div>` : ''}</td>
@@ -988,7 +1016,7 @@ function viewTasks(){
           <td class="py-3 px-2 text-[12.5px] whitespace-nowrap ${od ? 'text-red-600 font-medium' : 'text-slate-700'}">${t.due ? fmt(t.due) : '—'}${od ? ' · Quá hạn' : ''}</td>
           <td class="py-3 px-2"><select class="input !py-1 !px-2 text-[12.5px]" onchange="A.setTaskStatus('${t.id}',this.value)">${Object.entries(TASK_STATUS).map(([k,v]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select></td>
           <td class="py-3 text-center"><button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="A.deleteTask('${t.id}')">${I.trash}</button></td>
-        </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
+        </tr>`; }).join('') + (ts.length > state.taskLimit ? `<tr><td colspan="7" class="p-3 text-center"><button class="btn btn-ghost btn-sm" id="more-tasks" onclick="A.more('taskLimit')">Xem thêm ${Math.min(PAGE.taskLimit, ts.length - state.taskLimit)} công việc (còn ${ts.length - state.taskLimit})</button></td></tr>` : '') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
       </tbody>
     </table>
   </div>`;
@@ -1087,8 +1115,9 @@ function openUserForm(id){
 
 /* ---------- Hành động ---------- */
 const A = {
-  nav(v){ state.view = v; render(); },
-  set(k, v){ state[k] = v; if(k === 'ckWeek' || k === 'ckUser') state.reportId = null; render(); },
+  nav(v){ state.view = v; state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; render(); },
+  set(k, v){ state[k] = v; if(k === 'ckWeek' || k === 'ckUser') state.reportId = null; if(k !== 'reportLimit' && k !== 'taskLimit'){ state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; } render(); },
+  more(k){ state[k] += PAGE[k]; render(); },
   closeModal(){ document.getElementById('modal').innerHTML = ''; },
   fillLogin(un){ const u = DB.users.find(u => u.username === un); document.getElementById('lg-user').value = un; document.getElementById('lg-pass').value = (u && u.password) || ''; document.getElementById('lg-pass').focus(); },
   async login(){
@@ -1108,7 +1137,7 @@ const A = {
     setSession(u.id, tk); state = { ...state, view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all', okrUser:'all', okrStatus:'all' };
     render(); toast(`Xin chào, ${u.name}!`, 'info');
   },
-  logout(){ localStorage.removeItem(SESSION_KEY); if(online()){ DB.tasks = []; save(); } render(); },
+  logout(){ localStorage.removeItem(SESSION_KEY); sync.version = null; if(online()){ DB.tasks = []; save(); } render(); },
   refresh(){ refreshFromServer(false); },
   selectReport(id){ state.reportId = id; render(); },
   gotoReport(id){ const r = DB.reports.find(r => r.id === id); if(!r) return; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = id; render(); },
