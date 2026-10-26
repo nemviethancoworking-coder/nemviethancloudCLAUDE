@@ -54,14 +54,28 @@ getenv() { grep "^$1=" "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-; }
 [ -n "$(getenv TOKEN_SECRET)" ] || setenv TOKEN_SECRET "$(rand 64)"
 setenv ALLOWED_ORIGINS "$ORIGINS"
 
-pick_image() {  # ưu tiên ảnh đã có sẵn trên máy, rồi tới máy chủ gương của Tino, cuối cùng Docker Hub
+pick_image() {  # 1) ảnh đã có sẵn trên máy  2) tải về (tối đa 3 phút mỗi nguồn, có hiện tiến độ)
   local img
   for img in "$@"; do docker image inspect "$img" >/dev/null 2>&1 && { echo "$img"; return; }; done
-  for img in "$@"; do docker pull -q "$img" >/dev/null 2>&1 && { echo "$img"; return; }; done
+  for img in "$@"; do
+    echo "  … đang tải $img (tối đa 3 phút)" >&2
+    timeout 180 docker pull "$img" >&2 && { echo "$img"; return; }
+    echo "  … không tải được $img, thử nguồn khác" >&2
+  done
   return 1
 }
+echo "  Chọn ảnh PostgreSQL…"
 PG_IMAGE=$(getenv PG_IMAGE); [ -n "$PG_IMAGE" ] || PG_IMAGE=$(pick_image dockerhub.tino.org/library/postgres:16 postgres:16) || die "Không tải được ảnh PostgreSQL 16"
-NODE_IMAGE=$(getenv NODE_IMAGE); [ -n "$NODE_IMAGE" ] || NODE_IMAGE=$(pick_image dockerhub.tino.org/library/node:22-alpine node:22-alpine dockerhub.tino.org/library/node:22 node:22) || die "Không tải được ảnh Node.js 22"
+echo "  Chọn ảnh Node.js…"
+# Ảnh n8n trên máy đã có sẵn Node.js → dùng luôn, không phải tải gì thêm.
+N8N_IMAGE=$(docker inspect -f '{{.Config.Image}}' n8n-n8n-1 2>/dev/null || true)
+NODE_IMAGE=$(getenv NODE_IMAGE)
+if [ -z "$NODE_IMAGE" ]; then
+  for img in node:22-alpine dockerhub.tino.org/library/node:22-alpine "$N8N_IMAGE"; do
+    [ -n "$img" ] && docker image inspect "$img" >/dev/null 2>&1 && docker run --rm --entrypoint node "$img" -e "process.exit(+process.versions.node.split('.')[0] >= 18 ? 0 : 1)" >/dev/null 2>&1 && { NODE_IMAGE=$img; break; }
+  done
+  [ -n "$NODE_IMAGE" ] || NODE_IMAGE=$(pick_image dockerhub.tino.org/library/node:22-alpine node:22-alpine) || die "Không có ảnh Node.js phù hợp"
+fi
 setenv PG_IMAGE "$PG_IMAGE"; setenv NODE_IMAGE "$NODE_IMAGE"
 
 API_PORT=$(getenv API_PORT)

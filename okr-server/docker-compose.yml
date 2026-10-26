@@ -24,7 +24,9 @@ services:
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
-    command: ["node", "/app/server.js"]
+    entrypoint: ["node"]                   # dùng được cả ảnh node chính thức lẫn ảnh n8n (đã có Node.js)
+    command: ["/app/server.js"]
+    user: "1000:1000"
     volumes:
       - ./app:/app:ro
     environment:
