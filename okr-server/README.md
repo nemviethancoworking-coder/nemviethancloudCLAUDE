@@ -25,6 +25,13 @@ curl -fsSL https://raw.githubusercontent.com/nemviethancoworking-coder/nemvietha
 - `dataVersion`: app tự làm mới gửi `v=`; không có gì mới → trả 54 byte. Dữ liệu nén gzip. Thao tác ghi trả kết quả gọn (`lite`).
 - CORS chỉ cho phép `https://nemviethancoworking-coder.github.io`.
 
+## Tài khoản (v6)
+- Giám đốc thêm/sửa/đặt lại mật khẩu ở màn **Nhân sự & phân quyền**.
+- **Khoá** (`setUserActive`): người bị khoá không đăng nhập được, phiên đang mở bị đăng xuất ở lần gọi API kế tiếp; OKR/báo cáo/công việc cũ giữ nguyên; không giao việc/OKR mới cho họ. Không khoá được người còn cấp dưới đang hoạt động; không mở khoá khi cấp trên trực tiếp đang bị khoá.
+- **Xoá hẳn** (`deleteUser`): chỉ khi tài khoản chưa có OKR, báo cáo, công việc, phản hồi và không có ai trực thuộc (tài khoản tạo nhầm).
+- **Tự đổi mật khẩu** (`changePassword`): mọi người, cần mật khẩu hiện tại, tối thiểu 6 ký tự; sai 8 lần → chờ 15 phút.
+- Cột `users.active` được tự thêm khi máy chủ khởi động (dữ liệu cũ: tất cả đang hoạt động).
+
 ## Đo kiểm (50 người, dữ liệu 1 năm: 2.548 báo cáo, 10.192 việc)
 - 40 báo cáo + 30 cập nhật việc cùng lúc: 0 lỗi, trung vị 0,23 giây, chậm nhất 0,32 giây; không mất, không trùng.
 - Tự làm mới khi không có gì mới: 43 ms. Dữ liệu một nhân viên tải về (đã nén): ~77 KB.

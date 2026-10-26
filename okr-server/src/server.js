@@ -25,7 +25,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 5;
+const VERSION = 6;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -56,7 +56,10 @@ CREATE INDEX IF NOT EXISTS comments_report ON comments(report_id);
 CREATE INDEX IF NOT EXISTS tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 `;
-async function migrate() { await pool.query(SCHEMA); }
+async function migrate() {
+  await pool.query(SCHEMA);
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true');   // v6: khoá tài khoản
+}
 
 /* ---------------- Tiện ích ---------------- */
 class AppError extends Error { constructor(msg, auth) { super(msg); this.auth = !!auth; } }
@@ -94,6 +97,7 @@ async function verifyToken(tok) {
   if (sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good)) || !(exp > Date.now())) throw authError();
   const u = (await getUsers()).find(x => x.id === uid);
   if (!u) throw authError('Tài khoản không còn tồn tại.');
+  if (!u.active) throw authError('Tài khoản của bạn đã bị khoá. Liên hệ Giám đốc nếu cần mở lại.');
   return u;
 }
 
@@ -111,8 +115,8 @@ function normalizeRoles(users) {
   return users;
 }
 async function getUsers(q = pool) {
-  const r = await q.query('SELECT id, username, name, role, dept, title, color, manager_id FROM users ORDER BY seq');
-  return normalizeRoles(r.rows.map(u => ({ id: u.id, username: u.username, name: u.name, role: u.role, dept: u.dept, title: u.title, color: u.color, managerId: u.manager_id })));
+  const r = await q.query('SELECT id, username, name, role, dept, title, color, manager_id, active FROM users ORDER BY seq');
+  return normalizeRoles(r.rows.map(u => ({ id: u.id, username: u.username, name: u.name, role: u.role, dept: u.dept, title: u.title, color: u.color, managerId: u.manager_id, active: u.active !== false })));
 }
 async function ctx(viewer, q = pool) {
   const users = await getUsers(q), byId = {};
@@ -219,7 +223,9 @@ async function login(p, ip) {
   const row = await one(pool, 'SELECT id, pass_hash FROM users WHERE username = $1', [username]);
   if (!row || !(await checkPassword(str(p.password), row.pass_hash))) { addFail(k1); addFail(k2); throw new AppError('Sai tên đăng nhập hoặc mật khẩu.'); }
   fails.delete(k1);
-  return (await getUsers()).find(u => u.id === row.id);
+  const u = (await getUsers()).find(u => u.id === row.id);
+  if (!u.active) throw new AppError('Tài khoản này đã bị khoá. Liên hệ Giám đốc nếu cần mở lại.');
+  return u;
 }
 
 const A = {
@@ -260,6 +266,7 @@ const A = {
     if (!t || !t.id || !str(t.title).trim()) throw new AppError('Thiếu dữ liệu công việc.');
     t.assigneeId = t.assigneeId || c.me.id;
     if (!canSeeTaskOf(c, t.assigneeId)) deny('Bạn chỉ giao được việc cho chính mình hoặc cấp dưới.');
+    if (c.byId[t.assigneeId] && !c.byId[t.assigneeId].active) throw new AppError(c.byId[t.assigneeId].name + ' đã bị khoá tài khoản, không giao việc mới được.');
     await insertTask(c.q, t);
   },
   async updateTask(c, p) {
@@ -283,6 +290,7 @@ const A = {
     const old = await one(c.q, 'SELECT * FROM okrs WHERE id=$1', [o.id]);
     const allowed = ownerId => ownerId === c.me.id || canManage(c, ownerId);
     if (!allowed(o.ownerId) || (old && !allowed(old.owner_id))) deny('Bạn chỉ tạo/sửa được OKR của chính mình hoặc cấp dưới.');
+    if (!c.byId[o.ownerId].active && !(old && old.owner_id === o.ownerId)) throw new AppError(c.byId[o.ownerId].name + ' đã bị khoá tài khoản, không giao OKR mới được.');
     const approved = canManage(c, o.ownerId);
     const row = [o.id, o.ownerId, str(o.title), o.cycleId, approved ? 'approved' : 'pending', old ? (old.created_by || old.owner_id) : c.me.id,
       approved && old ? old.review_note : '', str(o.updatedAt) || new Date().toISOString()];
@@ -346,6 +354,7 @@ const A = {
     if (mgrId) {
       const m = c.byId[mgrId];
       if (!m || m.id === id) throw new AppError('Cấp trên trực tiếp không hợp lệ.');
+      if (!m.active && !(old && old.managerId === mgrId)) throw new AppError(m.name + ' đã bị khoá, không chọn làm cấp trên được.');
       if (m.role !== PARENT_ROLE[role]) throw new AppError(ROLE_NAME[role] + ' phải trực thuộc một ' + ROLE_NAME[PARENT_ROLE[role]] + '.');
     }
     if (old && old.role !== role) {
@@ -360,6 +369,43 @@ const A = {
       await c.q.query('INSERT INTO users(id,username,pass_hash,name,role,dept,title,color,manager_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
         [id, username, hashPassword(u.password), name, role, str(u.dept), str(u.title), color, mgrId]);
     }
+  },
+  /* Khoá / mở khoá (chỉ Giám đốc). Người bị khoá không đăng nhập được, phiên đang mở bị đăng xuất; dữ liệu cũ giữ nguyên. */
+  async setUserActive(c, p) {
+    requireDirector(c);
+    const u = c.byId[p.id]; if (!u) throw new AppError('Không tìm thấy tài khoản.');
+    const active = !!p.active;
+    if (!active) {
+      if (u.id === c.me.id) throw new AppError('Không thể tự khoá tài khoản của chính mình.');
+      const subs = c.users.filter(x => x.managerId === u.id && x.active);
+      if (subs.length) throw new AppError(u.name + ' còn ' + subs.length + ' người trực thuộc (' + subs.slice(0, 3).map(x => x.name).join(', ') + (subs.length > 3 ? '…' : '') + '). Hãy chuyển họ sang cấp trên khác trước khi khoá.');
+    } else if (u.managerId && c.byId[u.managerId] && !c.byId[u.managerId].active) {
+      throw new AppError('Cấp trên trực tiếp của ' + u.name + ' (' + c.byId[u.managerId].name + ') đang bị khoá. Hãy sửa cấp trên trước khi mở khoá.');
+    }
+    await c.q.query('UPDATE users SET active=$2 WHERE id=$1', [u.id, active]);
+  },
+  /* Xoá hẳn (chỉ Giám đốc) — chỉ cho tài khoản chưa có dữ liệu nào, ví dụ tạo nhầm. Có dữ liệu thì dùng Khoá. */
+  async deleteUser(c, p) {
+    requireDirector(c);
+    const u = c.byId[p.id]; if (!u) return;
+    if (u.id === c.me.id) throw new AppError('Không thể tự xoá tài khoản của chính mình.');
+    if (c.users.some(x => x.managerId === u.id)) throw new AppError(u.name + ' còn người trực thuộc, không thể xoá.');
+    const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
+      + (SELECT count(*) FROM tasks WHERE assignee_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+    if (Number(used.n)) throw new AppError(u.name + ' đã có OKR, báo cáo, công việc hoặc phản hồi trong hệ thống nên không xoá được. Hãy dùng "Khoá tài khoản" để giữ lại lịch sử.');
+    await c.q.query('DELETE FROM users WHERE id=$1', [u.id]);
+  },
+  /* Mỗi người tự đổi mật khẩu của mình (cần mật khẩu hiện tại). */
+  async changePassword(c, p) {
+    const pw = str(p.newPassword);
+    if (pw.length < 6) throw new AppError('Mật khẩu mới cần ít nhất 6 ký tự.');
+    const key = 'pw:' + c.me.id;
+    if (failCount(key) >= 8) throw new AppError('Nhập sai mật khẩu hiện tại quá nhiều lần. Vui lòng thử lại sau 15 phút.');
+    const row = await one(c.q, 'SELECT pass_hash FROM users WHERE id=$1', [c.me.id]);
+    if (!row || !(await checkPassword(str(p.oldPassword), row.pass_hash))) { addFail(key); throw new AppError('Mật khẩu hiện tại không đúng.'); }
+    if (await checkPassword(pw, row.pass_hash)) throw new AppError('Mật khẩu mới phải khác mật khẩu hiện tại.');
+    fails.delete(key);
+    await c.q.query('UPDATE users SET pass_hash=$2 WHERE id=$1', [c.me.id, hashPassword(pw)]);
   },
 };
 async function insertTask(q, t) {

@@ -5328,7 +5328,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 5;
+var VERSION = 6;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
@@ -5361,6 +5361,7 @@ CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 `;
 async function migrate() {
   await pool.query(SCHEMA);
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true");
 }
 var AppError = class extends Error {
   constructor(msg, auth) {
@@ -5405,6 +5406,7 @@ async function verifyToken(tok) {
   if (sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good)) || !(exp > Date.now())) throw authError();
   const u = (await getUsers()).find((x) => x.id === uid);
   if (!u) throw authError("T\xE0i kho\u1EA3n kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+  if (!u.active) throw authError("T\xE0i kho\u1EA3n c\u1EE7a b\u1EA1n \u0111\xE3 b\u1ECB kho\xE1. Li\xEAn h\u1EC7 Gi\xE1m \u0111\u1ED1c n\u1EBFu c\u1EA7n m\u1EDF l\u1EA1i.");
   return u;
 }
 var fails = /* @__PURE__ */ new Map();
@@ -5434,8 +5436,8 @@ function normalizeRoles(users) {
   return users;
 }
 async function getUsers(q = pool) {
-  const r = await q.query("SELECT id, username, name, role, dept, title, color, manager_id FROM users ORDER BY seq");
-  return normalizeRoles(r.rows.map((u) => ({ id: u.id, username: u.username, name: u.name, role: u.role, dept: u.dept, title: u.title, color: u.color, managerId: u.manager_id })));
+  const r = await q.query("SELECT id, username, name, role, dept, title, color, manager_id, active FROM users ORDER BY seq");
+  return normalizeRoles(r.rows.map((u) => ({ id: u.id, username: u.username, name: u.name, role: u.role, dept: u.dept, title: u.title, color: u.color, managerId: u.manager_id, active: u.active !== false })));
 }
 async function ctx(viewer, q = pool) {
   const users = await getUsers(q), byId = {};
@@ -5606,7 +5608,9 @@ async function login(p, ip) {
     throw new AppError("Sai t\xEAn \u0111\u0103ng nh\u1EADp ho\u1EB7c m\u1EADt kh\u1EA9u.");
   }
   fails.delete(k1);
-  return (await getUsers()).find((u) => u.id === row.id);
+  const u = (await getUsers()).find((u2) => u2.id === row.id);
+  if (!u.active) throw new AppError("T\xE0i kho\u1EA3n n\xE0y \u0111\xE3 b\u1ECB kho\xE1. Li\xEAn h\u1EC7 Gi\xE1m \u0111\u1ED1c n\u1EBFu c\u1EA7n m\u1EDF l\u1EA1i.");
+  return u;
 }
 var A = {
   async addReport(c, p) {
@@ -5661,6 +5665,7 @@ var A = {
     if (!t || !t.id || !str(t.title).trim()) throw new AppError("Thi\u1EBFu d\u1EEF li\u1EC7u c\xF4ng vi\u1EC7c.");
     t.assigneeId = t.assigneeId || c.me.id;
     if (!canSeeTaskOf(c, t.assigneeId)) deny("B\u1EA1n ch\u1EC9 giao \u0111\u01B0\u1EE3c vi\u1EC7c cho ch\xEDnh m\xECnh ho\u1EB7c c\u1EA5p d\u01B0\u1EDBi.");
+    if (c.byId[t.assigneeId] && !c.byId[t.assigneeId].active) throw new AppError(c.byId[t.assigneeId].name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n, kh\xF4ng giao vi\u1EC7c m\u1EDBi \u0111\u01B0\u1EE3c.");
     await insertTask(c.q, t);
   },
   async updateTask(c, p) {
@@ -5688,6 +5693,7 @@ var A = {
     const old = await one(c.q, "SELECT * FROM okrs WHERE id=$1", [o.id]);
     const allowed = (ownerId) => ownerId === c.me.id || canManage(c, ownerId);
     if (!allowed(o.ownerId) || old && !allowed(old.owner_id)) deny("B\u1EA1n ch\u1EC9 t\u1EA1o/s\u1EEDa \u0111\u01B0\u1EE3c OKR c\u1EE7a ch\xEDnh m\xECnh ho\u1EB7c c\u1EA5p d\u01B0\u1EDBi.");
+    if (!c.byId[o.ownerId].active && !(old && old.owner_id === o.ownerId)) throw new AppError(c.byId[o.ownerId].name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n, kh\xF4ng giao OKR m\u1EDBi \u0111\u01B0\u1EE3c.");
     const approved = canManage(c, o.ownerId);
     const row = [
       o.id,
@@ -5766,6 +5772,7 @@ var A = {
     if (mgrId) {
       const m = c.byId[mgrId];
       if (!m || m.id === id) throw new AppError("C\u1EA5p tr\xEAn tr\u1EF1c ti\u1EBFp kh\xF4ng h\u1EE3p l\u1EC7.");
+      if (!m.active && !(old && old.managerId === mgrId)) throw new AppError(m.name + " \u0111\xE3 b\u1ECB kho\xE1, kh\xF4ng ch\u1ECDn l\xE0m c\u1EA5p tr\xEAn \u0111\u01B0\u1EE3c.");
       if (m.role !== PARENT_ROLE[role]) throw new AppError(ROLE_NAME[role] + " ph\u1EA3i tr\u1EF1c thu\u1ED9c m\u1ED9t " + ROLE_NAME[PARENT_ROLE[role]] + ".");
     }
     if (old && old.role !== role) {
@@ -5782,6 +5789,48 @@ var A = {
         [id, username, hashPassword(u.password), name, role, str(u.dept), str(u.title), color, mgrId]
       );
     }
+  },
+  /* Khoá / mở khoá (chỉ Giám đốc). Người bị khoá không đăng nhập được, phiên đang mở bị đăng xuất; dữ liệu cũ giữ nguyên. */
+  async setUserActive(c, p) {
+    requireDirector(c);
+    const u = c.byId[p.id];
+    if (!u) throw new AppError("Kh\xF4ng t\xECm th\u1EA5y t\xE0i kho\u1EA3n.");
+    const active = !!p.active;
+    if (!active) {
+      if (u.id === c.me.id) throw new AppError("Kh\xF4ng th\u1EC3 t\u1EF1 kho\xE1 t\xE0i kho\u1EA3n c\u1EE7a ch\xEDnh m\xECnh.");
+      const subs = c.users.filter((x) => x.managerId === u.id && x.active);
+      if (subs.length) throw new AppError(u.name + " c\xF2n " + subs.length + " ng\u01B0\u1EDDi tr\u1EF1c thu\u1ED9c (" + subs.slice(0, 3).map((x) => x.name).join(", ") + (subs.length > 3 ? "\u2026" : "") + "). H\xE3y chuy\u1EC3n h\u1ECD sang c\u1EA5p tr\xEAn kh\xE1c tr\u01B0\u1EDBc khi kho\xE1.");
+    } else if (u.managerId && c.byId[u.managerId] && !c.byId[u.managerId].active) {
+      throw new AppError("C\u1EA5p tr\xEAn tr\u1EF1c ti\u1EBFp c\u1EE7a " + u.name + " (" + c.byId[u.managerId].name + ") \u0111ang b\u1ECB kho\xE1. H\xE3y s\u1EEDa c\u1EA5p tr\xEAn tr\u01B0\u1EDBc khi m\u1EDF kho\xE1.");
+    }
+    await c.q.query("UPDATE users SET active=$2 WHERE id=$1", [u.id, active]);
+  },
+  /* Xoá hẳn (chỉ Giám đốc) — chỉ cho tài khoản chưa có dữ liệu nào, ví dụ tạo nhầm. Có dữ liệu thì dùng Khoá. */
+  async deleteUser(c, p) {
+    requireDirector(c);
+    const u = c.byId[p.id];
+    if (!u) return;
+    if (u.id === c.me.id) throw new AppError("Kh\xF4ng th\u1EC3 t\u1EF1 xo\xE1 t\xE0i kho\u1EA3n c\u1EE7a ch\xEDnh m\xECnh.");
+    if (c.users.some((x) => x.managerId === u.id)) throw new AppError(u.name + " c\xF2n ng\u01B0\u1EDDi tr\u1EF1c thu\u1ED9c, kh\xF4ng th\u1EC3 xo\xE1.");
+    const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
+      + (SELECT count(*) FROM tasks WHERE assignee_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+    if (Number(used.n)) throw new AppError(u.name + ' \u0111\xE3 c\xF3 OKR, b\xE1o c\xE1o, c\xF4ng vi\u1EC7c ho\u1EB7c ph\u1EA3n h\u1ED3i trong h\u1EC7 th\u1ED1ng n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y d\xF9ng "Kho\xE1 t\xE0i kho\u1EA3n" \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.');
+    await c.q.query("DELETE FROM users WHERE id=$1", [u.id]);
+  },
+  /* Mỗi người tự đổi mật khẩu của mình (cần mật khẩu hiện tại). */
+  async changePassword(c, p) {
+    const pw = str(p.newPassword);
+    if (pw.length < 6) throw new AppError("M\u1EADt kh\u1EA9u m\u1EDBi c\u1EA7n \xEDt nh\u1EA5t 6 k\xFD t\u1EF1.");
+    const key = "pw:" + c.me.id;
+    if (failCount(key) >= 8) throw new AppError("Nh\u1EADp sai m\u1EADt kh\u1EA9u hi\u1EC7n t\u1EA1i qu\xE1 nhi\u1EC1u l\u1EA7n. Vui l\xF2ng th\u1EED l\u1EA1i sau 15 ph\xFAt.");
+    const row = await one(c.q, "SELECT pass_hash FROM users WHERE id=$1", [c.me.id]);
+    if (!row || !await checkPassword(str(p.oldPassword), row.pass_hash)) {
+      addFail(key);
+      throw new AppError("M\u1EADt kh\u1EA9u hi\u1EC7n t\u1EA1i kh\xF4ng \u0111\xFAng.");
+    }
+    if (await checkPassword(pw, row.pass_hash)) throw new AppError("M\u1EADt kh\u1EA9u m\u1EDBi ph\u1EA3i kh\xE1c m\u1EADt kh\u1EA9u hi\u1EC7n t\u1EA1i.");
+    fails.delete(key);
+    await c.q.query("UPDATE users SET pass_hash=$2 WHERE id=$1", [c.me.id, hashPassword(pw)]);
   }
 };
 async function insertTask(q, t) {
