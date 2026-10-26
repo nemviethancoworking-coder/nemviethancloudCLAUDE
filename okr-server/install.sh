@@ -117,7 +117,8 @@ NGBK="$DIR/backups/nginx-$TS"; mkdir -p "$NGBK"
 [ -f "$SNIPPET" ] && cp -a "$SNIPPET" "$NGBK/"
 mv "$SNIPPET.new" "$SNIPPET"
 DOM_RE=$(printf '%s' "$DOMAIN" | sed 's/[.]/\\./g')
-FILES=$(grep -rlE "server_name[^;]*[[:space:]]$DOM_RE([[:space:];]|$)" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | xargs -r -n1 readlink -f | sort -u || true)
+# -R: đi theo lối tắt (sites-enabled/* thường là symlink tới sites-available/*)
+FILES=$(grep -RlE "server_name[^;]*[[:space:]]$DOM_RE([[:space:];]|$)" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | xargs -r -n1 readlink -f | sort -u || true)
 CHANGED=""
 if [ -z "$FILES" ]; then
   warn "Không tìm thấy khối server_name $DOMAIN trong Nginx — bỏ qua bước này."
