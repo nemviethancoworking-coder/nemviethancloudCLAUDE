@@ -1066,6 +1066,7 @@ function viewPeople(){
     ${orphans.length ? `
     <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3" id="org-orphans">
       <div class="text-[13px] text-amber-800 mb-1">${orphans.length} người chưa gắn vào sơ đồ (chưa có cấp trên) — chỉ Giám đốc xem được công việc của họ:</div>
+      ${missingLevels().map(m => `<div class="text-[12.5px] text-amber-800 mb-1" data-missing="${m.parent}">• Có ${m.n} ${ROLES[m.role].t} nhưng chưa có <b>${ROLES[m.parent].t}</b> nào để gán. <button class="underline font-semibold" onclick="A.openUserForm('', '${m.parent}')">Tạo ${ROLES[m.parent].t}</button> trước, rồi sửa từng người để gán cấp trên.</div>`).join('')}
       ${orphans.map(o => orgNode(o, 0, seen)).join('')}
     </div>` : ''}
   </div>
@@ -1093,6 +1094,11 @@ function viewPeople(){
     </table>
   </div>`;
 }
+/* Vai trò đang có người nhưng cấp ngay trên chưa có ai (vd. có Quản lý mà chưa có Trưởng phòng). */
+function missingLevels(){
+  return ['head', 'manager', 'employee'].map(role => ({ role, parent:PARENT_ROLE[role], n:DB.users.filter(u => u.role === role && isActive(u)).length }))
+    .filter(m => m.n && !DB.users.some(u => u.role === m.parent && isActive(u)));
+}
 /* Danh sách cấp trên hợp lệ theo vai trò: NV → Quản lý, Quản lý → Trưởng phòng, Trưởng phòng → Giám đốc. */
 function parentOptions(role, selfId, selected){
   const pr = PARENT_ROLE[role];
@@ -1100,10 +1106,20 @@ function parentOptions(role, selfId, selected){
   const list = DB.users.filter(x => x.role === pr && x.id !== selfId && (isActive(x) || x.id === selected));
   return `<option value="">— Chưa gán —</option>` + list.map(l => `<option value="${l.id}" ${selected === l.id ? 'selected' : ''}>${esc(l.name)} · ${esc(l.dept || ROLES[l.role].t)}${lockedTag(l)}</option>`).join('');
 }
-function openUserForm(id){
+/* Gợi ý khi chưa có ai ở cấp ngay trên (vd. chưa có Trưởng phòng nên chưa gán được Quản lý). */
+function parentHint(role, selfId){
+  const pr = PARENT_ROLE[role];
+  if(!pr || DB.users.some(x => x.role === pr && x.id !== selfId && isActive(x))) return '';
+  return `<div class="mt-1.5 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5" id="uf-manager-hint">
+    Chưa có <b>${ROLES[pr].t}</b> nào nên chưa gán được. ${ROLES[role].t} phải trực thuộc một ${ROLES[pr].t}.
+    <button type="button" class="underline font-semibold ml-1" onclick="A.openUserForm('', '${pr}')">Tạo ${ROLES[pr].t} ngay</button>
+    <div class="text-amber-600 mt-0.5">Có thể lưu tạm "Chưa gán" rồi gán lại sau.</div>
+  </div>`;
+}
+function openUserForm(id, presetRole){
   if(!isDir()) return;
   const u = id ? DB.users.find(x => x.id === id) : null;
-  const role = u ? u.role : 'employee';
+  const role = u ? u.role : (ROLE_KEYS.includes(presetRole) ? presetRole : 'employee');
   openModal(`
     ${modalHeader(u ? 'Sửa nhân sự' : 'Thêm nhân sự', 'Cấp trên trực tiếp quyết định ai xem và giao được công việc của người này.')}
     <div class="p-6 space-y-4">
@@ -1113,7 +1129,7 @@ function openUserForm(id){
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="label">Vai trò</label><select id="uf-role" class="input" onchange="A.onRoleChange('${u ? u.id : ''}')">${ROLE_KEYS.map(k => `<option value="${k}" ${k === role ? 'selected' : ''}>${ROLES[k].t}</option>`).join('')}</select></div>
-        <div><label class="label" id="uf-manager-label">Cấp trên trực tiếp${PARENT_ROLE[role] ? ` (${ROLES[PARENT_ROLE[role]].t})` : ''}</label><select id="uf-manager" class="input">${parentOptions(role, id, u ? u.managerId : '')}</select></div>
+        <div><label class="label" id="uf-manager-label">Cấp trên trực tiếp${PARENT_ROLE[role] ? ` (${ROLES[PARENT_ROLE[role]].t})` : ''}</label><select id="uf-manager" class="input">${parentOptions(role, id, u ? u.managerId : '')}</select><div id="uf-manager-hint-box">${parentHint(role, id)}</div></div>
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="label">Phòng ban</label><input id="uf-dept" class="input" value="${esc(u ? u.dept : '')}"></div>
@@ -1216,6 +1232,7 @@ const A = {
   onRoleChange(id){
     const role = document.getElementById('uf-role').value, cur = document.getElementById('uf-manager').value;
     document.getElementById('uf-manager').innerHTML = parentOptions(role, id, cur);
+    document.getElementById('uf-manager-hint-box').innerHTML = parentHint(role, id);
     document.getElementById('uf-manager-label').textContent = 'Cấp trên trực tiếp' + (PARENT_ROLE[role] ? ` (${ROLES[PARENT_ROLE[role]].t})` : '');
   },
   setCycle(id){ state.cycleId = id; state.reportId = null; render(); },
