@@ -1,0 +1,47 @@
+# OKR Weekly — cụm Docker riêng (độc lập với n8n). Cài tại /opt/okr bằng install.sh.
+name: okr
+services:
+  db:
+    image: ${PG_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: okr
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: okr
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=40"]
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U okr -d okr"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+  api:
+    image: ${NODE_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    command: ["node", "/app/server.js"]
+    volumes:
+      - ./app:/app:ro
+    environment:
+      NODE_ENV: production
+      PORT: "3100"
+      PGHOST: db
+      PGUSER: okr
+      PGPASSWORD: ${PG_PASSWORD}
+      PGDATABASE: okr
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+    ports:
+      - "127.0.0.1:${API_PORT}:3100"      # chỉ mở trong máy, Nginx chuyển tiếp /okr-api/ vào đây
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>r.json()).then(j=>process.exit(j.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
