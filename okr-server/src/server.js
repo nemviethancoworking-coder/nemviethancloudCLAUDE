@@ -442,7 +442,7 @@ async function importDB(db, opts = {}) {
     for (const c of db.cycles || []) await q.query('INSERT INTO cycles(id,name,start_date,end_date,active) VALUES($1,$2,$3,$4,$5)', [c.id, str(c.name), str(c.start), str(c.end), !!c.active]);
     for (const u of db.users || []) {
       let pw = u.password || (opts.passwords || {})[u.username];
-      if (!pw) { pw = crypto.randomBytes(6).toString('base64url'); temp.push({ username: u.username, name: u.name, password: pw }); }
+      if (!pw) { pw = crypto.randomBytes(12).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 8); temp.push({ username: u.username, name: u.name, password: pw }); }
       await q.query('INSERT INTO users(id,username,pass_hash,name,role,dept,title,color,manager_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
         [u.id, str(u.username), hashPassword(pw), str(u.name), str(u.role) || 'employee', str(u.dept), str(u.title), str(u.color) || '#2f6fed', str(u.managerId)]);
     }

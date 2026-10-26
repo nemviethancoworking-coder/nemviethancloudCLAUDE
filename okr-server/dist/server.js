@@ -5899,7 +5899,7 @@ async function importDB(db, opts = {}) {
     for (const u of db.users || []) {
       let pw = u.password || (opts.passwords || {})[u.username];
       if (!pw) {
-        pw = crypto.randomBytes(6).toString("base64url");
+        pw = crypto.randomBytes(12).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
         temp.push({ username: u.username, name: u.name, password: pw });
       }
       await q.query(
