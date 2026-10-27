@@ -229,6 +229,7 @@ function normalizeUsers(users){
 function normalize(db){
   if(!db || !Array.isArray(db.okrs)) return null;
   db.users = db.users || []; db.tasks = db.tasks || []; db.reports = db.reports || [];
+  db.tasks.forEach(t => { if(!Array.isArray(t.comments)) t.comments = []; });
   normalizeUsers(db.users);
   if(!db.cycles){ const c = db.cycle || { name:'Chu kỳ', start: toISO(new Date()), end: toISO(addDays(new Date(), 90)) }; db.cycles = [{ id:'c1', name:c.name, start:c.start, end:c.end, active:true }]; delete db.cycle; }
   if(!db.cycles.some(c => c.active) && db.cycles.length) db.cycles[0].active = true;
@@ -872,6 +873,8 @@ function reportDetail(r){
   const canComment = own || manages;
   const taskScope = own || manages;                     // có quyền xem trạng thái công việc sinh ra từ báo cáo này
   const canDelete = (own && !r.comments.some(c => isDirective(c.authorId, r.userId))) || isDir();
+  const reviewed = r.comments.some(c => c.authorId !== r.userId);      // cấp trên đã phản hồi/đánh giá → khoá sửa
+  const canEdit = own && !reviewed && r.krUpdates.some(ku => 'work' in ku);
   const m = u.managerId ? user(u.managerId) : null;
   const perKr = r.krUpdates.some(ku => 'work' in ku);      // báo cáo theo từng KR (mới); báo cáo cũ theo nguyên bộ OKR
   const sec = (title, body, extra='') => `<div><div class="section-title mb-1.5">${title}</div><div class="text-slate-700 whitespace-pre-line leading-relaxed">${body ? esc(body) : '<span class="text-gray-400 italic">Không có</span>'}</div>${extra}</div>`;
@@ -885,9 +888,10 @@ function reportDetail(r){
           <div class="text-[12.5px] text-gray-500">${weekLabel(r.week, r.year)} · Gửi lúc ${fmtDT(r.createdAt)}${m ? ` · QL trực tiếp: ${esc(m.name)}` : ''}</div>
         </div>
       </div>
-      <div class="flex items-center gap-2">${badge(st.t, st.c)}${canDelete ? `<button class="btn btn-danger btn-sm" onclick="A.deleteReport('${r.id}')">${I.trash}</button>` : ''}</div>
+      <div class="flex items-center gap-2">${badge(st.t, st.c)}${canEdit ? `<button class="btn btn-ghost btn-sm" id="edit-report" onclick="A.editReport('${r.id}')">${I.edit} Sửa</button>` : ''}${canDelete ? `<button class="btn btn-danger btn-sm" onclick="A.deleteReport('${r.id}')">${I.trash}</button>` : ''}</div>
     </div>
     <div class="p-5 space-y-5">
+      ${own && reviewed ? `<div class="text-[12.5px] text-gray-500 flex items-center gap-1.5" id="report-locked">${I.lock} Cấp trên đã đánh giá báo cáo này nên không thể sửa nữa.</div>` : (canEdit ? `<div class="text-[12.5px] text-gray-500" id="report-editable">Cấp trên chưa đánh giá — bạn vẫn có thể sửa báo cáo này.</div>` : '')}
       <div class="rounded-lg bg-base-50 border border-base-100 p-4">
         <div class="flex items-center gap-2 text-[12px] font-semibold text-base-700 uppercase tracking-wide">${I.flag} Mục tiêu liên quan</div>
         <div class="font-semibold text-slate-900 mt-1">${o ? esc(o.title) : '(OKR đã xoá)'}</div>
@@ -945,21 +949,24 @@ function reportDetail(r){
   </div>`;
 }
 /* Các KR của OKR mà người dùng đã báo cáo trong tuần này (báo cáo cũ theo nguyên bộ tính là đã báo cáo mọi KR) */
-function sentKrIds(okrId){
-  const cw = isoWeek(new Date()), set = new Set();
-  DB.reports.forEach(r => { if(r.userId === session() && r.okrId === okrId && r.week === cw.week && r.year === cw.year) r.krUpdates.forEach(ku => set.add(ku.krId)); });
+function sentKrIds(okrId, excludeId, wk){
+  const cw = wk || isoWeek(new Date()), set = new Set();
+  DB.reports.forEach(r => { if(r.id !== excludeId && r.userId === session() && r.okrId === okrId && r.week === cw.week && r.year === cw.year) r.krUpdates.forEach(ku => set.add(ku.krId)); });
   return set;
 }
-function openReportForm(){
-  const cw = isoWeek(new Date());
-  const okrs = DB.okrs.filter(o => o.ownerId === session() && o.status === 'approved' && o.cycleId === activeCycle().id);
-  if(!okrs.length){ toast('Bạn chưa có OKR nào được duyệt trong chu kỳ hiện tại. Hãy tạo OKR ở mục Quản lý OKR.', 'error'); return; }
+let editingReportId = null;      // đang sửa báo cáo nào (null = gửi báo cáo mới)
+function openReportForm(editId){
+  editingReportId = editId || null;
+  const er = editId ? DB.reports.find(r => r.id === editId) : null;
+  const cw = er ? { week: er.week, year: er.year } : isoWeek(new Date());
+  const okrs = er ? DB.okrs.filter(o => o.id === er.okrId) : DB.okrs.filter(o => o.ownerId === session() && o.status === 'approved' && o.cycleId === activeCycle().id);
+  if(!okrs.length){ toast(er ? 'Không tìm thấy OKR của báo cáo này.' : 'Bạn chưa có OKR nào được duyệt trong chu kỳ hiện tại. Hãy tạo OKR ở mục Quản lý OKR.', 'error'); return; }
   openModal(`
-    ${modalHeader(`Báo cáo tuần — ${weekLabel(cw.week, cw.year)}`, 'Có thể gửi nhiều lần trong tuần, mỗi KR báo cáo một lần. Các giải pháp tự động trở thành công việc.')}
+    ${modalHeader(`${er ? 'Sửa báo cáo' : 'Báo cáo tuần'} — ${weekLabel(cw.week, cw.year)}`, er ? 'Chỉ sửa được khi cấp trên chưa đánh giá. Công việc sinh ra từ giải pháp sẽ được cập nhật theo.' : 'Có thể gửi nhiều lần trong tuần, mỗi KR báo cáo một lần. Các giải pháp tự động trở thành công việc.')}
     <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
       <div>
         <label class="label">Mục tiêu / OKR liên quan <span class="text-red-500">*</span></label>
-        <select id="rf-okr" class="input" onchange="A.renderKrInputs()">${okrs.map(o => `<option value="${o.id}">${esc(o.title)} (${okrPct(o)}%)</option>`).join('')}</select>
+        <select id="rf-okr" class="input" ${er ? 'disabled' : ''} onchange="A.renderKrInputs()">${okrs.map(o => `<option value="${o.id}">${esc(o.title)} (${okrPct(o)}%)</option>`).join('')}</select>
       </div>
       <div>
         <label class="label">Chọn Kết quả then chốt (KR) cần báo cáo tuần này</label>
@@ -969,7 +976,7 @@ function openReportForm(){
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
       <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
-      <button class="btn btn-primary" id="rf-submit" onclick="A.submitReport()">${I.check} Gửi báo cáo</button>
+      <button class="btn btn-primary" id="rf-submit" onclick="A.submitReport()">${I.check} ${er ? 'Lưu thay đổi' : 'Gửi báo cáo'}</button>
     </div>`, 'max-w-3xl');
   A.renderKrInputs();
 }
@@ -1023,18 +1030,18 @@ function viewTasks(){
   <div class="card overflow-hidden">
     <table class="w-full">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide">
-        <tr><th class="w-10 py-2.5"></th><th class="text-left font-medium py-2.5 px-2">Công việc</th>${isMgr() ? '<th class="text-left font-medium py-2.5 px-2">Người làm</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Nguồn</th><th class="text-left font-medium py-2.5 px-2">Hạn</th><th class="text-left font-medium py-2.5 px-2 w-36">Trạng thái</th><th class="w-12"></th></tr>
+        <tr><th class="w-10 py-2.5"></th><th class="text-left font-medium py-2.5 px-2">Công việc</th>${isMgr() ? '<th class="text-left font-medium py-2.5 px-2">Người làm</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Nguồn</th><th class="text-left font-medium py-2.5 px-2">Hạn</th><th class="text-left font-medium py-2.5 px-2 w-36">Trạng thái</th><th class="w-24"></th></tr>
       </thead>
       <tbody class="divide-y divide-gray-100" id="task-rows">
         ${ts.length ? ts.slice(0, state.taskLimit).map(t => { const u = user(t.assigneeId), o = okrById(t.okrId), od = isOverdue(t); return `
         <tr class="hover:bg-gray-50 ${t.status === 'done' ? 'opacity-70' : ''}" data-task="${t.id}" data-assignee="${t.assigneeId}">
           <td class="text-center py-3"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} onchange="A.toggleTask('${t.id}')"></td>
-          <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>${o ? `<div class="text-[12px] text-gray-500 mt-0.5 flex items-center gap-1">${I.flag} ${esc(o.title)}</div>` : ''}</td>
+          <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>${o ? `<div class="text-[12px] text-gray-500 mt-0.5 flex items-center gap-1">${I.flag} ${esc(o.title)}</div>` : ''}${t.comments && t.comments.length ? (lc => `<div class="task-note-preview text-[12px] text-slate-500 mt-0.5 flex items-center gap-1 cursor-pointer hover:text-base-600" onclick="A.openTaskNotes('${t.id}')"><span class="shrink-0">${I.chat}</span><span class="truncate max-w-[420px]"><b class="font-medium">${esc(user(lc.authorId).name)}:</b> ${esc(lc.text)}</span></div>`)(t.comments[t.comments.length-1]) : ''}</td>
           ${isMgr() ? `<td class="py-3 px-2"><div class="flex items-center gap-2">${avatar(u, 'w-6 h-6 text-[10px]')}<span class="text-slate-700 whitespace-nowrap">${esc(u.name)}</span></div></td>` : ''}
           <td class="py-3 px-2 text-[12.5px] text-gray-500 whitespace-nowrap">${t.reportId ? `<a class="text-base-600 hover:underline cursor-pointer" onclick="A.gotoReport('${t.reportId}')">Báo cáo ${weekLabel(t.week, t.year, true)}</a>` : 'Thêm thủ công'}</td>
           <td class="py-3 px-2 text-[12.5px] whitespace-nowrap ${od ? 'text-red-600 font-medium' : 'text-slate-700'}">${t.due ? fmt(t.due) : '—'}${od ? ' · Quá hạn' : ''}</td>
           <td class="py-3 px-2"><select class="input !py-1 !px-2 text-[12.5px]" onchange="A.setTaskStatus('${t.id}',this.value)">${Object.entries(TASK_STATUS).map(([k,v]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select></td>
-          <td class="py-3 text-center"><button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="A.deleteTask('${t.id}')">${I.trash}</button></td>
+          <td class="py-3 text-center whitespace-nowrap"><button class="task-notes-btn text-gray-400 hover:text-base-600 p-1 inline-flex items-center gap-0.5" title="Ghi chú / bình luận" onclick="A.openTaskNotes('${t.id}')">${I.chat}${t.comments && t.comments.length ? `<span class="text-[11px] font-semibold text-base-600">${t.comments.length}</span>` : ''}</button><button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="A.deleteTask('${t.id}')">${I.trash}</button></td>
         </tr>`; }).join('') + (ts.length > state.taskLimit ? `<tr><td colspan="7" class="p-3 text-center"><button class="btn btn-ghost btn-sm" id="more-tasks" onclick="A.more('taskLimit')">Xem thêm ${Math.min(PAGE.taskLimit, ts.length - state.taskLimit)} công việc (còn ${ts.length - state.taskLimit})</button></td></tr>` : '') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
       </tbody>
     </table>
@@ -1178,7 +1185,7 @@ const A = {
   nav(v){ state.view = v; state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; render(); },
   set(k, v){ state[k] = v; if(k === 'ckWeek' || k === 'ckUser') state.reportId = null; if(k !== 'reportLimit' && k !== 'taskLimit'){ state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; } render(); },
   more(k){ state[k] += PAGE[k]; render(); },
-  closeModal(){ document.getElementById('modal').innerHTML = ''; modalDirty = false; },
+  closeModal(){ document.getElementById('modal').innerHTML = ''; modalDirty = false; editingReportId = null; },
   cancelModal(){   // đóng do người dùng bấm X / Huỷ / Esc → hỏi lại nếu đang nhập dở
     if(!document.getElementById('modal').innerHTML.trim()) return;
     if(modalDirty && !confirm('Bạn có chắc muốn đóng? Nội dung đang nhập chưa được lưu sẽ bị mất.')) return;
@@ -1333,7 +1340,8 @@ const A = {
   },
   renderKrInputs(){
     const o = DB.okrs.find(o => o.id === document.getElementById('rf-okr').value);
-    const sent = sentKrIds(o.id);
+    const er = editingReportId ? DB.reports.find(r => r.id === editingReportId) : null;
+    const sent = sentKrIds(o.id, editingReportId, er ? { week:er.week, year:er.year } : null);
     document.getElementById('rf-krs').innerHTML = (sent.size && o.krs.every(k => sent.has(k.id)) ? '<div class="text-[13px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Tất cả KR của mục tiêu này đã được báo cáo trong tuần này.</div>' : '') + o.krs.map(k => sent.has(k.id) ? `
       <div class="kr-card-sent border border-gray-200 rounded-lg px-3 py-2.5 bg-gray-50 flex items-center gap-3 opacity-70">
         <span class="text-green-600">${I.check}</span><div class="flex-1 min-w-0 text-slate-700 font-medium">${esc(k.title)}</div><span class="text-[12px] text-gray-500">Đã báo cáo tuần này</span>
@@ -1356,6 +1364,20 @@ const A = {
           </div>
         </div>
       </div>`).join('');
+    if(er) er.krUpdates.forEach(ku => {
+      const card = document.querySelector(`.kr-card[data-kr="${ku.krId}"]`); if(!card) return;
+      card.querySelector('.kr-pick').checked = true;
+      card.querySelector('.kr-body').classList.remove('hidden'); card.classList.add('border-base-500');
+      card.querySelector('.kr-input').value = ku.value;
+      card.querySelector('.kr-work').value = ku.work || ''; card.querySelector('.kr-issues').value = ku.issues || ''; card.querySelector('.kr-causes').value = ku.causes || '';
+      (ku.solutions || []).forEach(s => A.addSolRow(ku.krId, s));
+    });
+  },
+  editReport(id){
+    const r = DB.reports.find(r => r.id === id);
+    if(!r || r.userId !== session()) return;
+    if(r.comments.some(c => c.authorId !== r.userId)){ toast('Cấp trên đã đánh giá báo cáo này nên không sửa được nữa.', 'error'); return; }
+    openReportForm(id);
   },
   toggleKr(krId, on){
     const card = document.querySelector(`.kr-card[data-kr="${krId}"]`); if(!card) return;
@@ -1364,23 +1386,26 @@ const A = {
     if(on && !card.querySelector('.sol-row')) A.addSolRow(krId);
     if(on) card.querySelector('.kr-work').focus();
   },
-  addSolRow(krId){
+  addSolRow(krId, sol){
     const card = document.querySelector(`.kr-card[data-kr="${krId}"]`); if(!card) return;
     card.querySelector('.kr-sols').insertAdjacentHTML('beforeend', `
-      <div class="sol-row flex items-center gap-2 fade-in">
-        <input class="input sol-text flex-1" placeholder="Hành động cụ thể cho tuần tới...">
-        <input type="date" class="input sol-due !w-40" value="${toISO(addDays(weekStart(isoWeek(new Date()).week, isoWeek(new Date()).year), 11))}">
+      <div class="sol-row flex items-center gap-2 fade-in" ${sol ? `data-sid="${esc(sol.id)}"` : ''}>
+        <input class="input sol-text flex-1" placeholder="Hành động cụ thể cho tuần tới..." ${sol ? `value="${esc(sol.text)}"` : ''}>
+        <input type="date" class="input sol-due !w-40" value="${sol ? esc(sol.due || '') : toISO(addDays(weekStart(isoWeek(new Date()).week, isoWeek(new Date()).year), 11))}">
         <button class="text-gray-400 hover:text-red-600 p-1.5" onclick="this.closest('.sol-row').remove()">${I.x}</button>
       </div>`);
-    const rows = card.querySelectorAll('.sol-text'); if(rows.length) rows[rows.length-1].focus();
+    if(!sol){ const rows = card.querySelectorAll('.sol-text'); if(rows.length) rows[rows.length-1].focus(); }
   },
   submitReport(){
-    const cw = isoWeek(new Date());
-    const okrId = document.getElementById('rf-okr').value;
+    const er = editingReportId ? DB.reports.find(r => r.id === editingReportId) : null;
+    if(editingReportId && !er){ toast('Báo cáo không còn tồn tại.', 'error'); return; }
+    if(er && er.comments.some(c => c.authorId !== er.userId)){ toast('Cấp trên vừa đánh giá báo cáo này nên không sửa được nữa.', 'error'); return; }
+    const cw = er ? { week:er.week, year:er.year } : isoWeek(new Date());
+    const okrId = er ? er.okrId : document.getElementById('rf-okr').value;
     const o = DB.okrs.find(o => o.id === okrId);
     const picked = [...document.querySelectorAll('.kr-card')].filter(c => c.querySelector('.kr-pick').checked);
     if(!picked.length){ toast('Vui lòng tick chọn ít nhất 1 KR cần báo cáo.', 'error'); return; }
-    const sent = sentKrIds(okrId);
+    const sent = sentKrIds(okrId, er && er.id, er ? cw : null);
     if(picked.some(c => sent.has(c.dataset.kr))){ toast('Có KR đã được báo cáo trong tuần này rồi.', 'error'); return; }
     const krUpdates = [];
     for(const c of picked){
@@ -1388,15 +1413,31 @@ const A = {
       const work = c.querySelector('.kr-work').value.trim();
       if(!work){ toast(`KR "${k.title}": vui lòng nhập đánh giá / công việc đã thực hiện.`, 'error'); return; }
       krUpdates.push({ krId:k.id, value:Number(c.querySelector('.kr-input').value) || 0, work, issues:c.querySelector('.kr-issues').value.trim(), causes:c.querySelector('.kr-causes').value.trim(),
-        solutions:[...c.querySelectorAll('.sol-row')].map(row => ({ id:uid(), krId:k.id, text:row.querySelector('.sol-text').value.trim(), due:row.querySelector('.sol-due').value })).filter(s => s.text) });
+        solutions:[...c.querySelectorAll('.sol-row')].map(row => ({ id:row.dataset.sid || uid(), krId:k.id, text:row.querySelector('.sol-text').value.trim(), due:row.querySelector('.sol-due').value })).filter(s => s.text) });
     }
     const solutions = krUpdates.flatMap(ku => ku.solutions);
     // Các trường tổng hợp (work/issues/causes) giữ để tương thích với bản cũ & bot/báo cáo đọc dữ liệu thô
     const joinKr = f => krUpdates.filter(ku => ku[f]).map(ku => `[${o.krs.find(k => k.id === ku.krId).title}]\n${ku[f]}`).join('\n\n');
     const now = new Date().toISOString();
+    if(er){
+      const oldSol = new Set(er.solutions.map(s => s.id));
+      const newTasks = solutions.filter(s => !oldSol.has(s.id)).map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:er.id, solutionId:s.id, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now, comments:[] }));
+      const upd = { id:er.id, okrId, krUpdates, work:joinKr('work'), issues:joinKr('issues'), causes:joinKr('causes'), solutions };
+      A.closeModal(); editingReportId = null; state.reportId = er.id;
+      mutate('updateReport', { report:upd, tasks:newTasks }, () => {
+        const idx = DB.reports.indexOf(er);
+        krUpdates.forEach(ku => { const k = o.krs.find(k => k.id === ku.krId); const newer = DB.reports.slice(idx + 1).some(x => x.okrId === okrId && x.krUpdates.some(y => y.krId === ku.krId)); if(k && !newer) k.current = ku.value; });
+        Object.assign(er, { krUpdates, work:upd.work, issues:upd.issues, causes:upd.causes, solutions });
+        const keep = new Set(solutions.map(s => s.id));
+        DB.tasks = DB.tasks.filter(t => !(t.reportId === er.id && t.solutionId && !keep.has(t.solutionId) && t.status === 'todo'));
+        solutions.forEach(s => { const t = DB.tasks.find(t => t.reportId === er.id && t.solutionId === s.id); if(t){ t.title = s.text; t.due = s.due; } });
+        newTasks.forEach(t => DB.tasks.push(t));
+      }, 'Đã lưu thay đổi báo cáo.');
+      return;
+    }
     const r = { id:uid(), userId:session(), week:cw.week, year:cw.year, okrId, createdAt:now, krUpdates, work:joinKr('work'), issues:joinKr('issues'), causes:joinKr('causes'), solutions, comments:[] };
     const tasks = solutions.map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:r.id, solutionId:s.id, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now }));
-    A.closeModal(); state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = r.id;
+    A.closeModal(); editingReportId = null; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = r.id;
     mutate('addReport', { report:r, tasks }, () => {
       krUpdates.forEach(ku => { const k = o.krs.find(k => k.id === ku.krId); if(k) k.current = ku.value; });
       DB.reports.push(r); tasks.forEach(t => DB.tasks.push(t));
@@ -1419,6 +1460,47 @@ const A = {
   ack(rid, cid){
     const ackAt = new Date().toISOString();
     mutate('ackComment', { id:cid, ackAt }, () => { const c = DB.reports.find(r => r.id === rid).comments.find(c => c.id === cid); c.acknowledged = true; c.ackAt = ackAt; }, 'Đã xác nhận: Đã đọc và hiểu chỉ đạo.');
+  },
+  openTaskNotes(id){
+    const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return;
+    const u = user(t.assigneeId), list = t.comments || [];
+    openModal(`
+      ${modalHeader('Ghi chú / bình luận công việc', esc(t.title))}
+      <div class="p-6 space-y-4 max-h-[60vh] overflow-y-auto" id="tn-list" data-task="${t.id}">
+        <div class="text-[12.5px] text-gray-500 flex items-center gap-2">${avatar(u, 'w-5 h-5 text-[9px]')} Người làm: <b class="text-slate-700">${esc(u.name)}</b>${t.due ? ` · Hạn ${fmt(t.due)}` : ''}</div>
+        ${list.length ? list.map(c => { const a = user(c.authorId), mine = c.authorId === session(); return `
+        <div class="flex gap-3" data-note="${c.id}">
+          ${avatar(a, 'w-8 h-8 text-[11px]')}
+          <div class="flex-1 rounded-lg px-3.5 py-2.5 ${mine ? 'bg-base-50 border border-base-100' : 'bg-gray-50 border border-gray-200'}">
+            <div class="flex items-center gap-2 text-[12px]"><span class="font-semibold text-slate-900">${esc(a.name)}</span><span class="text-gray-400">${fmtDT(c.createdAt)}</span>${mine || isDir() ? `<button class="ml-auto text-gray-400 hover:text-red-600" title="Xoá ghi chú" onclick="A.deleteTaskNote('${t.id}','${c.id}')">${I.trash}</button>` : ''}</div>
+            <div class="text-slate-700 mt-1 whitespace-pre-line leading-relaxed">${esc(c.text)}</div>
+          </div>
+        </div>`; }).join('') : '<div class="text-gray-400 text-[13px] italic" id="tn-empty">Chưa có ghi chú nào.</div>'}
+      </div>
+      <div class="px-6 py-4 border-t border-gray-200 flex gap-3">
+        ${avatar(me(), 'w-8 h-8 text-[11px]')}
+        <div class="flex-1">
+          <textarea id="tn-text" class="input" placeholder="Viết ghi chú, cập nhật tiến độ hoặc bình luận..." style="min-height:70px" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){A.addTaskNote('${t.id}')}"></textarea>
+          <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400">Người làm, cấp trên của họ và Giám đốc đều xem được.</span><button class="btn btn-primary btn-sm" id="tn-send" onclick="A.addTaskNote('${t.id}')">${I.chat} Gửi</button></div>
+        </div>
+      </div>`, 'max-w-xl');
+    setTimeout(() => { const el = document.getElementById('tn-text'); if(el) el.focus(); }, 50);
+  },
+  addTaskNote(id){
+    const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return;
+    const ta = document.getElementById('tn-text'), text = ta ? ta.value.trim() : '';
+    if(!text){ toast('Vui lòng nhập nội dung ghi chú.', 'error'); return; }
+    const c = { id:uid(), taskId:id, authorId:session(), text, createdAt:new Date().toISOString() };
+    mutate('addTaskComment', { comment:c }, () => { t.comments = t.comments || []; t.comments.push(c); }, 'Đã thêm ghi chú.');
+    A.openTaskNotes(id);
+    const list = document.getElementById('tn-list'); if(list) list.scrollTop = list.scrollHeight;
+  },
+  deleteTaskNote(taskId, cid){
+    const t = DB.tasks.find(t => t.id === taskId); if(!t || !canSeeTask(t)) return;
+    const c = (t.comments || []).find(c => c.id === cid); if(!c || !(c.authorId === session() || isDir())) return;
+    if(!confirm('Xoá ghi chú này?')) return;
+    mutate('deleteTaskComment', { id:cid }, () => { t.comments = t.comments.filter(x => x.id !== cid); }, 'Đã xoá ghi chú.');
+    A.openTaskNotes(taskId);
   },
   toggleTask(id){ const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return; const s = t.status === 'done' ? 'todo' : 'done'; mutate('updateTask', { id, patch:{ status:s } }, () => { t.status = s; }); },
   setTaskStatus(id, s){ const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return; mutate('updateTask', { id, patch:{ status:s } }, () => { t.status = s; }); },

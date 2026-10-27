@@ -5328,7 +5328,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 6;
+var VERSION = 7;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
@@ -5354,6 +5354,8 @@ CREATE TABLE IF NOT EXISTS comments (id text PRIMARY KEY, report_id text NOT NUL
   created_at text NOT NULL DEFAULT '', acknowledged boolean NOT NULL DEFAULT false, ack_at text, seq bigserial);
 CREATE TABLE IF NOT EXISTS tasks (id text PRIMARY KEY, title text NOT NULL, assignee_id text NOT NULL, report_id text, solution_id text, okr_id text, week int NOT NULL DEFAULT 0,
   year int NOT NULL DEFAULT 0, due text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'todo', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE TABLE IF NOT EXISTS task_comments (id text PRIMARY KEY, task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, author_id text NOT NULL, text text NOT NULL, created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS task_comments_task ON task_comments(task_id);
 CREATE INDEX IF NOT EXISTS krs_okr ON krs(okr_id);
 CREATE INDEX IF NOT EXISTS comments_report ON comments(report_id);
 CREATE INDEX IF NOT EXISTS tasks_assignee ON tasks(assignee_id);
@@ -5486,7 +5488,17 @@ async function buildPublic() {
 async function viewerTasks(viewer, users) {
   const c = { me: users.find((u) => u.id === viewer.id) || viewer, byId: Object.fromEntries(users.map((u) => [u.id, u])) };
   const ids = users.filter((u) => canSeeTaskOf(c, u.id)).map((u) => u.id);
-  const tr = await pool.query("SELECT * FROM tasks WHERE assignee_id = ANY($1) ORDER BY seq", [ids]);
+  return tasksWithComments(ids);
+}
+async function tasksWithComments(assigneeIds) {
+  const tr = await pool.query("SELECT * FROM tasks WHERE assignee_id = ANY($1) ORDER BY seq", [assigneeIds]);
+  const ids = tr.rows.map((t) => t.id), by = {};
+  if (ids.length) {
+    const cr = await pool.query("SELECT * FROM task_comments WHERE task_id = ANY($1) ORDER BY seq", [ids]);
+    cr.rows.forEach((c) => {
+      (by[c.task_id] = by[c.task_id] || []).push({ id: c.id, authorId: c.author_id, text: c.text, createdAt: c.created_at });
+    });
+  }
   return tr.rows.map((t) => ({
     id: t.id,
     title: t.title,
@@ -5498,7 +5510,8 @@ async function viewerTasks(viewer, users) {
     year: t.year,
     due: t.due,
     status: t.status,
-    createdAt: t.created_at
+    createdAt: t.created_at,
+    comments: by[t.id] || []
   }));
 }
 async function dbResponse(viewer, extra) {
@@ -5561,20 +5574,7 @@ async function loadDB(viewer) {
   if (viewer) {
     const c = await ctx(viewer);
     const ids = c.users.filter((u) => canSeeTaskOf(c, u.id)).map((u) => u.id);
-    const tr = await pool.query("SELECT * FROM tasks WHERE assignee_id = ANY($1) ORDER BY seq", [ids]);
-    tasks = tr.rows.map((t) => ({
-      id: t.id,
-      title: t.title,
-      assigneeId: t.assignee_id,
-      reportId: t.report_id || null,
-      solutionId: t.solution_id || null,
-      okrId: t.okr_id || null,
-      week: t.week,
-      year: t.year,
-      due: t.due,
-      status: t.status,
-      createdAt: t.created_at
-    }));
+    tasks = await tasksWithComments(ids);
   }
   return { cycles, users, okrs, reports, tasks, viewerId: viewer ? viewer.id : null, loadedAt: (/* @__PURE__ */ new Date()).toISOString() };
 }
@@ -5648,6 +5648,62 @@ var A = {
     if (r.user_id !== c.me.id && c.me.role !== "director") deny("Ch\u1EC9 ng\u01B0\u1EDDi vi\u1EBFt b\xE1o c\xE1o ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 b\xE1o c\xE1o.");
     await c.q.query("DELETE FROM tasks WHERE report_id=$1", [p.id]);
     await c.q.query("DELETE FROM reports WHERE id=$1", [p.id]);
+  },
+  /* Sửa báo cáo tuần: chỉ người gửi, và chỉ khi chưa có cấp trên nào phản hồi/đánh giá. */
+  async updateReport(c, p) {
+    const r = p.report, tasks = p.tasks || [];
+    if (!r || !r.id || !r.okrId) throw new AppError("Thi\u1EBFu d\u1EEF li\u1EC7u b\xE1o c\xE1o.");
+    const old = await one(c.q, "SELECT * FROM reports WHERE id=$1", [r.id]);
+    if (!old) throw new AppError("B\xE1o c\xE1o kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+    if (old.user_id !== c.me.id) deny("Ch\u1EC9 ng\u01B0\u1EDDi g\u1EEDi b\xE1o c\xE1o \u0111\u01B0\u1EE3c s\u1EEDa b\xE1o c\xE1o n\xE0y.");
+    if (old.okr_id !== r.okrId) throw new AppError("Kh\xF4ng \u0111\u1ED5i \u0111\u01B0\u1EE3c OKR c\u1EE7a b\xE1o c\xE1o \u0111\xE3 g\u1EEDi.");
+    if (!(old.kr_updates || []).some((ku) => "work" in ku)) throw new AppError("B\xE1o c\xE1o c\u0169 (theo nguy\xEAn b\u1ED9 OKR) kh\xF4ng s\u1EEDa \u0111\u01B0\u1EE3c.");
+    if (await one(c.q, "SELECT 1 FROM comments WHERE report_id=$1 AND author_id <> $2 LIMIT 1", [old.id, old.user_id]))
+      throw new AppError("C\u1EA5p tr\xEAn \u0111\xE3 \u0111\xE1nh gi\xE1 b\xE1o c\xE1o n\xE0y n\xEAn kh\xF4ng s\u1EEDa \u0111\u01B0\u1EE3c n\u1EEFa.");
+    const kus = r.krUpdates || [];
+    if (!kus.length) throw new AppError("C\u1EA7n ch\u1ECDn \xEDt nh\u1EA5t 1 KR \u0111\u1EC3 b\xE1o c\xE1o.");
+    const okrKrs = (await c.q.query("SELECT id FROM krs WHERE okr_id=$1", [old.okr_id])).rows.map((x) => x.id);
+    if (kus.some((ku) => !okrKrs.includes(ku.krId)) || new Set(kus.map((ku) => ku.krId)).size !== kus.length) throw new AppError("KR kh\xF4ng h\u1EE3p l\u1EC7.");
+    const others = await c.q.query("SELECT kr_updates FROM reports WHERE user_id=$1 AND okr_id=$2 AND week=$3 AND year=$4 AND id <> $5", [old.user_id, old.okr_id, old.week, old.year, old.id]);
+    const sent = /* @__PURE__ */ new Set();
+    others.rows.forEach((row) => (row.kr_updates || []).forEach((ku) => sent.add(ku.krId)));
+    if (kus.some((ku) => sent.has(ku.krId))) throw new AppError("C\xF3 KR \u0111\xE3 \u0111\u01B0\u1EE3c b\xE1o c\xE1o \u1EDF m\u1ED9t b\xE1o c\xE1o kh\xE1c trong tu\u1EA7n n\xE0y.");
+    const solutions = kus.flatMap((ku) => ku.solutions || []);
+    await c.q.query(
+      "UPDATE reports SET work=$2, issues=$3, causes=$4, kr_updates=$5, solutions=$6 WHERE id=$1",
+      [old.id, str(r.work), str(r.issues), str(r.causes), JSON.stringify(kus), JSON.stringify(solutions)]
+    );
+    const newer = await c.q.query("SELECT kr_updates FROM reports WHERE okr_id=$1 AND seq > $2", [old.okr_id, old.seq]);
+    const newerKr = /* @__PURE__ */ new Set();
+    newer.rows.forEach((row) => (row.kr_updates || []).forEach((ku) => newerKr.add(ku.krId)));
+    for (const ku of kus) if (!newerKr.has(ku.krId)) await c.q.query("UPDATE krs SET current=$1 WHERE id=$2 AND okr_id=$3", [num(ku.value), ku.krId, old.okr_id]);
+    const ex = (await c.q.query("SELECT id, solution_id, status FROM tasks WHERE report_id=$1", [old.id])).rows;
+    const keepSol = new Set(solutions.map((s) => s.id));
+    for (const t of ex) if (t.solution_id && !keepSol.has(t.solution_id) && t.status === "todo") await c.q.query("DELETE FROM tasks WHERE id=$1", [t.id]);
+    for (const s of solutions) {
+      const cur = ex.find((t) => t.solution_id === s.id);
+      if (cur) await c.q.query("UPDATE tasks SET title=$2, due=$3 WHERE id=$1", [cur.id, str(s.text), str(s.due)]);
+      else {
+        const nt = tasks.find((t) => t.solutionId === s.id) || { id: "t" + crypto.randomBytes(6).toString("hex"), title: s.text, due: s.due, status: "todo", week: old.week, year: old.year, okrId: old.okr_id };
+        await insertTask(c.q, { ...nt, title: str(s.text), due: str(s.due), assigneeId: old.user_id, reportId: old.id, solutionId: s.id });
+      }
+    }
+  },
+  /* Bình luận / ghi chú trên công việc: ai xem được công việc thì được bình luận. */
+  async addTaskComment(c, p) {
+    const cm = p.comment;
+    if (!cm || !cm.id || !cm.taskId || !str(cm.text).trim()) throw new AppError("Thi\u1EBFu n\u1ED9i dung ghi ch\xFA.");
+    const t = await one(c.q, "SELECT assignee_id FROM tasks WHERE id=$1", [cm.taskId]);
+    if (!t) throw new AppError("C\xF4ng vi\u1EC7c kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+    if (!canSeeTaskOf(c, t.assignee_id)) deny();
+    await c.q.query("INSERT INTO task_comments(id,task_id,author_id,text,created_at) VALUES($1,$2,$3,$4,$5)", [cm.id, cm.taskId, c.me.id, str(cm.text).trim().slice(0, 4e3), str(cm.createdAt) || (/* @__PURE__ */ new Date()).toISOString()]);
+  },
+  async deleteTaskComment(c, p) {
+    const row = await one(c.q, "SELECT cm.author_id, t.assignee_id FROM task_comments cm JOIN tasks t ON t.id = cm.task_id WHERE cm.id=$1", [p.id]);
+    if (!row) return;
+    if (!canSeeTaskOf(c, row.assignee_id)) deny();
+    if (row.author_id !== c.me.id && c.me.role !== "director") deny("Ch\u1EC9 ng\u01B0\u1EDDi vi\u1EBFt ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 ghi ch\xFA n\xE0y.");
+    await c.q.query("DELETE FROM task_comments WHERE id=$1", [p.id]);
   },
   async addComment(c, p) {
     const cm = p.comment;
