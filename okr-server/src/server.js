@@ -234,8 +234,12 @@ const A = {
     if (!r || !r.id || !r.okrId) throw new AppError('Thiếu dữ liệu báo cáo.');
     const okr = await one(c.q, 'SELECT id, owner_id FROM okrs WHERE id = $1', [r.okrId]);
     if (!okr || okr.owner_id !== c.me.id) deny('Chỉ gửi được báo cáo cho OKR của chính bạn.');
-    const dup = await one(c.q, 'SELECT 1 FROM reports WHERE user_id=$1 AND okr_id=$2 AND week=$3 AND year=$4', [c.me.id, r.okrId, num(r.week), num(r.year)]);
-    if (dup) throw new AppError('Đã có báo cáo tuần này cho OKR này.');
+    // Một OKR có thể báo cáo nhiều lần trong tuần, miễn mỗi KR chỉ báo cáo một lần (báo cáo cũ theo nguyên bộ có đủ mọi KR).
+    const sent = new Set();
+    const prev = await c.q.query('SELECT kr_updates FROM reports WHERE user_id=$1 AND okr_id=$2 AND week=$3 AND year=$4', [c.me.id, r.okrId, num(r.week), num(r.year)]);
+    for (const row of prev.rows) for (const ku of row.kr_updates || []) sent.add(ku.krId);
+    if (!(r.krUpdates || []).length && prev.rows.length) throw new AppError('Đã có báo cáo tuần này cho OKR này.');
+    if ((r.krUpdates || []).some(ku => sent.has(ku.krId))) throw new AppError('Có KR đã được báo cáo trong tuần này rồi.');
     await c.q.query(`INSERT INTO reports(id,user_id,week,year,okr_id,created_at,work,issues,causes,kr_updates,solutions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [r.id, c.me.id, num(r.week), num(r.year), r.okrId, str(r.createdAt) || new Date().toISOString(), str(r.work), str(r.issues), str(r.causes),
        JSON.stringify(r.krUpdates || []), JSON.stringify(r.solutions || [])]);

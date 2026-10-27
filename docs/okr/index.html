@@ -944,12 +944,18 @@ function reportDetail(r){
     </div>
   </div>`;
 }
+/* Các KR của OKR mà người dùng đã báo cáo trong tuần này (báo cáo cũ theo nguyên bộ tính là đã báo cáo mọi KR) */
+function sentKrIds(okrId){
+  const cw = isoWeek(new Date()), set = new Set();
+  DB.reports.forEach(r => { if(r.userId === session() && r.okrId === okrId && r.week === cw.week && r.year === cw.year) r.krUpdates.forEach(ku => set.add(ku.krId)); });
+  return set;
+}
 function openReportForm(){
   const cw = isoWeek(new Date());
   const okrs = DB.okrs.filter(o => o.ownerId === session() && o.status === 'approved' && o.cycleId === activeCycle().id);
   if(!okrs.length){ toast('Bạn chưa có OKR nào được duyệt trong chu kỳ hiện tại. Hãy tạo OKR ở mục Quản lý OKR.', 'error'); return; }
   openModal(`
-    ${modalHeader(`Báo cáo tuần — ${weekLabel(cw.week, cw.year)}`, 'Sau khi gửi, các giải pháp sẽ tự động trở thành công việc trong Quản lý công việc.')}
+    ${modalHeader(`Báo cáo tuần — ${weekLabel(cw.week, cw.year)}`, 'Có thể gửi nhiều lần trong tuần, mỗi KR báo cáo một lần. Các giải pháp tự động trở thành công việc.')}
     <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
       <div>
         <label class="label">Mục tiêu / OKR liên quan <span class="text-red-500">*</span></label>
@@ -1327,7 +1333,11 @@ const A = {
   },
   renderKrInputs(){
     const o = DB.okrs.find(o => o.id === document.getElementById('rf-okr').value);
-    document.getElementById('rf-krs').innerHTML = o.krs.map(k => `
+    const sent = sentKrIds(o.id);
+    document.getElementById('rf-krs').innerHTML = (sent.size && o.krs.every(k => sent.has(k.id)) ? '<div class="text-[13px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Tất cả KR của mục tiêu này đã được báo cáo trong tuần này.</div>' : '') + o.krs.map(k => sent.has(k.id) ? `
+      <div class="kr-card-sent border border-gray-200 rounded-lg px-3 py-2.5 bg-gray-50 flex items-center gap-3 opacity-70">
+        <span class="text-green-600">${I.check}</span><div class="flex-1 min-w-0 text-slate-700 font-medium">${esc(k.title)}</div><span class="text-[12px] text-gray-500">Đã báo cáo tuần này</span>
+      </div>` : `
       <div class="kr-card border border-gray-200 rounded-lg" data-kr="${k.id}">
         <label class="flex items-center gap-3 px-3 py-2.5 cursor-pointer">
           <input type="checkbox" class="checkbox kr-pick" onchange="A.toggleKr('${k.id}', this.checked)">
@@ -1370,7 +1380,8 @@ const A = {
     const o = DB.okrs.find(o => o.id === okrId);
     const picked = [...document.querySelectorAll('.kr-card')].filter(c => c.querySelector('.kr-pick').checked);
     if(!picked.length){ toast('Vui lòng tick chọn ít nhất 1 KR cần báo cáo.', 'error'); return; }
-    if(DB.reports.some(r => r.userId === session() && r.okrId === okrId && r.week === cw.week && r.year === cw.year)){ toast('Bạn đã gửi báo cáo tuần này cho OKR này rồi.', 'error'); return; }
+    const sent = sentKrIds(okrId);
+    if(picked.some(c => sent.has(c.dataset.kr))){ toast('Có KR đã được báo cáo trong tuần này rồi.', 'error'); return; }
     const krUpdates = [];
     for(const c of picked){
       const k = o.krs.find(k => k.id === c.dataset.kr);

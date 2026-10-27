@@ -5618,8 +5618,11 @@ var A = {
     if (!r || !r.id || !r.okrId) throw new AppError("Thi\u1EBFu d\u1EEF li\u1EC7u b\xE1o c\xE1o.");
     const okr = await one(c.q, "SELECT id, owner_id FROM okrs WHERE id = $1", [r.okrId]);
     if (!okr || okr.owner_id !== c.me.id) deny("Ch\u1EC9 g\u1EEDi \u0111\u01B0\u1EE3c b\xE1o c\xE1o cho OKR c\u1EE7a ch\xEDnh b\u1EA1n.");
-    const dup = await one(c.q, "SELECT 1 FROM reports WHERE user_id=$1 AND okr_id=$2 AND week=$3 AND year=$4", [c.me.id, r.okrId, num(r.week), num(r.year)]);
-    if (dup) throw new AppError("\u0110\xE3 c\xF3 b\xE1o c\xE1o tu\u1EA7n n\xE0y cho OKR n\xE0y.");
+    const sent = /* @__PURE__ */ new Set();
+    const prev = await c.q.query("SELECT kr_updates FROM reports WHERE user_id=$1 AND okr_id=$2 AND week=$3 AND year=$4", [c.me.id, r.okrId, num(r.week), num(r.year)]);
+    for (const row of prev.rows) for (const ku of row.kr_updates || []) sent.add(ku.krId);
+    if (!(r.krUpdates || []).length && prev.rows.length) throw new AppError("\u0110\xE3 c\xF3 b\xE1o c\xE1o tu\u1EA7n n\xE0y cho OKR n\xE0y.");
+    if ((r.krUpdates || []).some((ku) => sent.has(ku.krId))) throw new AppError("C\xF3 KR \u0111\xE3 \u0111\u01B0\u1EE3c b\xE1o c\xE1o trong tu\u1EA7n n\xE0y r\u1ED3i.");
     await c.q.query(
       `INSERT INTO reports(id,user_id,week,year,okr_id,created_at,work,issues,causes,kr_updates,solutions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
