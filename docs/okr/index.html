@@ -854,6 +854,17 @@ function viewCheckin(){
     <div class="lg:col-span-8">${sel ? reportDetail(sel) : '<div class="card p-12 text-center text-gray-400">Chọn một báo cáo để xem chi tiết.</div>'}</div>
   </div>`;
 }
+/* Danh sách giải pháp/hành động (kèm trạng thái công việc sinh ra) */
+function solList(r, sols, taskScope){
+  if(!sols.length) return '<div class="text-gray-400 italic">Không có</div>';
+  return `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${sols.map(s => { const t = taskScope ? IX.taskBySol.get(r.id + '|' + s.id) : null; const ts = t ? TASK_STATUS[t.status] : null; return `
+    <div class="flex items-center gap-3 px-3 py-2.5">
+      ${taskScope ? `<input type="checkbox" class="checkbox" ${t && t.status === 'done' ? 'checked' : ''} ${t ? `onchange="A.toggleTask('${t.id}')"` : 'disabled'}>` : `<span class="text-gray-300">•</span>`}
+      <span class="flex-1 ${t && t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span>
+      ${s.due ? `<span class="text-[12px] ${t && isOverdue(t) ? 'text-red-600 font-medium' : 'text-gray-500'}">Hạn ${fmt(s.due)}</span>` : ''}
+      ${taskScope ? (ts ? badge(ts.t, ts.c) : badge('Chưa tạo task', 'bg-gray-100 text-gray-500 border-gray-200')) : ''}
+    </div>`; }).join('')}</div>`;
+}
 function reportDetail(r){
   const id = session();
   const u = user(r.userId), o = okrById(r.okrId), st = reportStatus(r);
@@ -862,6 +873,7 @@ function reportDetail(r){
   const taskScope = own || manages;                     // có quyền xem trạng thái công việc sinh ra từ báo cáo này
   const canDelete = (own && !r.comments.some(c => isDirective(c.authorId, r.userId))) || isDir();
   const m = u.managerId ? user(u.managerId) : null;
+  const perKr = r.krUpdates.some(ku => 'work' in ku);      // báo cáo theo từng KR (mới); báo cáo cũ theo nguyên bộ OKR
   const sec = (title, body, extra='') => `<div><div class="section-title mb-1.5">${title}</div><div class="text-slate-700 whitespace-pre-line leading-relaxed">${body ? esc(body) : '<span class="text-gray-400 italic">Không có</span>'}</div>${extra}</div>`;
   return `
   <div class="card" id="report-detail" data-report="${r.id}">
@@ -886,6 +898,13 @@ function reportDetail(r){
           <tbody>${r.krUpdates.map(ku => { const k = o && o.krs.find(k => k.id === ku.krId); if(!k) return ''; const p = krPctOf(k, ku.value); return `<tr class="border-t border-base-100"><td class="py-1.5 text-slate-700">${esc(k.title)}</td><td class="py-1.5 text-right font-semibold">${num(ku.value)} ${esc(k.unit)}</td><td class="py-1.5 text-right text-gray-500">${num(k.target)} ${esc(k.unit)}</td><td class="py-1.5 text-right font-medium">${p}%</td></tr>`; }).join('')}</tbody>
         </table>` : ''}
       </div>
+      ${perKr ? r.krUpdates.map(ku => { const k = o && o.krs.find(k => k.id === ku.krId); if(!k) return ''; return `
+      <div class="border border-gray-200 rounded-lg p-4 space-y-4" data-kr-report="${esc(ku.krId)}">
+        <div class="flex items-center justify-between gap-3"><div class="font-semibold text-slate-900 flex items-center gap-2"><span class="text-base-600">${I.flag}</span>KR: ${esc(k.title)}</div><div class="text-[12.5px] text-gray-500 whitespace-nowrap"><b class="text-slate-800">${num(ku.value)}</b> / ${num(k.target)} ${esc(k.unit)} · ${krPctOf(k, ku.value)}%</div></div>
+        ${sec('Đánh giá / Công việc đã thực hiện', ku.work)}
+        <div class="grid md:grid-cols-2 gap-5">${sec('Vấn đề / Rào cản', ku.issues)}${sec('Nguyên nhân', ku.causes)}</div>
+        <div><div class="section-title mb-1.5">Kế hoạch / Hành động tuần tiếp theo <span class="normal-case font-normal text-gray-400">${taskScope ? '(đã chuyển thành công việc)' : ''}</span></div>${solList(r, ku.solutions || [], taskScope)}</div>
+      </div>`; }).join('') + (!taskScope ? `<div class="text-[12px] text-gray-400 flex items-center gap-1">${I.lock} Trạng thái công việc chỉ hiển thị với người làm, các cấp trên của họ và Giám đốc.</div>` : '') : `
       ${sec('Công việc đã thực hiện trong tuần', r.work)}
       <div class="grid md:grid-cols-2 gap-5">
         ${sec('Vấn đề / Rào cản', r.issues)}
@@ -893,15 +912,9 @@ function reportDetail(r){
       </div>
       <div>
         <div class="section-title mb-1.5">Giải pháp / Hành động tuần tiếp theo <span class="normal-case font-normal text-gray-400">${taskScope ? '(đã chuyển thành công việc)' : ''}</span></div>
-        ${r.solutions.length ? `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${r.solutions.map(s => { const t = taskScope ? IX.taskBySol.get(r.id + '|' + s.id) : null; const ts = t ? TASK_STATUS[t.status] : null; return `
-          <div class="flex items-center gap-3 px-3 py-2.5">
-            ${taskScope ? `<input type="checkbox" class="checkbox" ${t && t.status === 'done' ? 'checked' : ''} ${t ? `onchange="A.toggleTask('${t.id}')"` : 'disabled'}>` : `<span class="text-gray-300">•</span>`}
-            <span class="flex-1 ${t && t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span>
-            ${s.due ? `<span class="text-[12px] ${t && isOverdue(t) ? 'text-red-600 font-medium' : 'text-gray-500'}">Hạn ${fmt(s.due)}</span>` : ''}
-            ${taskScope ? (ts ? badge(ts.t, ts.c) : badge('Chưa tạo task', 'bg-gray-100 text-gray-500 border-gray-200')) : ''}
-          </div>`; }).join('')}</div>
-          ${!taskScope ? `<div class="text-[12px] text-gray-400 mt-1.5 flex items-center gap-1">${I.lock} Trạng thái công việc chỉ hiển thị với người làm, các cấp trên của họ và Giám đốc.</div>` : ''}` : '<div class="text-gray-400 italic">Không có</div>'}
-      </div>
+        ${solList(r, r.solutions, taskScope)}
+        ${r.solutions.length && !taskScope ? `<div class="text-[12px] text-gray-400 mt-1.5 flex items-center gap-1">${I.lock} Trạng thái công việc chỉ hiển thị với người làm, các cấp trên của họ và Giám đốc.</div>` : ''}
+      </div>`}
       <div class="border-t border-gray-200 pt-5">
         <div class="section-title mb-3">Phản hồi & Check-in của Quản lý (${r.comments.length})</div>
         <div class="space-y-3">
@@ -943,25 +956,16 @@ function openReportForm(){
         <select id="rf-okr" class="input" onchange="A.renderKrInputs()">${okrs.map(o => `<option value="${o.id}">${esc(o.title)} (${okrPct(o)}%)</option>`).join('')}</select>
       </div>
       <div>
-        <label class="label">Cập nhật tiến độ các Kết quả then chốt</label>
-        <div id="rf-krs" class="border border-gray-200 rounded-lg divide-y divide-gray-100"></div>
-      </div>
-      <div><label class="label">Công việc đã thực hiện trong tuần <span class="text-red-500">*</span></label><textarea id="rf-work" class="input" placeholder="- Việc 1...&#10;- Việc 2..."></textarea></div>
-      <div class="grid md:grid-cols-2 gap-4">
-        <div><label class="label">Vấn đề / Rào cản gặp phải</label><textarea id="rf-issues" class="input" placeholder="Khó khăn, điểm nghẽn..."></textarea></div>
-        <div><label class="label">Nguyên nhân của vấn đề</label><textarea id="rf-causes" class="input" placeholder="Vì sao xảy ra vấn đề..."></textarea></div>
-      </div>
-      <div>
-        <div class="flex items-center justify-between mb-1.5"><label class="label !mb-0">Giải pháp / Hành động cho tuần tiếp theo</label><button class="btn btn-ghost btn-sm" onclick="A.addSolRow()">${I.plus} Thêm giải pháp</button></div>
-        <p class="text-[12px] text-gray-500 mb-2">Mỗi dòng sẽ trở thành một công việc riêng, có hạn hoàn thành.</p>
-        <div id="rf-sols" class="space-y-2"></div>
+        <label class="label">Chọn Kết quả then chốt (KR) cần báo cáo tuần này</label>
+        <p class="text-[12px] text-gray-500 mb-2">Tick vào KR nào bạn muốn báo cáo. KR không tick sẽ để trống trong tuần này.</p>
+        <div id="rf-krs" class="space-y-3"></div>
       </div>
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
       <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
       <button class="btn btn-primary" id="rf-submit" onclick="A.submitReport()">${I.check} Gửi báo cáo</button>
     </div>`, 'max-w-3xl');
-  A.renderKrInputs(); A.addSolRow();
+  A.renderKrInputs();
 }
 function openTaskForm(){
   const assignees = scopeUsers().filter(isActive);
@@ -1324,37 +1328,68 @@ const A = {
   renderKrInputs(){
     const o = DB.okrs.find(o => o.id === document.getElementById('rf-okr').value);
     document.getElementById('rf-krs').innerHTML = o.krs.map(k => `
-      <div class="flex items-center gap-3 px-3 py-2.5">
-        <div class="flex-1 min-w-0"><div class="text-slate-800 font-medium truncate">${esc(k.title)}</div><div class="text-[12px] text-gray-500">Đầu kỳ ${num(k.baseline)} · Hiện tại ${num(k.current)} · Mục tiêu ${num(k.target)} ${esc(k.unit)}</div></div>
-        <input type="number" min="0" step="any" class="input !w-32 kr-input text-right" data-kr="${k.id}" value="${k.current}">
-        <span class="text-gray-500 text-[12.5px] w-16">${esc(k.unit)}</span>
+      <div class="kr-card border border-gray-200 rounded-lg" data-kr="${k.id}">
+        <label class="flex items-center gap-3 px-3 py-2.5 cursor-pointer">
+          <input type="checkbox" class="checkbox kr-pick" onchange="A.toggleKr('${k.id}', this.checked)">
+          <div class="flex-1 min-w-0"><div class="text-slate-800 font-medium">${esc(k.title)}</div><div class="text-[12px] text-gray-500">Đầu kỳ ${num(k.baseline)} · Hiện tại ${num(k.current)} · Mục tiêu ${num(k.target)} ${esc(k.unit)}</div></div>
+        </label>
+        <div class="kr-body hidden border-t border-gray-100 p-4 space-y-4 bg-gray-50/50">
+          <div class="flex items-center gap-3"><label class="label !mb-0 w-40">Giá trị hiện tại</label><input type="number" min="0" step="any" class="input !w-36 kr-input text-right" value="${k.current}"><span class="text-gray-500 text-[12.5px]">${esc(k.unit)}</span></div>
+          <div><label class="label">Đánh giá / Công việc đã thực hiện cho KR này <span class="text-red-500">*</span></label><textarea class="input kr-work" placeholder="- Việc 1...&#10;- Việc 2..."></textarea></div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div><label class="label">Vấn đề / Rào cản</label><textarea class="input kr-issues" placeholder="Khó khăn, điểm nghẽn..."></textarea></div>
+            <div><label class="label">Nguyên nhân</label><textarea class="input kr-causes" placeholder="Vì sao xảy ra vấn đề..."></textarea></div>
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-1.5"><label class="label !mb-0">Kế hoạch / Hành động tuần tiếp theo</label><button type="button" class="btn btn-ghost btn-sm" onclick="A.addSolRow('${k.id}')">${I.plus} Thêm giải pháp</button></div>
+            <div class="kr-sols space-y-2"></div>
+          </div>
+        </div>
       </div>`).join('');
   },
-  addSolRow(){
-    document.getElementById('rf-sols').insertAdjacentHTML('beforeend', `
+  toggleKr(krId, on){
+    const card = document.querySelector(`.kr-card[data-kr="${krId}"]`); if(!card) return;
+    card.querySelector('.kr-body').classList.toggle('hidden', !on);
+    card.classList.toggle('border-base-500', on);
+    if(on && !card.querySelector('.sol-row')) A.addSolRow(krId);
+    if(on) card.querySelector('.kr-work').focus();
+  },
+  addSolRow(krId){
+    const card = document.querySelector(`.kr-card[data-kr="${krId}"]`); if(!card) return;
+    card.querySelector('.kr-sols').insertAdjacentHTML('beforeend', `
       <div class="sol-row flex items-center gap-2 fade-in">
         <input class="input sol-text flex-1" placeholder="Hành động cụ thể cho tuần tới...">
         <input type="date" class="input sol-due !w-40" value="${toISO(addDays(weekStart(isoWeek(new Date()).week, isoWeek(new Date()).year), 11))}">
         <button class="text-gray-400 hover:text-red-600 p-1.5" onclick="this.closest('.sol-row').remove()">${I.x}</button>
       </div>`);
-    const rows = document.querySelectorAll('.sol-text'); if(rows.length) rows[rows.length-1].focus();
+    const rows = card.querySelectorAll('.sol-text'); if(rows.length) rows[rows.length-1].focus();
   },
   submitReport(){
     const cw = isoWeek(new Date());
-    const okrId = document.getElementById('rf-okr').value, work = document.getElementById('rf-work').value.trim();
-    if(!work){ toast('Vui lòng nhập công việc đã thực hiện.', 'error'); return; }
-    if(DB.reports.some(r => r.userId === session() && r.okrId === okrId && r.week === cw.week && r.year === cw.year)){ toast('Bạn đã gửi báo cáo tuần này cho OKR này rồi.', 'error'); return; }
+    const okrId = document.getElementById('rf-okr').value;
     const o = DB.okrs.find(o => o.id === okrId);
-    const krUpdates = [...document.querySelectorAll('.kr-input')].map(i => ({ krId:i.dataset.kr, value:Number(i.value) || 0 }));
-    const solutions = [...document.querySelectorAll('.sol-row')].map(row => ({ id:uid(), text:row.querySelector('.sol-text').value.trim(), due:row.querySelector('.sol-due').value })).filter(s => s.text);
+    const picked = [...document.querySelectorAll('.kr-card')].filter(c => c.querySelector('.kr-pick').checked);
+    if(!picked.length){ toast('Vui lòng tick chọn ít nhất 1 KR cần báo cáo.', 'error'); return; }
+    if(DB.reports.some(r => r.userId === session() && r.okrId === okrId && r.week === cw.week && r.year === cw.year)){ toast('Bạn đã gửi báo cáo tuần này cho OKR này rồi.', 'error'); return; }
+    const krUpdates = [];
+    for(const c of picked){
+      const k = o.krs.find(k => k.id === c.dataset.kr);
+      const work = c.querySelector('.kr-work').value.trim();
+      if(!work){ toast(`KR "${k.title}": vui lòng nhập đánh giá / công việc đã thực hiện.`, 'error'); return; }
+      krUpdates.push({ krId:k.id, value:Number(c.querySelector('.kr-input').value) || 0, work, issues:c.querySelector('.kr-issues').value.trim(), causes:c.querySelector('.kr-causes').value.trim(),
+        solutions:[...c.querySelectorAll('.sol-row')].map(row => ({ id:uid(), krId:k.id, text:row.querySelector('.sol-text').value.trim(), due:row.querySelector('.sol-due').value })).filter(s => s.text) });
+    }
+    const solutions = krUpdates.flatMap(ku => ku.solutions);
+    // Các trường tổng hợp (work/issues/causes) giữ để tương thích với bản cũ & bot/báo cáo đọc dữ liệu thô
+    const joinKr = f => krUpdates.filter(ku => ku[f]).map(ku => `[${o.krs.find(k => k.id === ku.krId).title}]\n${ku[f]}`).join('\n\n');
     const now = new Date().toISOString();
-    const r = { id:uid(), userId:session(), week:cw.week, year:cw.year, okrId, createdAt:now, krUpdates, work, issues:document.getElementById('rf-issues').value.trim(), causes:document.getElementById('rf-causes').value.trim(), solutions, comments:[] };
+    const r = { id:uid(), userId:session(), week:cw.week, year:cw.year, okrId, createdAt:now, krUpdates, work:joinKr('work'), issues:joinKr('issues'), causes:joinKr('causes'), solutions, comments:[] };
     const tasks = solutions.map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:r.id, solutionId:s.id, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now }));
     A.closeModal(); state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = r.id;
     mutate('addReport', { report:r, tasks }, () => {
       krUpdates.forEach(ku => { const k = o.krs.find(k => k.id === ku.krId); if(k) k.current = ku.value; });
       DB.reports.push(r); tasks.forEach(t => DB.tasks.push(t));
-    }, `Đã gửi báo cáo${solutions.length ? ` và tạo ${solutions.length} công việc mới` : ''}.`);
+    }, `Đã gửi báo cáo ${krUpdates.length} KR${solutions.length ? ` và tạo ${solutions.length} công việc mới` : ''}.`);
   },
   deleteReport(id){
     if(!confirm('Xoá báo cáo này? Các công việc được tạo từ báo cáo cũng sẽ bị xoá.')) return;
