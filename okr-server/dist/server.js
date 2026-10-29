@@ -5435,6 +5435,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position double precision NOT NULL DE
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS spawned_id text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS series_id text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kr_id text NOT NULL DEFAULT '';
 ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS mentions jsonb NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS task_assignees (task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (task_id, user_id));
 CREATE TABLE IF NOT EXISTS task_attachments (id text PRIMARY KEY, task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, name text NOT NULL,
@@ -5459,6 +5460,11 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
         );
         await pool2.query(`INSERT INTO task_assignees(task_id,user_id) SELECT t.id, t.assignee_id FROM tasks t
       WHERE t.assignee_id <> '' AND NOT EXISTS (SELECT 1 FROM task_assignees a WHERE a.task_id = t.id) ON CONFLICT DO NOTHING`);
+        await pool2.query(`UPDATE tasks t SET kr_id = s.kr_id
+      FROM (SELECT r.id AS rid, sol->>'id' AS sid, sol->>'krId' AS kr_id FROM reports r, jsonb_array_elements(r.solutions) sol
+            WHERE COALESCE(sol->>'krId', '') <> '') s
+      WHERE t.kr_id = '' AND t.report_id = s.rid AND t.solution_id = s.sid
+        AND EXISTS (SELECT 1 FROM krs k WHERE k.id = s.kr_id)`);
         await pool2.query(`INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,created_by,created_at,updated_at)
       SELECT 'r_' || t.id, t.project_id, t.title, t.description, t.priority, t.tags,
         COALESCE((SELECT jsonb_agg(jsonb_set(s.value, '{done}', 'false'::jsonb) ORDER BY s.ord) FROM jsonb_array_elements(t.subtasks) WITH ORDINALITY AS s(value, ord)), '[]'::jsonb),
@@ -5552,6 +5558,7 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
         position: t.position,
         reportId: t.report_id || null,
         okrId: t.okr_id || null,
+        krId: t.kr_id || "",
         seriesId: t.series_id || "",
         spawned: !!t.spawned_id,
         commentCount: cc || 0,
@@ -6349,6 +6356,7 @@ async function tasksWithComments(assigneeIds) {
     reportId: t.report_id || null,
     solutionId: t.solution_id || null,
     okrId: t.okr_id || null,
+    krId: t.kr_id || "",
     week: t.week,
     year: t.year,
     due: t.due,
@@ -6484,7 +6492,8 @@ var A = {
       ]
     );
     for (const ku of r.krUpdates || []) await c.q.query("UPDATE krs SET current = $1 WHERE id = $2 AND okr_id = $3", [num(ku.value), ku.krId, okr.id]);
-    for (const t of tasks) await insertTask(c.q, { ...t, assigneeId: c.me.id, reportId: r.id });
+    const krOf = await solutionKrMap(c.q, okr.id, r.krUpdates);
+    for (const t of tasks) await insertTask(c.q, { ...t, assigneeId: c.me.id, reportId: r.id, krId: krOf.get(t.solutionId) || "" });
   },
   async deleteReport(c, p) {
     const r = await one(c.q, "SELECT user_id FROM reports WHERE id=$1", [p.id]);
@@ -6527,12 +6536,13 @@ var A = {
       await c.q.query("DELETE FROM tasks WHERE id=$1", [t.id]);
       W.removeTaskFiles([t.id]);
     }
+    const krOf = await solutionKrMap(c.q, old.okr_id, kus);
     for (const s of solutions) {
       const cur = ex.find((t) => t.solution_id === s.id);
-      if (cur) await c.q.query("UPDATE tasks SET title=$2, due=$3 WHERE id=$1", [cur.id, str(s.text), str(s.due)]);
+      if (cur) await c.q.query("UPDATE tasks SET title=$2, due=$3, kr_id=$4 WHERE id=$1", [cur.id, str(s.text), str(s.due), krOf.get(s.id) || ""]);
       else {
         const nt = tasks.find((t) => t.solutionId === s.id) || { id: "t" + crypto.randomBytes(6).toString("hex"), title: s.text, due: s.due, status: "todo", week: old.week, year: old.year, okrId: old.okr_id };
-        await insertTask(c.q, { ...nt, title: str(s.text), due: str(s.due), assigneeId: old.user_id, reportId: old.id, solutionId: s.id });
+        await insertTask(c.q, { ...nt, title: str(s.text), due: str(s.due), assigneeId: old.user_id, reportId: old.id, solutionId: s.id, krId: krOf.get(s.id) || "" });
       }
     }
   },
@@ -6743,9 +6753,17 @@ var A = {
   }
 };
 Object.assign(A, W.actions);
+async function solutionKrMap(q, okrId, krUpdates) {
+  const valid = new Set((await q.query("SELECT id FROM krs WHERE okr_id=$1", [okrId])).rows.map((x) => x.id));
+  const m = /* @__PURE__ */ new Map();
+  for (const ku of krUpdates || []) if (valid.has(ku.krId)) {
+    for (const s of ku.solutions || []) if (s && s.id) m.set(s.id, ku.krId);
+  }
+  return m;
+}
 async function insertTask(q, t) {
   await q.query(
-    `INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at,project_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    `INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at,project_id,created_by,kr_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
     [
       t.id,
       str(t.title),
@@ -6759,7 +6777,8 @@ async function insertTask(q, t) {
       W.STATUSES.includes(t.status) ? t.status : "todo",
       str(t.createdAt) || (/* @__PURE__ */ new Date()).toISOString(),
       t.projectId || W.DEFAULT_PROJECT,
-      str(t.createdBy) || t.assigneeId
+      str(t.createdBy) || t.assigneeId,
+      str(t.krId)
     ]
   );
   await q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [t.id, t.assigneeId]);
