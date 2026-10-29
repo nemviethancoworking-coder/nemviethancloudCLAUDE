@@ -1,6 +1,6 @@
 {
   "name": "okr-weekly-server",
-  "version": "8.0.0",
+  "version": "9.0.0",
   "private": true,
   "description": "OKR Weekly API (Node.js + PostgreSQL)",
   "main": "dist/server.js",

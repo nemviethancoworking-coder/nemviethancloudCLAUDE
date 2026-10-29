@@ -196,23 +196,63 @@ describe('API công việc', () => {
     assert.deepEqual(after.assigneeIds, [a]); assert.equal(after.priority, 'low'); assert.ok(after.subtasks.every(s => s.done));
     assert.ok(!(await work(ptok.b, w1)).tasks.some(x => x.id === t.id), 'b không còn thấy việc đã bị gỡ');
   });
-  test('Nhân viên chỉ thấy việc của mình; cấp trên thấy việc cấp dưới; giao việc đúng phạm vi', async () => {
+  test('Nhân viên chỉ thấy việc của mình; cấp trên thấy việc cấp dưới; giao việc KHÔNG giới hạn cấp bậc', async () => {
     const mine = T({ assigneeIds: [a] }), others = T({ assigneeIds: [b] });
     await call(ptok.mgr, 'saveTask', { task: mine }); await call(ptok.mgr, 'saveTask', { task: others });
     const wa = await work(ptok.a, w1);
     assert.ok(wa.tasks.some(x => x.id === mine.id)); assert.ok(!wa.tasks.some(x => x.id === others.id), 'a không được thấy việc của b');
     const wm = await work(ptok.mgr, w1); assert.ok(wm.tasks.some(x => x.id === mine.id) && wm.tasks.some(x => x.id === others.id));
-    // a tự tạo việc cho mình: được; giao cho b (ngang cấp): không
-    await call(ptok.a, 'saveTask', { task: T({ assigneeIds: [a] }) });
-    await denied(ptok.a, 'saveTask', { task: T({ assigneeIds: [b] }) }, /cấp dưới|phạm vi/);
-    // a không sửa/xoá/di chuyển việc của b
+    // v9: a giao cho b (ngang cấp) và cho cấp trên (head) đều được; người giao + người nhận đều thấy
+    const toB = T({ assigneeIds: [b] }), toHead = T({ assigneeIds: [head] });
+    await call(ptok.a, 'saveTask', { task: toB }); await call(ptok.a, 'saveTask', { task: toHead });
+    for (const [tok, id] of [[ptok.a, toB.id], [ptok.b, toB.id], [ptok.a, toHead.id], [ptok.head, toHead.id]]) assert.ok((await work(tok, w1)).tasks.some(x => x.id === id));
+    assert.ok(!(await work(ptok.b, w1)).tasks.some(x => x.id === toHead.id), 'b không thấy việc a giao cho head');
+    // a không sửa nội dung / xoá / di chuyển việc của b do mgr tạo
     await denied(ptok.a, 'moveTask', { id: others.id, status: 'done' });
     await denied(ptok.a, 'deleteTask', { id: others.id });
     await denied(ptok.a, 'saveTask', { task: { ...others, title: 'Đổi tên' } });
-    // quản lý khác nhánh (mgr2/c) không thể giao cho a
-    await denied(ptok.mgr2, 'saveTask', { task: T({ assigneeIds: [a] }) });
-    // người ngoài dự án không tạo việc trong dự án
+    // người chưa thuộc dự án (mgr2, c) vẫn không tạo được việc trong dự án đó
+    await denied(ptok.mgr2, 'saveTask', { task: T({ assigneeIds: [a] }) }, /chưa tham gia/);
     await denied(ptok.c, 'saveTask', { task: T({ assigneeIds: [c2] }) }, /chưa tham gia/);
+  });
+  test('v9: sau khi tạo chỉ người tạo sửa tên/mô tả; người nhận giao lại được; xoá chỉ người giao + cấp trên', async () => {
+    const t = T({ title: 'Gốc', description: 'Mô tả gốc', assigneeIds: [b], subtasks: [{ id: 'sub9', text: 'Bước 1' }] });
+    await call(ptok.a, 'saveTask', { task: t });                                                   // a (nhân viên) tạo, giao cho b
+    assert.equal((await detail(ptok.a, t.id)).canEditContent, true); assert.equal((await detail(ptok.b, t.id)).canEditContent, false);
+    // người nhận, cấp trên, bất kỳ ai khác người tạo: không sửa được tên/mô tả/hạn/ưu tiên
+    for (const tok of [ptok.b, ptok.mgr, ptok.head, dir]) await denied(tok, 'saveTask', { task: { ...t, title: 'Đổi tên', description: 'Đổi mô tả' } }, /người tạo/);
+    await denied(ptok.b, 'updateTask', { id: t.id, patch: { title: 'Đổi tên' } }, /không sửa/);
+    await denied(ptok.b, 'updateTask', { id: t.id, patch: { due: plusDays(9) } }, /không sửa/);
+    const same = (await work(ptok.a, w1)).tasks.find(x => x.id === t.id); assert.equal(same.title, 'Gốc'); assert.equal(same.description, 'Mô tả gốc');
+    // người tạo sửa được (ở "nơi tạo")
+    await call(ptok.a, 'saveTask', { task: { ...t, title: 'Gốc (đã sửa)', description: 'Mô tả mới', priority: 'high', due: plusDays(4) } });
+    const edited = (await work(ptok.a, w1)).tasks.find(x => x.id === t.id);
+    assert.equal(edited.title, 'Gốc (đã sửa)'); assert.equal(edited.priority, 'high'); assert.equal(edited.due, plusDays(4)); assert.deepEqual(edited.assigneeIds, [b]);
+    // người nhận (b) giao lại cho c2 (khác nhánh, chưa thuộc dự án) → c2 thấy, b không còn thấy, có ghi vào bình luận
+    await denied(ptok.mgr2, 'reassignTask', { id: t.id, assigneeIds: [c2] });                        // người không liên quan không giao lại được
+    await call(ptok.b, 'reassignTask', { id: t.id, assigneeIds: [c2] });
+    assert.deepEqual((await work(ptok.c, w1)).tasks.find(x => x.id === t.id).assigneeIds, [c2]);
+    assert.ok(!(await work(ptok.b, w1)).tasks.some(x => x.id === t.id)); assert.ok((await work(ptok.a, w1)).tasks.some(x => x.id === t.id), 'người giao vẫn thấy');
+    assert.ok((await detail(ptok.a, t.id)).comments.some(cm => /giao lại/.test(cm.text) && cm.authorId === b));
+    await denied(ptok.b, 'reassignTask', { id: t.id, assigneeIds: [a] });                            // b không còn liên quan
+    await denied(ptok.c, 'reassignTask', { id: t.id, assigneeIds: [] }, /ít nhất 1/);
+    // c2 (người nhận mới) giao tiếp cho a (cấp trên của họ ở nhánh khác nhau → vẫn được)
+    await call(ptok.c, 'reassignTask', { id: t.id, assigneeIds: [c2, a] });
+    // tick việc con: người nhận được, người ngoài không
+    await call(ptok.c, 'toggleSubtask', { id: t.id, subId: 'sub9', done: true });
+    assert.equal((await work(ptok.a, w1)).tasks.find(x => x.id === t.id).subtasks[0].done, true);
+    assert.equal((await work(ptok.a, w1)).tasks.find(x => x.id === t.id).subtasks[0].text, 'Bước 1');
+    await denied(ptok.b, 'toggleSubtask', { id: t.id, subId: 'sub9', done: false });          // b đã không còn liên quan tới việc này
+    // xoá: người nhận không được; người tạo hoặc cấp trên của người tạo được
+    await denied(ptok.c, 'deleteTask', { id: t.id }); await denied(ptok.mgr2, 'deleteTask', { id: t.id });
+    const t2 = T({ assigneeIds: [b] }); await call(ptok.a, 'saveTask', { task: t2 });
+    await denied(ptok.b, 'deleteTask', { id: t2.id });
+    await call(ptok.mgr, 'deleteTask', { id: t2.id });                                                // cấp trên của người tạo
+    assert.ok(!(await work(ptok.a, w1)).tasks.some(x => x.id === t2.id));
+    await call(ptok.a, 'deleteTask', { id: t.id });                                                   // người tạo
+    // việc giao cho người bị khoá vẫn bị chặn
+    const t3 = T({ assigneeIds: [a] }); await call(ptok.mgr, 'saveTask', { task: t3 });
+    await call(ptok.mgr, 'deleteTask', { id: t3.id });
   });
   test('Giám đốc thấy tất cả; cờ "mọi thành viên xem hết việc" mở rộng phạm vi', async () => {
     const t = T({ assigneeIds: [b] }); await call(ptok.mgr, 'saveTask', { task: t });
@@ -236,47 +276,97 @@ describe('API công việc', () => {
     assert.equal((await work(ptok.a, w1)).tasks.find(x => x.id === ids[1]).status, 'todo', 'trạng thái lạ không làm đổi dữ liệu');
   });
 
-  test('Việc lặp lại theo tuần: Done → tự sinh việc kế tiếp, chỉ một lần', async () => {
+  const REC = (extra) => ({ id: nid('r'), projectId: p1, title: 'Lặp ' + seqId, description: '', assigneeIds: [a], priority: 'medium', tags: [], subtasks: [], firstDue: todayISO(), ...extra });
+  test('Việc lặp lại: tạo ở một nơi, Done → tự sinh việc kế tiếp theo mẫu, chỉ một lần; sửa mẫu không đổi việc đã sinh', async () => {
     const today = todayISO();
     const wd = ((new Date(today + 'T00:00:00Z').getUTCDay()) || 7);
     const other = wd === 1 ? 3 : 1;                                                                     // thứ khác hôm nay
-    const t = T({ title: 'Họp giao ban', assigneeIds: [a, b], priority: 'high', tags: ['họp'], due: today, status: 'doing',
-      subtasks: [{ id: 'sub1', text: 'Chuẩn bị', done: true }], recurrence: { type: 'weekly', weekdays: [wd, other] } });
-    await call(ptok.mgr, 'saveTask', { task: t });
-    const r = await call(ptok.a, 'moveTask', { id: t.id, status: 'done' });
+    const R = REC({ title: 'Họp giao ban', description: 'Mỗi tuần', assigneeIds: [a, b], priority: 'high', tags: ['họp'], subtasks: [{ id: 'sub1', text: 'Chuẩn bị', done: true }], rule: { type: 'weekly', weekdays: [wd, other] } });
+    const cr = await call(ptok.mgr, 'saveRecurring', { recurring: R });
+    assert.ok(cr.result.spawned, 'tạo mẫu → có ngay việc đầu tiên');
+    const first = (await work(ptok.mgr, w1)).tasks.find(x => x.id === cr.result.spawned.id);
+    assert.equal(first.due, today); assert.equal(first.seriesId, R.id); assert.equal(first.createdBy, mgr); assert.deepEqual(first.assigneeIds, [a, b]);
+    assert.equal(first.subtasks[0].done, false, 'việc con được đặt lại'); assert.equal(first.recurrence.type, 'weekly');
+    // việc sinh từ lịch lặp: khoá nội dung kể cả với người tạo → phải sửa ở mẫu
+    await denied(ptok.mgr, 'saveTask', { task: { ...first, title: 'Đổi tên' } }, /lặp lại/);
+    // Done → sinh việc kế tiếp theo mẫu
+    const r = await call(ptok.a, 'moveTask', { id: first.id, status: 'done' });
     assert.ok(r.result && r.result.spawned, 'phải báo việc mới');
-    const all = (await work(ptok.mgr, w1)).tasks;
-    const next = all.find(x => x.id === r.result.spawned.id);
+    const next = (await work(ptok.mgr, w1)).tasks.find(x => x.id === r.result.spawned.id);
     assert.ok(next, 'việc mới tồn tại');
     assert.equal(next.status, 'todo'); assert.equal(next.title, 'Họp giao ban'); assert.deepEqual(next.assigneeIds, [a, b]);
-    assert.equal(next.priority, 'high'); assert.deepEqual(next.tags, ['họp']); assert.equal(next.createdBy, mgr);
-    assert.equal(next.subtasks[0].done, false, 'việc con được đặt lại');
-    assert.deepEqual(next.recurrence.weekdays.sort(), [wd, other].sort());
-    assert.ok(next.due > today, 'hạn mới nằm sau hạn cũ'); assert.ok(next.due <= plusDays(7));
-    assert.equal(next.seriesId, t.id);
+    assert.equal(next.priority, 'high'); assert.deepEqual(next.tags, ['họp']); assert.equal(next.description, 'Mỗi tuần'); assert.equal(next.createdBy, mgr);
+    assert.ok(next.due > today, 'hạn mới nằm sau hạn cũ'); assert.ok(next.due <= plusDays(7)); assert.equal(next.seriesId, R.id);
     // mở lại rồi làm xong lần nữa → không sinh thêm
-    await call(ptok.a, 'moveTask', { id: t.id, status: 'review' });
-    const r2 = await call(ptok.a, 'moveTask', { id: t.id, status: 'done' });
-    assert.ok(!r2.result.spawned);
+    await call(ptok.a, 'moveTask', { id: first.id, status: 'review' });
+    assert.ok(!(await call(ptok.a, 'moveTask', { id: first.id, status: 'done' })).result.spawned);
     assert.equal((await work(ptok.mgr, w1)).tasks.filter(x => x.title === 'Họp giao ban').length, 2);
-    // việc mới làm xong tiếp → sinh việc thứ 3 theo chuỗi
+    // sửa mẫu: việc đã sinh ra giữ nguyên; việc kế tiếp lấy nội dung mới
+    const up = await call(ptok.mgr, 'saveRecurring', { recurring: { ...R, title: 'Họp giao ban (mới)', assigneeIds: [a], priority: 'low' } });
+    assert.ok(!up.result.spawned, 'đang có việc mở thì không sinh thêm');
+    const still = (await work(ptok.mgr, w1)).tasks.find(x => x.id === next.id); assert.equal(still.title, 'Họp giao ban'); assert.deepEqual(still.assigneeIds, [a, b]);
     const r3 = await call(ptok.a, 'moveTask', { id: next.id, status: 'done' });
-    assert.ok(r3.result.spawned); assert.ok(r3.result.spawned.due > next.due);
+    const n3 = (await work(ptok.mgr, w1)).tasks.find(x => x.id === r3.result.spawned.id);
+    assert.equal(n3.title, 'Họp giao ban (mới)'); assert.deepEqual(n3.assigneeIds, [a]); assert.equal(n3.priority, 'low'); assert.ok(r3.result.spawned.due > next.due);
+    // xoá mẫu: việc đã sinh còn nguyên, nhưng làm xong thì không sinh thêm
+    await call(ptok.mgr, 'deleteRecurring', { id: R.id });
+    assert.ok(!(await call(ptok.a, 'moveTask', { id: n3.id, status: 'done' })).result.spawned);
+    assert.ok((await work(ptok.mgr, w1)).tasks.some(x => x.id === n3.id));
+  });
+  test('Việc lặp lại: ai cũng tạo được; sửa/xoá chỉ người tạo + cấp trên; danh sách đúng người xem', async () => {
+    const R = REC({ title: 'Báo cáo ngày', assigneeIds: [b], rule: { type: 'daily' } });
+    const cr = await call(ptok.a, 'saveRecurring', { recurring: R });                                // a là nhân viên, giao việc lặp cho b
+    assert.equal(cr.result.spawned.due, todayISO());
+    assert.ok((await work(ptok.b, w1)).tasks.some(x => x.id === cr.result.spawned.id), 'người nhận thấy việc được sinh');
+    await denied(ptok.b, 'saveRecurring', { recurring: { ...R, title: 'X' } }, /người tạo/);
+    await denied(ptok.b, 'deleteRecurring', { id: R.id }, /người tạo/);
+    await denied(ptok.mgr2, 'deleteRecurring', { id: R.id });
+    const find = async tok => (await work(tok, w1)).recurring.find(x => x.id === R.id);
+    const ra = await find(ptok.a), rb = await find(ptok.b), rm = await find(ptok.mgr), rh = await find(ptok.head);
+    assert.equal(ra.canEdit, true); assert.equal(rb.canEdit, false); assert.equal(rm.canEdit, true); assert.equal(rh.canEdit, true);
+    assert.equal(ra.nextDue, todayISO()); assert.equal(ra.openCount, 1); assert.deepEqual(rb.assigneeIds, [b]); assert.equal(ra.rule.type, 'daily');
+    assert.equal(await find(ptok.mgr2), undefined, 'người không liên quan không thấy');
+    await denied(ptok.a, 'saveRecurring', { recurring: REC({ rule: { type: 'weekly', weekdays: [] } }) }, /lịch lặp/);
+    await denied(ptok.a, 'saveRecurring', { recurring: REC({ firstDue: plusDays(5), rule: { type: 'daily', end: plusDays(1) } }) }, /kết thúc/);
+    await denied(ptok.a, 'saveRecurring', { recurring: REC({ title: '  ', rule: { type: 'daily' } }) }, /Nhập tên/);
+    await call(ptok.mgr, 'saveProject', { project: { id: 'prjPriv', workspaceId: w1, name: 'Dự án riêng', memberIds: [mgr] } });
+    await denied(ptok.c, 'saveRecurring', { recurring: REC({ projectId: 'prjPriv', assigneeIds: [c2], rule: { type: 'daily' } }) }, /chưa tham gia/);
+    await denied(ptok.mgr, 'deleteProject', { id: p1 }, /việc lặp lại|công việc/);
+    await call(ptok.mgr, 'deleteRecurring', { id: R.id });                                           // cấp trên của người tạo xoá được
+    assert.equal(await find(ptok.a), undefined);
   });
   test('Việc lặp lại theo ngày/tháng và ngày kết thúc', async () => {
-    const dly = T({ title: 'Báo cáo ngày', assigneeIds: [a], due: todayISO(), recurrence: { type: 'daily' } });
-    await call(ptok.mgr, 'saveTask', { task: dly });
-    const r = await call(ptok.a, 'updateTask', { id: dly.id, patch: { status: 'done' } });        // đường cũ (báo cáo tuần) cũng kích hoạt
+    const mk = async (rule) => (await call(ptok.mgr, 'saveRecurring', { recurring: REC({ rule }) })).result.spawned.id;
+    const dly = await mk({ type: 'daily' });
+    const r = await call(ptok.a, 'updateTask', { id: dly, patch: { status: 'done' } });               // đường cũ (báo cáo tuần) cũng kích hoạt
     assert.equal(r.result.spawned.due, plusDays(1));
-    const mth = T({ title: 'Chốt công nợ', assigneeIds: [a], due: todayISO(), recurrence: { type: 'monthly', monthDay: 31 } });
-    await call(ptok.mgr, 'saveTask', { task: mth });
-    const r2 = await call(ptok.a, 'moveTask', { id: mth.id, status: 'done' });
+    const mth = await mk({ type: 'monthly', monthDay: 31 });
+    const r2 = await call(ptok.a, 'moveTask', { id: mth, status: 'done' });
     assert.match(r2.result.spawned.due, /^\d{4}-\d{2}-(28|29|30|31)$/);
-    const fin = T({ title: 'Lặp có hạn', assigneeIds: [a], due: todayISO(), recurrence: { type: 'daily', end: todayISO() } });
-    await call(ptok.mgr, 'saveTask', { task: fin });
-    const r3 = await call(ptok.a, 'moveTask', { id: fin.id, status: 'done' });
-    assert.ok(!r3.result.spawned, 'quá ngày kết thúc thì dừng');
-    await denied(ptok.mgr, 'saveTask', { task: T({ due: plusDays(5), recurrence: { type: 'daily', end: plusDays(1) } }) }, /kết thúc/);
+    const fin = await mk({ type: 'daily', end: todayISO() });
+    assert.ok(!(await call(ptok.a, 'moveTask', { id: fin, status: 'done' })).result.spawned, 'quá ngày kết thúc thì dừng');
+  });
+  test('v9: việc lặp lại cũ (chưa có mẫu) được chuyển thành mẫu khi nâng cấp máy chủ', async () => {
+    const db = new Client({ ...PGENV, host: PGENV.PGHOST, port: Number(PGENV.PGPORT), user: PGENV.PGUSER, password: PGENV.PGPASSWORD, database: DBNAME });
+    await db.connect();
+    const id = nid('tleg');
+    await db.query(`INSERT INTO tasks(id,title,assignee_id,due,status,created_at,project_id,description,priority,subtasks,recurrence,created_by)
+      VALUES($1,'Việc lặp kiểu cũ',$2,$3,'todo',$4,$5,'Mô tả cũ','high','[{"id":"x1","text":"Việc con","done":true}]','{"type":"daily","interval":2,"end":""}',$6)`, [id, a, todayISO(), new Date().toISOString(), p1, mgr]);
+    await db.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2),($1,$3)', [id, a, b]);
+    await db.end();
+    await stopServer(); await startServer();                                                          // khởi động lại → migrate chạy
+    ptok.a = await login('a'); ptok.mgr = await login('mgr'); ptok.b = await login('b'); ptok.head = await login('head'); ptok.c = await login('c'); ptok.mgr2 = await login('mgr2'); dir = await login('admin');
+    const w = await work(ptok.mgr, w1);
+    const tpl = w.recurring.find(x => x.id === 'r_' + id);
+    assert.ok(tpl, 'phải có mẫu'); assert.equal(tpl.title, 'Việc lặp kiểu cũ'); assert.equal(tpl.createdBy, mgr); assert.deepEqual([...tpl.assigneeIds].sort(), [a, b].sort());
+    assert.equal(tpl.rule.interval, 2); assert.equal(tpl.subtasks[0].done, false); assert.equal(tpl.openCount, 1); assert.equal(tpl.canEdit, true);
+    assert.equal(w.tasks.find(x => x.id === id).seriesId, 'r_' + id);
+    await denied(ptok.mgr, 'saveTask', { task: { id, projectId: p1, title: 'Đổi' } }, /lặp lại/);        // việc cũ cũng bị khoá nội dung
+    const r = await call(ptok.a, 'moveTask', { id, status: 'done' });                                  // vẫn tự sinh việc kế tiếp
+    assert.equal(r.result.spawned.due, plusDays(2));
+    await stopServer(); await startServer();                                                          // chạy migrate lần nữa: không tạo mẫu trùng
+    ptok.mgr = await login('mgr'); ptok.a = await login('a'); ptok.b = await login('b'); ptok.head = await login('head'); ptok.c = await login('c'); ptok.mgr2 = await login('mgr2'); dir = await login('admin');
+    assert.equal((await work(ptok.mgr, w1)).recurring.filter(x => x.title === 'Việc lặp kiểu cũ').length, 1);
   });
 
   test('Bình luận có @nhắc tên, đúng phạm vi người xem', async () => {
@@ -328,7 +418,7 @@ describe('API công việc', () => {
 
   test('Dự án: lưu trữ, xoá, ràng buộc', async () => {
     const t = T({ assigneeIds: [a] }); await call(ptok.mgr, 'saveTask', { task: t });
-    await denied(ptok.mgr, 'deleteProject', { id: p1 }, /công việc/);
+    await denied(ptok.mgr, 'deleteProject', { id: p1 }, /công việc|việc lặp lại/);
     await denied(dir, 'deleteProject', { id: 'p_general' }, /mặc định/);
     await denied(dir, 'deleteWorkspace', { id: w1 }, /dự án/);
     await denied(dir, 'deleteDepartment', { id: d1 }, /dự án/);

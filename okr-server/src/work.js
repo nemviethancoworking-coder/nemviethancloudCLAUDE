@@ -124,6 +124,10 @@ CREATE INDEX IF NOT EXISTS tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS task_assignees_user ON task_assignees(user_id);
 CREATE INDEX IF NOT EXISTS task_attachments_task ON task_attachments(task_id);
 CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
+CREATE INDEX IF NOT EXISTS tasks_series ON tasks(series_id);
+CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text NOT NULL DEFAULT '${DEFAULT_PROJECT}', title text NOT NULL, description text NOT NULL DEFAULT '',
+  priority text NOT NULL DEFAULT 'medium', tags jsonb NOT NULL DEFAULT '[]', subtasks jsonb NOT NULL DEFAULT '[]', assignees jsonb NOT NULL DEFAULT '[]', rule jsonb NOT NULL,
+  created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', updated_at text NOT NULL DEFAULT '', seq bigserial);
 `;
   async function migrate() {
     await pool.query(SCHEMA);
@@ -136,6 +140,17 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
     // Việc cũ chỉ có 1 người làm → đưa vào bảng nhiều người làm (chạy lại an toàn)
     await pool.query(`INSERT INTO task_assignees(task_id,user_id) SELECT t.id, t.assignee_id FROM tasks t
       WHERE t.assignee_id <> '' AND NOT EXISTS (SELECT 1 FROM task_assignees a WHERE a.task_id = t.id) ON CONFLICT DO NOTHING`);
+    // v9: lịch lặp lại tách khỏi việc thường. Mỗi việc lặp lại cũ còn đang mở (chưa sinh việc kế tiếp) thành 1 "mẫu" ở mục Việc lặp lại; chạy lại an toàn.
+    await pool.query(`INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,created_by,created_at,updated_at)
+      SELECT 'r_' || t.id, t.project_id, t.title, t.description, t.priority, t.tags,
+        COALESCE((SELECT jsonb_agg(jsonb_set(s.value, '{done}', 'false'::jsonb) ORDER BY s.ord) FROM jsonb_array_elements(t.subtasks) WITH ORDINALITY AS s(value, ord)), '[]'::jsonb),
+        COALESCE((SELECT jsonb_agg(a.user_id ORDER BY (a.user_id = t.assignee_id) DESC, a.user_id) FROM task_assignees a WHERE a.task_id = t.id), jsonb_build_array(t.assignee_id)),
+        t.recurrence, COALESCE(NULLIF(t.created_by, ''), t.assignee_id), $1, $1
+      FROM tasks t WHERE t.recurrence IS NOT NULL AND t.spawned_id = '' AND t.status <> 'done'
+        AND NOT EXISTS (SELECT 1 FROM recurring_tasks r WHERE r.id = t.series_id OR r.id = 'r_' || t.id)
+      ON CONFLICT DO NOTHING`, [now]);
+    await pool.query(`UPDATE tasks t SET series_id = 'r_' || t.id WHERE t.recurrence IS NOT NULL AND t.spawned_id = '' AND t.status <> 'done'
+      AND t.series_id <> 'r_' || t.id AND EXISTS (SELECT 1 FROM recurring_tasks r WHERE r.id = 'r_' || t.id)`);
     try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) { console.error('Không tạo được thư mục tệp đính kèm ' + UPLOAD_DIR + ': ' + e.message); }
   }
 
@@ -160,16 +175,24 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
     if (access === 'admin' || access === 'pm') return true;
     return t.created_by === c.me.id || assignees.includes(c.me.id) || assignees.some(a => canManage(c, a));
   }
+  /** v9: tên, mô tả và nội dung chỉ do NGƯỜI TẠO sửa (ở mục "Việc tôi tạo"); việc sinh từ lịch lặp lại thì sửa ở mẫu lặp lại. */
+  const canEditContent = (c, t) => !t.series_id && !!t.created_by && t.created_by === c.me.id;
+  /** v9: xoá việc — người giao (người tạo) và cấp trên của người đó; việc cũ không rõ người tạo thì cấp trên của người làm. */
   function canDeleteTask(c, access, t, assignees) {
-    if (access === 'admin' || access === 'pm') return true;
-    if (t.created_by === c.me.id) return true;
-    return !!access && assignees.length > 0 && assignees.every(a => a === c.me.id || canManage(c, a));
+    if (!access) return false;
+    if (c.me.role === 'director') return true;
+    if (t.created_by) return t.created_by === c.me.id || canManage(c, t.created_by);
+    return assignees.some(a => canManage(c, a));
   }
+  /** v9: giao việc không bị giới hạn theo cấp bậc — ai cũng giao được cho bất kỳ ai đang hoạt động. */
   function canAssign(c, access, uid) {
     const u = c.byId[uid];
-    if (!u || !u.active) return false;
-    return uid === c.me.id || access === 'admin' || access === 'pm' || canManage(c, uid);
+    return !!u && !!u.active;
   }
+  /** Mẫu việc lặp lại: người tạo, cấp trên của người tạo (hoặc Giám đốc) được sửa/xoá. */
+  const canManageRecurring = (c, r) => c.me.role === 'director' || (!!r.created_by && (r.created_by === c.me.id || canManage(c, r.created_by)));
+  const recurringVisible = (c, r) => canManageRecurring(c, r) || idList(r.assignees).some(a => a === c.me.id || canManage(c, a));
+  const assignError = (c, a) => { const u = c.byId[a]; return !u ? 'Người thực hiện không tồn tại.' : u.name + ' đã bị khoá tài khoản.'; };
 
   /** Dự án + thành viên + quyền của người xem. */
   async function projectCtx(c, projectId) {
@@ -244,8 +267,24 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
       projects: projects.map(p => ({ id: p.id, workspaceId: p.workspace_id, departmentId: p.department_id, name: p.name, description: p.description, color: p.color,
         managerId: p.manager_id, open: p.open, shareAll: p.share_all, archived: p.archived, createdAt: p.created_at, access: access.get(p.id),
         memberIds: [...(prMem.get(p.id) || [])] })),
-      tasks, viewerId: c.me.id, loadedAt: new Date().toISOString(),
+      recurring: await loadRecurring(c, pids), tasks, viewerId: c.me.id, loadedAt: new Date().toISOString(),
     };
+  }
+  /** Mẫu việc lặp lại người xem được thấy (trong các dự án đang xem), kèm hạn của việc đang mở và quyền sửa. */
+  async function loadRecurring(c, pids) {
+    if (!pids.length) return [];
+    const rr = await pool.query('SELECT * FROM recurring_tasks WHERE project_id = ANY($1) ORDER BY seq', [pids]);
+    const rows = rr.rows.filter(r => recurringVisible(c, r));
+    if (!rows.length) return [];
+    const st = await pool.query(`SELECT series_id, count(*) FILTER (WHERE status <> 'done')::int AS open, min(due) FILTER (WHERE status <> 'done' AND due <> '') AS next
+      FROM tasks WHERE series_id = ANY($1) GROUP BY series_id`, [rows.map(r => r.id)]);
+    const stat = new Map(st.rows.map(r => [r.series_id, r]));
+    return rows.map(r => {
+      const s = stat.get(r.id);
+      return { id: r.id, projectId: r.project_id, title: r.title, description: r.description, priority: r.priority, tags: r.tags || [], subtasks: r.subtasks || [],
+        assigneeIds: idList(r.assignees), rule: r.rule, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+        openCount: s ? s.open : 0, nextDue: s && s.next ? s.next : '', canEdit: canManageRecurring(c, r) };
+    });
   }
   /** Chi tiết 1 công việc: bình luận + tệp đính kèm (chỉ người xem được việc mới nhận). */
   async function loadTaskDetail(c, taskId) {
@@ -258,7 +297,7 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
     return {
       comments: cm.rows.map(r => ({ id: r.id, authorId: r.author_id, text: r.text, createdAt: r.created_at, mentions: r.mentions || [] })),
       attachments: at.rows.map(a => ({ id: a.id, name: a.name, mime: a.mime, size: Number(a.size), uploadedBy: a.uploaded_by, createdAt: a.created_at })),
-      canEdit: canEditTask(c, tc.access, tc.t, tc.assignees), canDelete: canDeleteTask(c, tc.access, tc.t, tc.assignees),
+      canEdit: canEditTask(c, tc.access, tc.t, tc.assignees), canDelete: canDeleteTask(c, tc.access, tc.t, tc.assignees), canEditContent: canEditContent(c, tc.t),
     };
   }
 
@@ -287,18 +326,39 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
     if (t.status === status) return {};
     const done = status === 'done';
     await c.q.query('UPDATE tasks SET status=$2, completed_at=$3 WHERE id=$1', [t.id, status, done ? new Date().toISOString() : '']);
-    if (!done || !t.recurrence || t.spawned_id) return {};
-    const rule = cleanRule(t.recurrence); if (!rule) return {};
+    if (!done || !t.series_id || t.spawned_id) return {};
+    const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [t.series_id]); if (!tpl) return {};     // mẫu đã bị xoá → dừng lặp
+    const rule = cleanRule(tpl.rule); if (!rule) return {};
     const due = nextDue(rule, t.due, todayISO()); if (!due) return {};
+    const id = await spawnInstance(c, tpl, rule, due); if (!id) return {};
+    await c.q.query('UPDATE tasks SET spawned_id=$2 WHERE id=$1', [t.id, id]);
+    return { spawned: { id, due, title: tpl.title } };
+  }
+  /** Sinh 1 việc từ mẫu lặp lại (nội dung lấy theo mẫu hiện tại). Dự án đã lưu trữ/xoá thì không sinh. Trả về mã việc mới hoặc null. */
+  async function spawnInstance(c, tpl, rule, due) {
+    const proj = await one(c.q, 'SELECT workspace_id, open, archived FROM projects WHERE id=$1', [tpl.project_id]);
+    if (!proj || proj.archived) return null;
+    let ids = idList(tpl.assignees).filter(id => c.byId[id] && c.byId[id].active);
+    if (!ids.length) ids = [c.byId[tpl.created_by] && c.byId[tpl.created_by].active ? tpl.created_by : c.me.id];
     const id = newId('t');
     await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id)
-      VALUES($1,$2,$3,$4,0,0,$5,'todo',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-      [id, t.title, t.assignee_id, t.okr_id || null, due, new Date().toISOString(), t.project_id, t.description, t.priority, JSON.stringify(t.tags || []),
-       JSON.stringify((t.subtasks || []).map(s => ({ ...s, done: false }))), JSON.stringify(rule), t.created_by, await nextPosition(c.q, t.project_id, 'todo'), t.series_id || t.id]);
-    await c.q.query('INSERT INTO task_assignees(task_id,user_id) SELECT $1, user_id FROM task_assignees WHERE task_id=$2 ON CONFLICT DO NOTHING', [id, t.id]);
-    await c.q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, t.assignee_id]);
-    await c.q.query('UPDATE tasks SET spawned_id=$2 WHERE id=$1', [t.id, id]);
-    return { spawned: { id, due, title: t.title } };
+      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [id, tpl.title, ids[0], due, new Date().toISOString(), tpl.project_id, tpl.description, tpl.priority, JSON.stringify(tpl.tags || []),
+       JSON.stringify((tpl.subtasks || []).map(s => ({ ...s, done: false }))), JSON.stringify(rule), tpl.created_by || ids[0], await nextPosition(c.q, tpl.project_id, 'todo'), tpl.id]);
+    for (const a of ids) {
+      await c.q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, a]);
+      if (!proj.open) await ensureMember(c.q, tpl.project_id, proj.workspace_id, a);
+    }
+    return id;
+  }
+  /** Ghi danh sách người thực hiện (người đầu là phụ trách chính); người mới tự vào dự án đóng để thấy việc của mình. */
+  async function writeAssignees(c, taskId, ids, pc) {
+    await c.q.query('UPDATE tasks SET assignee_id=$2 WHERE id=$1', [taskId, ids[0]]);
+    await c.q.query('DELETE FROM task_assignees WHERE task_id=$1 AND NOT (user_id = ANY($2))', [taskId, ids]);
+    for (const a of ids) {
+      await c.q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [taskId, a]);
+      if (!pc.members.has(a) && !pc.p.open) await ensureMember(c.q, pc.p.id, pc.p.workspace_id, a);
+    }
   }
 
   /* ---------- Tệp đính kèm trên đĩa ---------- */
@@ -395,59 +455,78 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
       const pc = await projectCtx(c, p.id); if (!pc) return;
       if (pc.access !== 'admin' && pc.p.manager_id !== c.me.id) deny('Chỉ Giám đốc hoặc người quản lý dự án được xoá dự án.');
       if (p.id === DEFAULT_PROJECT) throw new AppError('Không xoá được dự án mặc định.');
+      if (await one(c.q, 'SELECT 1 FROM recurring_tasks WHERE project_id=$1 LIMIT 1', [p.id])) throw new AppError('Dự án còn việc lặp lại. Hãy xoá chúng ở mục "Việc lặp lại" hoặc dùng Lưu trữ.');
       const n = await one(c.q, 'SELECT count(*)::int AS n FROM tasks WHERE project_id=$1', [p.id]);
       if (n.n) throw new AppError('Dự án còn ' + n.n + ' công việc nên không xoá được. Hãy chuyển dự án sang "Lưu trữ" để giữ lại lịch sử.');
       await c.q.query('DELETE FROM projects WHERE id=$1', [p.id]);
     },
 
     /* ----- Công việc ----- */
-    /** Tạo mới hoặc cập nhật đầy đủ 1 công việc (form chi tiết). */
+    /**
+     * Tạo công việc mới, hoặc (chỉ NGƯỜI TẠO) sửa nội dung việc mình đã tạo: tên, mô tả, ưu tiên, hạn, nhãn, việc con, người thực hiện.
+     * Việc đã tạo hiện trên bảng bị khoá nội dung; việc lặp lại không tạo ở đây mà ở mục "Việc lặp lại" (saveRecurring).
+     */
     async saveTask(c, p) {
       const t = p.task || {};
       if (!safeId(t.id)) throw new AppError('Thiếu mã công việc.');
       const title = str(t.title).trim().slice(0, 300);
       if (!title) throw new AppError('Nhập tên công việc.');
       const old = await taskCtx(c, t.id);
+      if (old && !canEditContent(c, old.t)) deny(old.t.series_id
+        ? 'Việc sinh từ lịch lặp lại: muốn đổi tên/mô tả hãy sửa ở mục "Việc lặp lại".'
+        : 'Chỉ người tạo công việc mới sửa được tên, mô tả và nội dung (ở mục "Việc tôi tạo"). Bạn vẫn giao lại việc này cho người khác được.');
       const projectId = old ? old.t.project_id : (safeId(t.projectId) ? t.projectId : DEFAULT_PROJECT);
       const pc = old ? { p: old.p, members: old.members, access: old.access } : await projectCtx(c, projectId);
       if (!pc || !pc.p) throw new AppError('Dự án không tồn tại.');
       if (!pc.access) deny('Bạn chưa tham gia dự án này.');
       if (!old && pc.p.archived) throw new AppError('Dự án đã lưu trữ, không thêm việc mới được.');
-      if (old && !canEditTask(c, old.access, old.t, old.assignees)) deny('Bạn chỉ sửa được công việc của mình, của cấp dưới hoặc trong dự án bạn quản lý.');
-      const status = STATUSES.includes(t.status) ? t.status : (old ? old.t.status : 'todo');
       const priority = PRIORITIES.includes(t.priority) ? t.priority : (old ? old.t.priority : 'medium');
       let assignees = idList(t.assigneeIds);
       if (!assignees.length) assignees = old ? old.assignees : [c.me.id];
       const prev = old ? old.assignees : [];
-      for (const a of assignees) if (!prev.includes(a) && !canAssign(c, pc.access, a)) {
-        const u = c.byId[a];
-        throw new AppError(!u ? 'Người thực hiện không tồn tại.' : !u.active ? u.name + ' đã bị khoá tài khoản.' : 'Bạn chỉ giao được việc cho chính mình hoặc cấp dưới (' + u.name + ' ngoài phạm vi của bạn).');
-      }
-      let rule = cleanRule(t.recurrence), due = normDue(t.due);
-      if (rule && !due) due = todayISO();
-      if (rule && rule.end && due > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót.');
+      for (const a of assignees) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError(assignError(c, a));
+      const due = normDue(t.due);
       const tags = cleanTags(t.tags), subtasks = cleanSubtasks(t.subtasks), desc = str(t.description).slice(0, 20000);
-      const okrId = old ? old.t.okr_id : (t.okrId ? str(t.okrId) : null);
-      const result = {};
       if (old) {
-        await c.q.query(`UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, recurrence=$8, assignee_id=$9 WHERE id=$1`,
-          [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), rule ? JSON.stringify(rule) : null, assignees[0]]);
-        if (old.t.status !== status) {
-          Object.assign(result, await applyStatus(c, { ...old.t, due, recurrence: rule, title, description: desc, priority, tags, subtasks, assignee_id: assignees[0] }, status));
-          await c.q.query('UPDATE tasks SET position=$2 WHERE id=$1', [t.id, await nextPosition(c.q, projectId, status)]);
-        }
+        await c.q.query('UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7 WHERE id=$1',
+          [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks)]);
       } else {
+        const status = STATUSES.includes(t.status) ? t.status : 'todo';
+        const okrId = t.okrId ? str(t.okrId) : null;
         await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id)
-          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'')`,
+          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'')`,
           [t.id, title, assignees[0], okrId, due, status, new Date().toISOString(), projectId, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks),
-           rule ? JSON.stringify(rule) : null, c.me.id, await nextPosition(c.q, projectId, status), status === 'done' ? new Date().toISOString() : '']);
+           c.me.id, await nextPosition(c.q, projectId, status), status === 'done' ? new Date().toISOString() : '']);
       }
-      await c.q.query('DELETE FROM task_assignees WHERE task_id=$1 AND NOT (user_id = ANY($2))', [t.id, assignees]);
-      for (const a of assignees) {
-        await c.q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [t.id, a]);
-        if (!pc.members.has(a) && !pc.p.open) await ensureMember(c.q, projectId, pc.p.workspace_id, a);      // người được giao tự vào dự án để thấy việc của mình
-      }
-      return result;
+      await writeAssignees(c, t.id, assignees, pc);
+      return {};
+    },
+    /** Giao lại công việc cho người khác: người đang thực hiện, người tạo hoặc cấp trên; không giới hạn theo cấp bậc. Ghi lại vào bình luận. */
+    async reassignTask(c, p) {
+      const tc = await taskCtx(c, p.id); if (!tc) throw new AppError('Không tìm thấy công việc.');
+      if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny('Chỉ người tạo, người đang thực hiện hoặc cấp trên mới giao lại được công việc này.');
+      if (tc.p && tc.p.archived) throw new AppError('Dự án đã lưu trữ, không giao lại được.');
+      const ids = idList(p.assigneeIds);
+      if (!ids.length) throw new AppError('Cần ít nhất 1 người thực hiện.');
+      for (const a of ids) if (!tc.assignees.includes(a) && !canAssign(c, tc.access, a)) throw new AppError(assignError(c, a));
+      if (ids.length === tc.assignees.length && ids.every(a => tc.assignees.includes(a)) && ids[0] === tc.assignees[0]) return {};
+      await writeAssignees(c, tc.t.id, ids, { p: tc.p, members: tc.members });
+      const name = id => (c.byId[id] || { name: '?' }).name;
+      const added = ids.filter(a => !tc.assignees.includes(a));
+      await c.q.query('INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)',
+        [newId('c'), tc.t.id, c.me.id, 'Đã giao lại công việc: ' + tc.assignees.map(name).join(', ') + ' → ' + ids.map(name).join(', '), new Date().toISOString(),
+         JSON.stringify(added.filter(a => a !== c.me.id))]);
+      return {};
+    },
+    /** Tick / bỏ tick một việc con (tiến độ) — chỉ đổi trạng thái xong, không đổi nội dung việc con. */
+    async toggleSubtask(c, p) {
+      const tc = await taskCtx(c, p.id); if (!tc) throw new AppError('Không tìm thấy công việc.');
+      if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny('Bạn không cập nhật được tiến độ công việc này.');
+      const subs = (tc.t.subtasks || []).map(s => ({ ...s }));
+      const s = subs.find(x => x.id === str(p.subId)); if (!s) throw new AppError('Không tìm thấy việc con.');
+      s.done = !!p.done;
+      await c.q.query('UPDATE tasks SET subtasks=$2 WHERE id=$1', [tc.t.id, JSON.stringify(subs)]);
+      return {};
     },
     /** Kéo thả Kanban: đổi cột và/hoặc vị trí (đặt trước việc beforeId; không có = cuối cột). */
     async moveTask(c, p) {
@@ -459,18 +538,16 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
       await renumberColumn(c.q, tc.t.project_id, status, tc.t.id, safeId(p.beforeId) ? p.beforeId : '');
       return result;
     },
-    /** Tương thích với màn báo cáo tuần: { id, patch: { status, title, due } }. */
+    /** Tương thích màn báo cáo tuần: { id, patch: { status } }. Tên/hạn của việc đã tạo không sửa được. */
     async updateTask(c, p) {
       const tc = await taskCtx(c, p.id); if (!tc) throw new AppError('Không tìm thấy công việc.');
       if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny();
       const s = p.patch || {};
+      if (s.title !== undefined || s.due !== undefined) throw new AppError('Tên và hạn của công việc đã tạo không sửa được ở đây.');
       if (s.status !== undefined && !STATUSES.includes(s.status)) throw new AppError('Trạng thái không hợp lệ.');
-      await c.q.query('UPDATE tasks SET title = COALESCE($2, title), due = COALESCE($3, due) WHERE id=$1',
-        [p.id, s.title !== undefined ? str(s.title).slice(0, 300) : null, s.due !== undefined ? normDue(s.due) : null]);
       if (s.status !== undefined) {
-        const fresh = await one(c.q, 'SELECT * FROM tasks WHERE id=$1', [p.id]);
-        const r = await applyStatus(c, fresh, s.status);
-        if (fresh.status !== s.status) await c.q.query('UPDATE tasks SET position=$2 WHERE id=$1', [p.id, await nextPosition(c.q, fresh.project_id, s.status)]);
+        const r = await applyStatus(c, tc.t, s.status);
+        if (tc.t.status !== s.status) await c.q.query('UPDATE tasks SET position=$2 WHERE id=$1', [p.id, await nextPosition(c.q, tc.t.project_id, s.status)]);
         return r;
       }
       return {};
@@ -486,6 +563,55 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
       if (!canDeleteTask(c, tc.access, tc.t, tc.assignees)) deny('Bạn không được xoá công việc này.');
       await c.q.query('DELETE FROM tasks WHERE id=$1', [p.id]);
       removeTaskFiles([p.id]);
+    },
+
+    /* ----- Việc lặp lại: MỘT nơi duy nhất để tạo/sửa lịch lặp (mẫu). Việc đã sinh ra giữ nguyên khi sửa mẫu. ----- */
+    async saveRecurring(c, p) {
+      const r = p.recurring || {};
+      if (!safeId(r.id)) throw new AppError('Thiếu mã việc lặp lại.');
+      const title = str(r.title).trim().slice(0, 300);
+      if (!title) throw new AppError('Nhập tên công việc.');
+      const rule = cleanRule(r.rule);
+      if (!rule) throw new AppError('Chọn lịch lặp lại hợp lệ (theo ngày, tuần hoặc tháng).');
+      const old = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [r.id]);
+      if (old && !canManageRecurring(c, old)) deny('Chỉ người tạo, cấp trên của người tạo hoặc Giám đốc được sửa việc lặp lại này.');
+      const projectId = old ? old.project_id : (safeId(r.projectId) ? r.projectId : DEFAULT_PROJECT);
+      const pc = await projectCtx(c, projectId);
+      if (!pc || !pc.p) throw new AppError('Dự án không tồn tại.');
+      if (!pc.access) deny('Bạn chưa tham gia dự án này.');
+      if (!old && pc.p.archived) throw new AppError('Dự án đã lưu trữ, không thêm việc mới được.');
+      let ids = idList(r.assigneeIds); if (!ids.length) ids = [c.me.id];
+      const prev = old ? idList(old.assignees) : [];
+      for (const a of ids) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError(assignError(c, a));
+      const priority = PRIORITIES.includes(r.priority) ? r.priority : 'medium';
+      const tags = cleanTags(r.tags), subtasks = cleanSubtasks(r.subtasks).map(s => ({ ...s, done: false })), desc = str(r.description).slice(0, 20000);
+      // Việc đầu tiên (hoặc việc kế tiếp nếu chuỗi đang không có việc mở) — kiểm tra trước khi ghi
+      const open = old ? await one(c.q, `SELECT 1 FROM tasks WHERE series_id=$1 AND status <> 'done' LIMIT 1`, [r.id]) : null;
+      let due = '';
+      if (!old) {
+        due = normDue(r.firstDue) || todayISO();
+        if (rule.end && due > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.');
+      } else if (!open) {
+        const today = todayISO();
+        due = nextDue(rule, isoOf(addDays(parseISO(today), -1)), today);
+        if (!due) throw new AppError('Lịch lặp đã quá ngày kết thúc. Hãy chọn ngày kết thúc muộn hơn.');
+      }
+      const now = new Date().toISOString();
+      const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule)];
+      if (old) await c.q.query('UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, updated_at=$10 WHERE id=$1', [...row, now]);
+      else await c.q.query('INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)', [...row, c.me.id, now]);
+      const result = {};
+      if (due) {
+        const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [r.id]);
+        const id = await spawnInstance(c, tpl, rule, due);
+        if (id) result.spawned = { id, due, title };
+      }
+      return result;
+    },
+    async deleteRecurring(c, p) {
+      const old = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [p.id]); if (!old) return;
+      if (!canManageRecurring(c, old)) deny('Chỉ người tạo, cấp trên của người tạo hoặc Giám đốc được xoá việc lặp lại này.');
+      await c.q.query('DELETE FROM recurring_tasks WHERE id=$1', [p.id]);       // việc đã sinh ra giữ nguyên, chỉ không sinh thêm
     },
 
     /* ----- Bình luận (có @nhắc tên) ----- */
