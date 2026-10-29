@@ -447,3 +447,54 @@ describe('API công việc', () => {
     await call(dir, 'setUserActive', { id: b, active: true });
   });
 });
+
+describe('KR nguồn của việc sinh từ báo cáo tuần (v10)', () => {
+  let tk, me, week = 44;
+  const taskOf = async id => (await work(tk)).tasks.find(x => x.id === id);
+  const sol = (id, krId, text) => ({ id, krId, text: text || 'Giải pháp ' + id, due: plusDays(5) });
+  const ku = (krId, solutions) => ({ krId, value: 1, work: 'đã làm', issues: '', causes: '', solutions });
+  const tsk = (id, solutionId, extra) => ({ id, title: 'Việc ' + solutionId, due: plusDays(5), status: 'todo', solutionId, okrId: 'okrKS', week, year: 2026, ...extra });
+  before(async () => {
+    await startServer();
+    tk = await login('admin'); me = (await work(tk)).viewerId;
+    const cyc = (await (await fetch(BASE + '?token=' + encodeURIComponent(tk))).json()).db.cycles[0].id;
+    await call(tk, 'saveOKR', { okr: { id: 'okrKS', title: 'Mục tiêu KS', ownerId: me, cycleId: cyc, krs: [{ id: 'krKA', title: 'KR A', baseline: 0, target: 10, unit: 'x' }, { id: 'krKB', title: 'KR B', baseline: 0, target: 10, unit: 'x' }] } });
+    await call(tk, 'saveOKR', { okr: { id: 'okrKX', title: 'Mục tiêu khác', ownerId: me, cycleId: cyc, krs: [{ id: 'krKX', title: 'KR của OKR khác', baseline: 0, target: 10, unit: 'x' }] } });
+  });
+  after(stopServer);
+
+  test('việc sinh từ báo cáo mang KR của khối chứa giải pháp; máy chủ không tin mã KR giả', async () => {
+    const s1 = sol('ks1', 'krKA'), s2 = sol('ks2', 'krKB');
+    await call(tk, 'addReport', { report: { id: 'rpKS', okrId: 'okrKS', week, year: 2026, createdAt: new Date().toISOString(), work: 'x', krUpdates: [ku('krKA', [s1]), ku('krKB', [s2])], solutions: [s1, s2] },
+      tasks: [tsk('tks1', 'ks1', { krId: 'krKX' }), tsk('tks2', 'ks2')] });         // tks1 cố tình gửi KR của OKR khác
+    assert.equal((await taskOf('tks1')).krId, 'krKA');
+    assert.equal((await taskOf('tks2')).krId, 'krKB');
+    const old = await (await fetch(BASE + '?token=' + encodeURIComponent(tk))).json();   // dữ liệu cho màn báo cáo tuần cũng có krId
+    assert.equal(old.db.tasks.find(x => x.id === 'tks1').krId, 'krKA');
+  });
+  test('việc tạo tay / việc lặp lại không có KR', async () => {
+    const id = nid('t');
+    await call(tk, 'saveTask', { task: { id, projectId: 'p_general', title: 'Việc tay', assigneeIds: [me], due: plusDays(2), krId: 'krKA' } });
+    assert.equal((await taskOf(id)).krId, '');
+  });
+  test('sửa báo cáo: đổi KR của giải pháp, thêm giải pháp mới; trạng thái việc giữ nguyên', async () => {
+    await call(tk, 'updateTask', { id: 'tks1', patch: { status: 'doing' } });
+    const s1 = sol('ks1', 'krKB'), s2 = sol('ks2', 'krKB'), s3 = sol('ks3', 'krKA');
+    await call(tk, 'updateReport', { report: { id: 'rpKS', okrId: 'okrKS', krUpdates: [ku('krKA', [s3]), ku('krKB', [s1, s2])] }, tasks: [tsk('tks3', 'ks3')] });
+    assert.equal((await taskOf('tks1')).krId, 'krKB'); assert.equal((await taskOf('tks1')).status, 'doing');
+    assert.equal((await taskOf('tks2')).krId, 'krKB');
+    assert.equal((await taskOf('tks3')).krId, 'krKA');
+  });
+  test('nâng cấp: việc cũ chưa có KR được điền từ báo cáo; giải pháp không có mã KR (báo cáo cũ) thì để trống', async () => {
+    const pg = new Client({ ...PGENV, host: PGENV.PGHOST, port: Number(PGENV.PGPORT), user: PGENV.PGUSER, password: PGENV.PGPASSWORD, database: DBNAME });
+    await pg.connect();
+    try {
+      await call(tk, 'addReport', { report: { id: 'rpKO', okrId: 'okrKX', week, year: 2026, createdAt: new Date().toISOString(), work: 'x', krUpdates: [], solutions: [{ id: 'kso', text: 'Giải pháp báo cáo cũ', due: plusDays(3) }] },
+        tasks: [tsk('tkso', 'kso', { okrId: 'okrKX' })] });
+      await pg.query(`UPDATE tasks SET kr_id='' WHERE id IN ('tks1','tks2','tks3','tkso')`);
+      await stopServer(); await startServer(); tk = await login('admin');           // khởi động lại → chạy lại phần nâng cấp
+      assert.equal((await taskOf('tks1')).krId, 'krKB'); assert.equal((await taskOf('tks3')).krId, 'krKA');
+      assert.equal((await taskOf('tkso')).krId, '');
+    } finally { await pg.end(); }
+  });
+});

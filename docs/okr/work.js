@@ -181,6 +181,13 @@ function dueHtml(t){
   return `<span class="inline-flex items-center gap-1 whitespace-nowrap ${od ? 'text-red-600 font-medium' : td ? 'text-amber-600 font-medium' : 'text-gray-600'}">${WI.cal}${fmt(t.due)}${od ? ' · Quá hạn' : td ? ' · Hôm nay' : ''}</span>`;
 }
 const subProg = t => { const n = t.subtasks.length; if(!n) return ''; const d = t.subtasks.filter(s => s.done).length; return `<span class="inline-flex items-center gap-1 text-[12px] ${d === n ? 'text-green-600' : 'text-gray-500'}" title="Việc con">${WI.check}${d}/${n}</span>`; };
+/* v10: việc sinh từ báo cáo tuần ghi rõ thuộc KR nào (lấy tên mới nhất từ OKR; việc cũ/việc không từ OKR hoặc KR đã bị xoá thì không có nhãn) */
+function krRef(t){
+  if(!t || !t.krId) return null;
+  const o = (DB.okrs || []).find(o => o.id === t.okrId), k = o && o.krs.find(k => k.id === t.krId);
+  return k ? { k, o } : null;
+}
+const krChip = t => { const r = krRef(t); return r ? `<span class="inline-flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 text-[11px] font-medium" title="Mục tiêu: ${esc(r.o.title)}"><span class="shrink-0">KR</span><span class="truncate">${esc(r.k.title)}</span></span>` : ''; };
 const tagChips = tags => tags.map(g => `<span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[11px] font-medium">${esc(g)}</span>`).join('');
 const projDot = p => p ? `<span class="inline-block w-2 h-2 rounded-full shrink-0" style="background:${esc(p.color)}"></span>` : '';
 function recText(r){
@@ -336,6 +343,7 @@ function card(t, multi){
       <div class="min-w-0 flex-1">
         ${multi && p ? `<div class="flex items-center gap-1.5 text-[11.5px] text-gray-500 mb-1">${projDot(p)}<span class="truncate">${esc(p.name)}</span></div>` : ''}
         <div class="font-medium text-slate-900 leading-snug ${t.status === 'done' ? 'line-through text-gray-500' : ''}">${esc(t.title)}</div>
+        ${krRef(t) ? `<div class="flex mt-1.5">${krChip(t)}</div>` : ''}
         ${t.tags.length ? `<div class="flex flex-wrap gap-1 mt-1.5">${tagChips(t.tags.slice(0, 4))}</div>` : ''}
         <div class="flex items-center justify-between gap-2 mt-2.5">
           <div class="flex items-center gap-2.5 text-[12px] text-gray-500 flex-wrap">
@@ -426,7 +434,7 @@ function listView(){
         <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
           <td class="text-center py-3" onclick="event.stopPropagation()"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} ${ed ? '' : 'disabled'} onchange="W.toggleDone('${t.id}')"></td>
           <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>
-            <div class="flex items-center gap-2 mt-0.5 flex-wrap">${tagChips(t.tags.slice(0, 5))}${subProg(t)}${t.recurrence ? `<span class="text-indigo-600 inline-flex items-center gap-1 text-[11.5px]">${WI.repeat}${esc(recText(t.recurrence))}</span>` : ''}${t.commentCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${I.chat}${t.commentCount}</span>` : ''}${t.attachCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${WI.clip}${t.attachCount}</span>` : ''}</div></td>
+            <div class="flex items-center gap-2 mt-0.5 flex-wrap">${krChip(t)}${tagChips(t.tags.slice(0, 5))}${subProg(t)}${t.recurrence ? `<span class="text-indigo-600 inline-flex items-center gap-1 text-[11.5px]">${WI.repeat}${esc(recText(t.recurrence))}</span>` : ''}${t.commentCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${I.chat}${t.commentCount}</span>` : ''}${t.attachCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${WI.clip}${t.attachCount}</span>` : ''}</div></td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(t.assigneeIds, 4)}</td>
           <td class="py-3 px-2">${prioBadge(t.priority)}</td>
@@ -575,7 +583,9 @@ function paintHead(){
   const el = $('tk-head'), t = curTask() || S.draft; if(!el || !t) return;
   const why = t.seriesId ? 'Việc sinh từ lịch lặp lại — muốn đổi tên/mô tả hãy sửa ở mục Việc lặp lại.'
     : t.createdBy ? `Chỉ ${esc(user(t.createdBy).name)} (người tạo) sửa được tên và mô tả, ở mục Việc tôi tạo.` : 'Tên và mô tả của việc đã tạo không sửa được.';
+  const kr = krRef(t);
   el.innerHTML = `
+    ${kr ? `<div class="mb-2.5 rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-[12.5px] text-amber-900"><div><span class="font-semibold">Thuộc KR:</span> ${esc(kr.k.title)}</div><div class="text-amber-700 mt-0.5"><span class="font-medium">Mục tiêu:</span> ${esc(kr.o.title)}</div></div>` : ''}
     <div class="text-[17px] font-semibold text-slate-900 leading-snug break-words ${t.status === 'done' ? 'line-through text-gray-500' : ''}">${esc(t.title)}</div>
     <div class="mt-2 text-[14px] text-slate-700 whitespace-pre-wrap break-words">${t.description ? esc(t.description) : '<span class="text-gray-400">Chưa có mô tả.</span>'}</div>
     <div class="mt-3 text-[12px] text-gray-400 flex items-start gap-1.5"><span class="mt-0.5 shrink-0">${WI.lock}</span><span>${why}</span></div>`;
@@ -864,6 +874,7 @@ function createdView(){
         ${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId); return `
         <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
           <td class="py-3 px-3 max-w-md"><div class="font-medium text-slate-900 ${t.status === 'done' ? 'line-through text-gray-400' : ''}">${esc(t.title)}</div>
+            ${krRef(t) ? `<div class="mt-1 flex">${krChip(t)}</div>` : ''}
             ${t.description ? `<div class="text-[12.5px] text-gray-500 mt-0.5 truncate">${esc(t.description.replace(/\s+/g, ' ').slice(0, 140))}</div>` : ''}</td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(t.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(t.priority)}</td><td class="py-3 px-2 text-[12.5px]">${dueHtml(t)}</td><td class="py-3 px-2">${statusBadge(t.status)}</td>

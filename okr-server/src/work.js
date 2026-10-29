@@ -116,6 +116,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position double precision NOT NULL DE
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS spawned_id text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS series_id text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kr_id text NOT NULL DEFAULT '';
 ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS mentions jsonb NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS task_assignees (task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (task_id, user_id));
 CREATE TABLE IF NOT EXISTS task_attachments (id text PRIMARY KEY, task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, name text NOT NULL,
@@ -140,6 +141,12 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
     // Việc cũ chỉ có 1 người làm → đưa vào bảng nhiều người làm (chạy lại an toàn)
     await pool.query(`INSERT INTO task_assignees(task_id,user_id) SELECT t.id, t.assignee_id FROM tasks t
       WHERE t.assignee_id <> '' AND NOT EXISTS (SELECT 1 FROM task_assignees a WHERE a.task_id = t.id) ON CONFLICT DO NOTHING`);
+    // v10: việc sinh từ báo cáo tuần ghi rõ thuộc KR nào. Việc cũ lấy KR từ giải pháp trong báo cáo (chỉ báo cáo theo từng KR mới có mã KR); chạy lại an toàn.
+    await pool.query(`UPDATE tasks t SET kr_id = s.kr_id
+      FROM (SELECT r.id AS rid, sol->>'id' AS sid, sol->>'krId' AS kr_id FROM reports r, jsonb_array_elements(r.solutions) sol
+            WHERE COALESCE(sol->>'krId', '') <> '') s
+      WHERE t.kr_id = '' AND t.report_id = s.rid AND t.solution_id = s.sid
+        AND EXISTS (SELECT 1 FROM krs k WHERE k.id = s.kr_id)`);
     // v9: lịch lặp lại tách khỏi việc thường. Mỗi việc lặp lại cũ còn đang mở (chưa sinh việc kế tiếp) thành 1 "mẫu" ở mục Việc lặp lại; chạy lại an toàn.
     await pool.query(`INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,created_by,created_at,updated_at)
       SELECT 'r_' || t.id, t.project_id, t.title, t.description, t.priority, t.tags,
@@ -224,7 +231,7 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
     id: t.id, projectId: t.project_id, title: t.title, description: t.description, status: t.status, priority: t.priority,
     assigneeIds: assignees, due: t.due, tags: t.tags || [], subtasks: t.subtasks || [], recurrence: t.recurrence || null,
     createdBy: t.created_by, createdAt: t.created_at, completedAt: t.completed_at, position: t.position,
-    reportId: t.report_id || null, okrId: t.okr_id || null, seriesId: t.series_id || '', spawned: !!t.spawned_id, commentCount: cc || 0, attachCount: ac || 0,
+    reportId: t.report_id || null, okrId: t.okr_id || null, krId: t.kr_id || '', seriesId: t.series_id || '', spawned: !!t.spawned_id, commentCount: cc || 0, attachCount: ac || 0,
   });
   /** Dữ liệu màn Công việc cho người xem: các workspace truy cập được + toàn bộ phòng ban/dự án/công việc của workspace đang chọn. */
   async function loadWork(viewer, wsId, users) {

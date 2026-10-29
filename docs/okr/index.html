@@ -1357,7 +1357,7 @@ const A = {
     const now = new Date().toISOString();
     if(er){
       const oldSol = new Set(er.solutions.map(s => s.id));
-      const newTasks = solutions.filter(s => !oldSol.has(s.id)).map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:er.id, solutionId:s.id, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now, comments:[] }));
+      const newTasks = solutions.filter(s => !oldSol.has(s.id)).map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:er.id, solutionId:s.id, krId:s.krId, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now, comments:[] }));
       const upd = { id:er.id, okrId, krUpdates, work:joinKr('work'), issues:joinKr('issues'), causes:joinKr('causes'), solutions };
       A.closeModal(); editingReportId = null; state.reportId = er.id;
       mutate('updateReport', { report:upd, tasks:newTasks }, () => {
@@ -1366,13 +1366,13 @@ const A = {
         Object.assign(er, { krUpdates, work:upd.work, issues:upd.issues, causes:upd.causes, solutions });
         const keep = new Set(solutions.map(s => s.id));
         DB.tasks = DB.tasks.filter(t => !(t.reportId === er.id && t.solutionId && !keep.has(t.solutionId) && t.status === 'todo'));
-        solutions.forEach(s => { const t = DB.tasks.find(t => t.reportId === er.id && t.solutionId === s.id); if(t){ t.title = s.text; t.due = s.due; } });
+        solutions.forEach(s => { const t = DB.tasks.find(t => t.reportId === er.id && t.solutionId === s.id); if(t){ t.title = s.text; t.due = s.due; t.krId = s.krId; } });
         newTasks.forEach(t => DB.tasks.push(t));
       }, 'Đã lưu thay đổi báo cáo.');
       return;
     }
     const r = { id:uid(), userId:session(), week:cw.week, year:cw.year, okrId, createdAt:now, krUpdates, work:joinKr('work'), issues:joinKr('issues'), causes:joinKr('causes'), solutions, comments:[] };
-    const tasks = solutions.map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:r.id, solutionId:s.id, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now }));
+    const tasks = solutions.map(s => ({ id:uid(), title:s.text, assigneeId:session(), reportId:r.id, solutionId:s.id, krId:s.krId, okrId, week:cw.week, year:cw.year, due:s.due, status:'todo', createdAt:now }));
     A.closeModal(); editingReportId = null; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = r.id;
     mutate('addReport', { report:r, tasks }, () => {
       krUpdates.forEach(ku => { const k = o.krs.find(k => k.id === ku.krId); if(k) k.current = ku.value; });
