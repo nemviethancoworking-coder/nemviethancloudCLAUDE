@@ -29,8 +29,11 @@ services:
     user: "1000:1000"
     volumes:
       - ./app:/app:ro
+      - ./uploads:/data/uploads            # tệp đính kèm công việc (ảnh, PDF, tài liệu) — nằm trong sao lưu hằng ngày
     environment:
       NODE_ENV: production
+      UPLOAD_DIR: /data/uploads
+      MAX_UPLOAD_MB: "20"
       PORT: "3100"
       PGHOST: db
       PGUSER: okr

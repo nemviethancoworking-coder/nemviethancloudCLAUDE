@@ -1,5 +1,7 @@
 /**
  * OKR Weekly — API máy chủ (Node.js + PostgreSQL), thay cho Apps Script (Code.gs v4).
+ * v8: thêm module quản lý công việc kiểu Base WeWork (src/work.js): Workspace → Phòng ban → Dự án → Công việc,
+ *     Kanban/Danh sách, việc lặp lại, bình luận @nhắc tên, tệp đính kèm. Xem README.
  * Cùng giao thức với Code.gs để index.html không phải đổi:
  *   GET  /?token=…           → { ok, db }  (không token: db.tasks = [])
  *   GET  /?ping=1            → { ok, ping, version }
@@ -25,7 +27,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 7;
+const VERSION = 8;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -61,6 +63,7 @@ CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 async function migrate() {
   await pool.query(SCHEMA);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true');   // v6: khoá tài khoản
+  await W.migrate();                                                                                       // v8: workspace, dự án, việc nhiều người làm, tệp đính kèm
 }
 
 /* ---------------- Tiện ích ---------------- */
@@ -125,6 +128,11 @@ async function ctx(viewer, q = pool) {
   users.forEach(u => { byId[u.id] = u; });
   return { me: byId[viewer.id] || viewer, users, byId, q };
 }
+/** Ngữ cảnh phân quyền dựng từ danh sách người dùng đã có (không truy vấn lại). */
+function ctxFor(viewer, users) {
+  const byId = {}; users.forEach(u => { byId[u.id] = u; });
+  return { me: byId[viewer.id] || viewer, users, byId, q: pool };
+}
 function canManage(c, targetId) {
   if (c.me.role === 'director') return true;
   if (c.me.role !== 'head' && c.me.role !== 'manager') return false;
@@ -164,7 +172,8 @@ async function viewerTasks(viewer, users) {
 }
 /* Công việc của các người làm trong danh sách + bình luận/ghi chú của từng việc (chỉ người xem được việc mới nhận được bình luận). */
 async function tasksWithComments(assigneeIds) {
-  const tr = await pool.query('SELECT * FROM tasks WHERE assignee_id = ANY($1) ORDER BY seq', [assigneeIds]);
+  // Chỉ việc sinh từ báo cáo tuần + việc ở dự án mặc định (bản giao diện cũ); việc của các dự án khác do màn Công việc tự tải (?work=1).
+  const tr = await pool.query(`SELECT * FROM tasks WHERE assignee_id = ANY($1) AND (report_id IS NOT NULL OR project_id = '${W.DEFAULT_PROJECT}') ORDER BY seq`, [assigneeIds]);
   const ids = tr.rows.map(t => t.id), by = {};
   if (ids.length) {
     const cr = await pool.query('SELECT * FROM task_comments WHERE task_id = ANY($1) ORDER BY seq', [ids]);
@@ -224,6 +233,8 @@ async function tx(fn) {
   finally { client.release(); }
 }
 const one = async (q, sql, args) => (await q.query(sql, args)).rows[0];
+/* Module quản lý công việc (workspace → phòng ban → dự án → công việc): src/work.js */
+const W = require('./work')({ pool, AppError, deny, str, num, one, canManage, todayISO, ctxFor });
 
 async function login(p, ip) {
   const username = str(p.username).trim();
@@ -258,7 +269,7 @@ const A = {
   async deleteReport(c, p) {
     const r = await one(c.q, 'SELECT user_id FROM reports WHERE id=$1', [p.id]); if (!r) return;
     if (r.user_id !== c.me.id && c.me.role !== 'director') deny('Chỉ người viết báo cáo hoặc Giám đốc được xoá báo cáo.');
-    await c.q.query('DELETE FROM tasks WHERE report_id=$1', [p.id]);
+    W.removeTaskFiles((await c.q.query('DELETE FROM tasks WHERE report_id=$1 RETURNING id', [p.id])).rows.map(x => x.id));
     await c.q.query('DELETE FROM reports WHERE id=$1', [p.id]);            // comments xoá theo ON DELETE CASCADE
   },
   /* Sửa báo cáo tuần: chỉ người gửi, và chỉ khi chưa có cấp trên nào phản hồi/đánh giá. */
@@ -289,7 +300,7 @@ const A = {
     // Đồng bộ công việc sinh ra từ giải pháp: giữ trạng thái việc cũ, thêm việc mới, bỏ việc 'Cần làm' của giải pháp đã xoá
     const ex = (await c.q.query('SELECT id, solution_id, status FROM tasks WHERE report_id=$1', [old.id])).rows;
     const keepSol = new Set(solutions.map(s => s.id));
-    for (const t of ex) if (t.solution_id && !keepSol.has(t.solution_id) && t.status === 'todo') await c.q.query('DELETE FROM tasks WHERE id=$1', [t.id]);
+    for (const t of ex) if (t.solution_id && !keepSol.has(t.solution_id) && t.status === 'todo') { await c.q.query('DELETE FROM tasks WHERE id=$1', [t.id]); W.removeTaskFiles([t.id]); }
     for (const s of solutions) {
       const cur = ex.find(t => t.solution_id === s.id);
       if (cur) await c.q.query('UPDATE tasks SET title=$2, due=$3 WHERE id=$1', [cur.id, str(s.text), str(s.due)]);
@@ -456,8 +467,11 @@ const A = {
     if (u.id === c.me.id) throw new AppError('Không thể tự xoá tài khoản của chính mình.');
     if (c.users.some(x => x.managerId === u.id)) throw new AppError(u.name + ' còn người trực thuộc, không thể xoá.');
     const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
-      + (SELECT count(*) FROM tasks WHERE assignee_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+      + (SELECT count(*) FROM tasks WHERE assignee_id=$1 OR created_by=$1) + (SELECT count(*) FROM task_assignees WHERE user_id=$1)
+      + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
     if (Number(used.n)) throw new AppError(u.name + ' đã có OKR, báo cáo, công việc hoặc phản hồi trong hệ thống nên không xoá được. Hãy dùng "Khoá tài khoản" để giữ lại lịch sử.');
+    await c.q.query('DELETE FROM workspace_members WHERE user_id=$1', [u.id]);
+    await c.q.query('DELETE FROM project_members WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM users WHERE id=$1', [u.id]);
   },
   /* Mỗi người tự đổi mật khẩu của mình (cần mật khẩu hiện tại). */
@@ -473,10 +487,13 @@ const A = {
     await c.q.query('UPDATE users SET pass_hash=$2 WHERE id=$1', [c.me.id, hashPassword(pw)]);
   },
 };
+Object.assign(A, W.actions);          // v8: thay thế addTask/updateTask/deleteTask/ghi chú bằng bản theo dự án + thêm các hành động mới
+/** Việc sinh từ báo cáo tuần / nhập dữ liệu: thuộc dự án mặc định, người làm là người phụ trách. */
 async function insertTask(q, t) {
-  await q.query(`INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+  await q.query(`INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at,project_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [t.id, str(t.title), t.assigneeId, t.reportId || null, t.solutionId || null, t.okrId || null, num(t.week), num(t.year), str(t.due),
-     ['todo', 'doing', 'done'].includes(t.status) ? t.status : 'todo', str(t.createdAt) || new Date().toISOString()]);
+     W.STATUSES.includes(t.status) ? t.status : 'todo', str(t.createdAt) || new Date().toISOString(), t.projectId || W.DEFAULT_PROJECT, str(t.createdBy) || t.assigneeId]);
+  await q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [t.id, t.assigneeId]);
 }
 
 /* ---------------- HTTP ---------------- */
@@ -486,7 +503,7 @@ function cors(req, res) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Okr-Token');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
 }
@@ -520,11 +537,29 @@ async function handle(req, res) {
       if (url.pathname.endsWith('/health')) { await pool.query('SELECT 1'); return send(res, { ok: true, version: VERSION }); }
       if (url.searchParams.get('ping')) return send(res, { ok: true, ping: 'pong', version: VERSION, backend: 'postgres', time: new Date().toISOString() });
       const tok = url.searchParams.get('token');
+      const fileM = url.pathname.match(/\/file\/([A-Za-z0-9_-]+)$/);
+      if (fileM) return await W.download(await ctx(await verifyToken(tok)), res, fileM[1]);            // tải / xem tệp đính kèm (token trên URL để dùng được với <img>, <a>)
       const viewer = tok ? await verifyToken(tok) : null;
+      if (url.searchParams.get('work')) {                                                              // màn Công việc: dữ liệu theo workspace đang chọn
+        if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
+        if (url.searchParams.get('v') && url.searchParams.get('v') === dataVersion) return send(res, { ok: true, unchanged: true, version: dataVersion });
+        const v = dataVersion, users = (await publicPart()).users;
+        return send(res, { ok: true, version: v, work: await W.loadWork(viewer, str(url.searchParams.get('ws')), users) }, 200, req);
+      }
+      if (url.searchParams.get('workTask')) {                                                          // chi tiết 1 công việc: bình luận + tệp
+        if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
+        return send(res, { ok: true, ...(await W.loadTaskDetail(await ctx(viewer), str(url.searchParams.get('workTask')))) }, 200, req);
+      }
       if (url.searchParams.get('v') && url.searchParams.get('v') === dataVersion) return send(res, { ok: true, unchanged: true, version: dataVersion });
       return send(res, await dbResponse(viewer), 200, req);
     }
     if (req.method !== 'POST') return send(res, { ok: false, error: 'Method not allowed' }, 405);
+    if (url.pathname.endsWith('/upload')) {                                                            // tải tệp lên: thân yêu cầu là dữ liệu thô, token ở header
+      const viewer = await verifyToken(req.headers['x-okr-token']);
+      const file = await W.upload(await ctx(viewer), req, { taskId: url.searchParams.get('taskId'), name: url.searchParams.get('name') });
+      bumpVersion();
+      return send(res, { ok: true, version: dataVersion, attachment: file });
+    }
     let body;
     try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { throw e instanceof AppError ? e : new AppError('Dữ liệu gửi lên không hợp lệ.'); }
     const action = body.action, p = body.payload || {};
@@ -535,11 +570,11 @@ async function handle(req, res) {
     }
     if (!Object.prototype.hasOwnProperty.call(A, action)) throw new AppError('Hành động không hợp lệ: ' + action);
     let viewer = await verifyToken(body.token);
-    await tx(async client => { const c = await ctx(viewer, client); await A[action](c, p); });
+    const result = await tx(async client => { const c = await ctx(viewer, client); return await A[action](c, p); });
     bumpVersion();
-    if (body.lite) return send(res, { ok: true, version: dataVersion });     // app tự cập nhật tại chỗ, sẽ tải lại sau
+    if (body.lite) return send(res, { ok: true, version: dataVersion, result });     // app tự cập nhật tại chỗ, sẽ tải lại sau
     viewer = (await getUsers()).find(u => u.id === viewer.id) || viewer;
-    return send(res, await dbResponse(viewer), 200, req);
+    return send(res, await dbResponse(viewer, { result }), 200, req);
   } catch (e) { errOut(res, e); }
 }
 
@@ -549,7 +584,7 @@ async function importDB(db, opts = {}) {
   if (existing.n && !opts.force) throw new Error('Cơ sở dữ liệu đã có dữ liệu (' + existing.n + ' người dùng). Thêm --force để ghi đè.');
   const temp = [];
   await tx(async q => {
-    if (opts.force) await q.query('TRUNCATE comments, krs, reports, okrs, tasks, cycles, users');
+    if (opts.force) await q.query('TRUNCATE comments, krs, reports, okrs, tasks, cycles, users CASCADE');
     for (const c of db.cycles || []) await q.query('INSERT INTO cycles(id,name,start_date,end_date,active) VALUES($1,$2,$3,$4,$5)', [c.id, str(c.name), str(c.start), str(c.end), !!c.active]);
     for (const u of db.users || []) {
       let pw = u.password || (opts.passwords || {})[u.username];

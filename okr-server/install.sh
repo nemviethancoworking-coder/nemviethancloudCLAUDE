@@ -38,7 +38,9 @@ command -v curl >/dev/null || die "Chưa có curl."
 
 # ---------------------------------------------------------------- 1. Tải code
 say "1/6 Tải code vào $DIR"
-mkdir -p "$DIR/backups" "$DIR/app"
+mkdir -p "$DIR/backups" "$DIR/app" "$DIR/uploads"
+chown 1000:1000 "$DIR/uploads"           # container API chạy bằng uid 1000 và cần ghi tệp đính kèm vào đây
+chmod 750 "$DIR/uploads"
 for f in dist/server.js docker-compose.yml backup.sh; do
   curl -fsSL "$RAW/$f?t=$TS" -o "$DIR/$(basename "$f").new" || die "Không tải được $f"
 done
@@ -109,8 +111,8 @@ location /okr-api/ {
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_read_timeout 60s;
-    client_max_body_size 2m;
+    proxy_read_timeout 120s;
+    client_max_body_size 22m;            # tệp đính kèm tối đa 20MB (giới hạn thật nằm trong API)
 }
 EOF
 NGBK="$DIR/backups/nginx-$TS"; mkdir -p "$NGBK"
