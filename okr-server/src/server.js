@@ -1,5 +1,6 @@
 /**
  * OKR Weekly — API máy chủ (Node.js + PostgreSQL), thay cho Apps Script (Code.gs v4).
+ * v9: tách nơi tạo/sửa công việc (người tạo) khỏi bảng làm việc (khoá tên, mô tả), giao việc không giới hạn cấp bậc, mục Việc lặp lại riêng.
  * v8: thêm module quản lý công việc kiểu Base WeWork (src/work.js): Workspace → Phòng ban → Dự án → Công việc,
  *     Kanban/Danh sách, việc lặp lại, bình luận @nhắc tên, tệp đính kèm. Xem README.
  * Cùng giao thức với Code.gs để index.html không phải đổi:
@@ -27,7 +28,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 8;
+const VERSION = 9;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };

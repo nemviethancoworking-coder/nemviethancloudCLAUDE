@@ -5443,6 +5443,10 @@ CREATE INDEX IF NOT EXISTS tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS task_assignees_user ON task_assignees(user_id);
 CREATE INDEX IF NOT EXISTS task_attachments_task ON task_attachments(task_id);
 CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
+CREATE INDEX IF NOT EXISTS tasks_series ON tasks(series_id);
+CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text NOT NULL DEFAULT '${DEFAULT_PROJECT}', title text NOT NULL, description text NOT NULL DEFAULT '',
+  priority text NOT NULL DEFAULT 'medium', tags jsonb NOT NULL DEFAULT '[]', subtasks jsonb NOT NULL DEFAULT '[]', assignees jsonb NOT NULL DEFAULT '[]', rule jsonb NOT NULL,
+  created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', updated_at text NOT NULL DEFAULT '', seq bigserial);
 `;
       async function migrate2() {
         await pool2.query(SCHEMA2);
@@ -5455,6 +5459,16 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
         );
         await pool2.query(`INSERT INTO task_assignees(task_id,user_id) SELECT t.id, t.assignee_id FROM tasks t
       WHERE t.assignee_id <> '' AND NOT EXISTS (SELECT 1 FROM task_assignees a WHERE a.task_id = t.id) ON CONFLICT DO NOTHING`);
+        await pool2.query(`INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,created_by,created_at,updated_at)
+      SELECT 'r_' || t.id, t.project_id, t.title, t.description, t.priority, t.tags,
+        COALESCE((SELECT jsonb_agg(jsonb_set(s.value, '{done}', 'false'::jsonb) ORDER BY s.ord) FROM jsonb_array_elements(t.subtasks) WITH ORDINALITY AS s(value, ord)), '[]'::jsonb),
+        COALESCE((SELECT jsonb_agg(a.user_id ORDER BY (a.user_id = t.assignee_id) DESC, a.user_id) FROM task_assignees a WHERE a.task_id = t.id), jsonb_build_array(t.assignee_id)),
+        t.recurrence, COALESCE(NULLIF(t.created_by, ''), t.assignee_id), $1, $1
+      FROM tasks t WHERE t.recurrence IS NOT NULL AND t.spawned_id = '' AND t.status <> 'done'
+        AND NOT EXISTS (SELECT 1 FROM recurring_tasks r WHERE r.id = t.series_id OR r.id = 'r_' || t.id)
+      ON CONFLICT DO NOTHING`, [now]);
+        await pool2.query(`UPDATE tasks t SET series_id = 'r_' || t.id WHERE t.recurrence IS NOT NULL AND t.spawned_id = '' AND t.status <> 'done'
+      AND t.series_id <> 'r_' || t.id AND EXISTS (SELECT 1 FROM recurring_tasks r WHERE r.id = 'r_' || t.id)`);
         try {
           fs2.mkdirSync(UPLOAD_DIR, { recursive: true });
         } catch (e) {
@@ -5480,16 +5494,23 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
         if (access === "admin" || access === "pm") return true;
         return t.created_by === c.me.id || assignees.includes(c.me.id) || assignees.some((a) => canManage2(c, a));
       }
+      const canEditContent = (c, t) => !t.series_id && !!t.created_by && t.created_by === c.me.id;
       function canDeleteTask(c, access, t, assignees) {
-        if (access === "admin" || access === "pm") return true;
-        if (t.created_by === c.me.id) return true;
-        return !!access && assignees.length > 0 && assignees.every((a) => a === c.me.id || canManage2(c, a));
+        if (!access) return false;
+        if (c.me.role === "director") return true;
+        if (t.created_by) return t.created_by === c.me.id || canManage2(c, t.created_by);
+        return assignees.some((a) => canManage2(c, a));
       }
       function canAssign(c, access, uid) {
         const u = c.byId[uid];
-        if (!u || !u.active) return false;
-        return uid === c.me.id || access === "admin" || access === "pm" || canManage2(c, uid);
+        return !!u && !!u.active;
       }
+      const canManageRecurring = (c, r) => c.me.role === "director" || !!r.created_by && (r.created_by === c.me.id || canManage2(c, r.created_by));
+      const recurringVisible = (c, r) => canManageRecurring(c, r) || idList(r.assignees).some((a) => a === c.me.id || canManage2(c, a));
+      const assignError = (c, a) => {
+        const u = c.byId[a];
+        return !u ? "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n kh\xF4ng t\u1ED3n t\u1EA1i." : u.name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n.";
+      };
       async function projectCtx(c, projectId) {
         const p = await one2(c.q, "SELECT * FROM projects WHERE id=$1", [projectId]);
         if (!p) return null;
@@ -5612,10 +5633,40 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
             access: access.get(p.id),
             memberIds: [...prMem.get(p.id) || []]
           })),
+          recurring: await loadRecurring(c, pids),
           tasks,
           viewerId: c.me.id,
           loadedAt: (/* @__PURE__ */ new Date()).toISOString()
         };
+      }
+      async function loadRecurring(c, pids) {
+        if (!pids.length) return [];
+        const rr = await pool2.query("SELECT * FROM recurring_tasks WHERE project_id = ANY($1) ORDER BY seq", [pids]);
+        const rows = rr.rows.filter((r) => recurringVisible(c, r));
+        if (!rows.length) return [];
+        const st = await pool2.query(`SELECT series_id, count(*) FILTER (WHERE status <> 'done')::int AS open, min(due) FILTER (WHERE status <> 'done' AND due <> '') AS next
+      FROM tasks WHERE series_id = ANY($1) GROUP BY series_id`, [rows.map((r) => r.id)]);
+        const stat = new Map(st.rows.map((r) => [r.series_id, r]));
+        return rows.map((r) => {
+          const s = stat.get(r.id);
+          return {
+            id: r.id,
+            projectId: r.project_id,
+            title: r.title,
+            description: r.description,
+            priority: r.priority,
+            tags: r.tags || [],
+            subtasks: r.subtasks || [],
+            assigneeIds: idList(r.assignees),
+            rule: r.rule,
+            createdBy: r.created_by,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            openCount: s ? s.open : 0,
+            nextDue: s && s.next ? s.next : "",
+            canEdit: canManageRecurring(c, r)
+          };
+        });
       }
       async function loadTaskDetail(c, taskId) {
         const tc = await taskCtx(c, taskId);
@@ -5628,7 +5679,8 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
           comments: cm.rows.map((r) => ({ id: r.id, authorId: r.author_id, text: r.text, createdAt: r.created_at, mentions: r.mentions || [] })),
           attachments: at.rows.map((a) => ({ id: a.id, name: a.name, mime: a.mime, size: Number(a.size), uploadedBy: a.uploaded_by, createdAt: a.created_at })),
           canEdit: canEditTask(c, tc.access, tc.t, tc.assignees),
-          canDelete: canDeleteTask(c, tc.access, tc.t, tc.assignees)
+          canDelete: canDeleteTask(c, tc.access, tc.t, tc.assignees),
+          canEditContent: canEditContent(c, tc.t)
         };
       }
       const cleanTags = (v) => uniq((Array.isArray(v) ? v : []).map((x) => str2(x).trim().slice(0, 30)).filter(Boolean)).slice(0, 12);
@@ -5652,37 +5704,57 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
         if (t.status === status) return {};
         const done = status === "done";
         await c.q.query("UPDATE tasks SET status=$2, completed_at=$3 WHERE id=$1", [t.id, status, done ? (/* @__PURE__ */ new Date()).toISOString() : ""]);
-        if (!done || !t.recurrence || t.spawned_id) return {};
-        const rule = cleanRule(t.recurrence);
+        if (!done || !t.series_id || t.spawned_id) return {};
+        const tpl = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [t.series_id]);
+        if (!tpl) return {};
+        const rule = cleanRule(tpl.rule);
         if (!rule) return {};
         const due = nextDue(rule, t.due, todayISO2());
         if (!due) return {};
+        const id = await spawnInstance(c, tpl, rule, due);
+        if (!id) return {};
+        await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, id]);
+        return { spawned: { id, due, title: tpl.title } };
+      }
+      async function spawnInstance(c, tpl, rule, due) {
+        const proj = await one2(c.q, "SELECT workspace_id, open, archived FROM projects WHERE id=$1", [tpl.project_id]);
+        if (!proj || proj.archived) return null;
+        let ids = idList(tpl.assignees).filter((id2) => c.byId[id2] && c.byId[id2].active);
+        if (!ids.length) ids = [c.byId[tpl.created_by] && c.byId[tpl.created_by].active ? tpl.created_by : c.me.id];
         const id = newId("t");
         await c.q.query(
           `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id)
-      VALUES($1,$2,$3,$4,0,0,$5,'todo',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [
             id,
-            t.title,
-            t.assignee_id,
-            t.okr_id || null,
+            tpl.title,
+            ids[0],
             due,
             (/* @__PURE__ */ new Date()).toISOString(),
-            t.project_id,
-            t.description,
-            t.priority,
-            JSON.stringify(t.tags || []),
-            JSON.stringify((t.subtasks || []).map((s) => ({ ...s, done: false }))),
+            tpl.project_id,
+            tpl.description,
+            tpl.priority,
+            JSON.stringify(tpl.tags || []),
+            JSON.stringify((tpl.subtasks || []).map((s) => ({ ...s, done: false }))),
             JSON.stringify(rule),
-            t.created_by,
-            await nextPosition(c.q, t.project_id, "todo"),
-            t.series_id || t.id
+            tpl.created_by || ids[0],
+            await nextPosition(c.q, tpl.project_id, "todo"),
+            tpl.id
           ]
         );
-        await c.q.query("INSERT INTO task_assignees(task_id,user_id) SELECT $1, user_id FROM task_assignees WHERE task_id=$2 ON CONFLICT DO NOTHING", [id, t.id]);
-        await c.q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [id, t.assignee_id]);
-        await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, id]);
-        return { spawned: { id, due, title: t.title } };
+        for (const a of ids) {
+          await c.q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [id, a]);
+          if (!proj.open) await ensureMember(c.q, tpl.project_id, proj.workspace_id, a);
+        }
+        return id;
+      }
+      async function writeAssignees(c, taskId, ids, pc) {
+        await c.q.query("UPDATE tasks SET assignee_id=$2 WHERE id=$1", [taskId, ids[0]]);
+        await c.q.query("DELETE FROM task_assignees WHERE task_id=$1 AND NOT (user_id = ANY($2))", [taskId, ids]);
+        for (const a of ids) {
+          await c.q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [taskId, a]);
+          if (!pc.members.has(a) && !pc.p.open) await ensureMember(c.q, pc.p.id, pc.p.workspace_id, a);
+        }
       }
       const taskDir = (taskId) => path.join(UPLOAD_DIR, taskId);
       function removeTaskFiles(taskIds) {
@@ -5786,52 +5858,46 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
           if (!pc) return;
           if (pc.access !== "admin" && pc.p.manager_id !== c.me.id) deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c ho\u1EB7c ng\u01B0\u1EDDi qu\u1EA3n l\xFD d\u1EF1 \xE1n \u0111\u01B0\u1EE3c xo\xE1 d\u1EF1 \xE1n.");
           if (p.id === DEFAULT_PROJECT) throw new AppError2("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c d\u1EF1 \xE1n m\u1EB7c \u0111\u1ECBnh.");
+          if (await one2(c.q, "SELECT 1 FROM recurring_tasks WHERE project_id=$1 LIMIT 1", [p.id])) throw new AppError2('D\u1EF1 \xE1n c\xF2n vi\u1EC7c l\u1EB7p l\u1EA1i. H\xE3y xo\xE1 ch\xFAng \u1EDF m\u1EE5c "Vi\u1EC7c l\u1EB7p l\u1EA1i" ho\u1EB7c d\xF9ng L\u01B0u tr\u1EEF.');
           const n = await one2(c.q, "SELECT count(*)::int AS n FROM tasks WHERE project_id=$1", [p.id]);
           if (n.n) throw new AppError2("D\u1EF1 \xE1n c\xF2n " + n.n + ' c\xF4ng vi\u1EC7c n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y chuy\u1EC3n d\u1EF1 \xE1n sang "L\u01B0u tr\u1EEF" \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.');
           await c.q.query("DELETE FROM projects WHERE id=$1", [p.id]);
         },
         /* ----- Công việc ----- */
-        /** Tạo mới hoặc cập nhật đầy đủ 1 công việc (form chi tiết). */
+        /**
+         * Tạo công việc mới, hoặc (chỉ NGƯỜI TẠO) sửa nội dung việc mình đã tạo: tên, mô tả, ưu tiên, hạn, nhãn, việc con, người thực hiện.
+         * Việc đã tạo hiện trên bảng bị khoá nội dung; việc lặp lại không tạo ở đây mà ở mục "Việc lặp lại" (saveRecurring).
+         */
         async saveTask(c, p) {
           const t = p.task || {};
           if (!safeId(t.id)) throw new AppError2("Thi\u1EBFu m\xE3 c\xF4ng vi\u1EC7c.");
           const title = str2(t.title).trim().slice(0, 300);
           if (!title) throw new AppError2("Nh\u1EADp t\xEAn c\xF4ng vi\u1EC7c.");
           const old = await taskCtx(c, t.id);
+          if (old && !canEditContent(c, old.t)) deny2(old.t.series_id ? 'Vi\u1EC7c sinh t\u1EEB l\u1ECBch l\u1EB7p l\u1EA1i: mu\u1ED1n \u0111\u1ED5i t\xEAn/m\xF4 t\u1EA3 h\xE3y s\u1EEDa \u1EDF m\u1EE5c "Vi\u1EC7c l\u1EB7p l\u1EA1i".' : 'Ch\u1EC9 ng\u01B0\u1EDDi t\u1EA1o c\xF4ng vi\u1EC7c m\u1EDBi s\u1EEDa \u0111\u01B0\u1EE3c t\xEAn, m\xF4 t\u1EA3 v\xE0 n\u1ED9i dung (\u1EDF m\u1EE5c "Vi\u1EC7c t\xF4i t\u1EA1o"). B\u1EA1n v\u1EABn giao l\u1EA1i vi\u1EC7c n\xE0y cho ng\u01B0\u1EDDi kh\xE1c \u0111\u01B0\u1EE3c.');
           const projectId = old ? old.t.project_id : safeId(t.projectId) ? t.projectId : DEFAULT_PROJECT;
           const pc = old ? { p: old.p, members: old.members, access: old.access } : await projectCtx(c, projectId);
           if (!pc || !pc.p) throw new AppError2("D\u1EF1 \xE1n kh\xF4ng t\u1ED3n t\u1EA1i.");
           if (!pc.access) deny2("B\u1EA1n ch\u01B0a tham gia d\u1EF1 \xE1n n\xE0y.");
           if (!old && pc.p.archived) throw new AppError2("D\u1EF1 \xE1n \u0111\xE3 l\u01B0u tr\u1EEF, kh\xF4ng th\xEAm vi\u1EC7c m\u1EDBi \u0111\u01B0\u1EE3c.");
-          if (old && !canEditTask(c, old.access, old.t, old.assignees)) deny2("B\u1EA1n ch\u1EC9 s\u1EEDa \u0111\u01B0\u1EE3c c\xF4ng vi\u1EC7c c\u1EE7a m\xECnh, c\u1EE7a c\u1EA5p d\u01B0\u1EDBi ho\u1EB7c trong d\u1EF1 \xE1n b\u1EA1n qu\u1EA3n l\xFD.");
-          const status = STATUSES.includes(t.status) ? t.status : old ? old.t.status : "todo";
           const priority = PRIORITIES.includes(t.priority) ? t.priority : old ? old.t.priority : "medium";
           let assignees = idList(t.assigneeIds);
           if (!assignees.length) assignees = old ? old.assignees : [c.me.id];
           const prev = old ? old.assignees : [];
-          for (const a of assignees) if (!prev.includes(a) && !canAssign(c, pc.access, a)) {
-            const u = c.byId[a];
-            throw new AppError2(!u ? "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n kh\xF4ng t\u1ED3n t\u1EA1i." : !u.active ? u.name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n." : "B\u1EA1n ch\u1EC9 giao \u0111\u01B0\u1EE3c vi\u1EC7c cho ch\xEDnh m\xECnh ho\u1EB7c c\u1EA5p d\u01B0\u1EDBi (" + u.name + " ngo\xE0i ph\u1EA1m vi c\u1EE7a b\u1EA1n).");
-          }
-          let rule = cleanRule(t.recurrence), due = normDue(t.due);
-          if (rule && !due) due = todayISO2();
-          if (rule && rule.end && due > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t.");
+          for (const a of assignees) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError2(assignError(c, a));
+          const due = normDue(t.due);
           const tags = cleanTags(t.tags), subtasks = cleanSubtasks(t.subtasks), desc = str2(t.description).slice(0, 2e4);
-          const okrId = old ? old.t.okr_id : t.okrId ? str2(t.okrId) : null;
-          const result = {};
           if (old) {
             await c.q.query(
-              `UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, recurrence=$8, assignee_id=$9 WHERE id=$1`,
-              [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), rule ? JSON.stringify(rule) : null, assignees[0]]
+              "UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7 WHERE id=$1",
+              [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks)]
             );
-            if (old.t.status !== status) {
-              Object.assign(result, await applyStatus(c, { ...old.t, due, recurrence: rule, title, description: desc, priority, tags, subtasks, assignee_id: assignees[0] }, status));
-              await c.q.query("UPDATE tasks SET position=$2 WHERE id=$1", [t.id, await nextPosition(c.q, projectId, status)]);
-            }
           } else {
+            const status = STATUSES.includes(t.status) ? t.status : "todo";
+            const okrId = t.okrId ? str2(t.okrId) : null;
             await c.q.query(
               `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id)
-          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'')`,
+          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'')`,
               [
                 t.id,
                 title,
@@ -5845,19 +5911,52 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
                 priority,
                 JSON.stringify(tags),
                 JSON.stringify(subtasks),
-                rule ? JSON.stringify(rule) : null,
                 c.me.id,
                 await nextPosition(c.q, projectId, status),
                 status === "done" ? (/* @__PURE__ */ new Date()).toISOString() : ""
               ]
             );
           }
-          await c.q.query("DELETE FROM task_assignees WHERE task_id=$1 AND NOT (user_id = ANY($2))", [t.id, assignees]);
-          for (const a of assignees) {
-            await c.q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [t.id, a]);
-            if (!pc.members.has(a) && !pc.p.open) await ensureMember(c.q, projectId, pc.p.workspace_id, a);
-          }
-          return result;
+          await writeAssignees(c, t.id, assignees, pc);
+          return {};
+        },
+        /** Giao lại công việc cho người khác: người đang thực hiện, người tạo hoặc cấp trên; không giới hạn theo cấp bậc. Ghi lại vào bình luận. */
+        async reassignTask(c, p) {
+          const tc = await taskCtx(c, p.id);
+          if (!tc) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y c\xF4ng vi\u1EC7c.");
+          if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny2("Ch\u1EC9 ng\u01B0\u1EDDi t\u1EA1o, ng\u01B0\u1EDDi \u0111ang th\u1EF1c hi\u1EC7n ho\u1EB7c c\u1EA5p tr\xEAn m\u1EDBi giao l\u1EA1i \u0111\u01B0\u1EE3c c\xF4ng vi\u1EC7c n\xE0y.");
+          if (tc.p && tc.p.archived) throw new AppError2("D\u1EF1 \xE1n \u0111\xE3 l\u01B0u tr\u1EEF, kh\xF4ng giao l\u1EA1i \u0111\u01B0\u1EE3c.");
+          const ids = idList(p.assigneeIds);
+          if (!ids.length) throw new AppError2("C\u1EA7n \xEDt nh\u1EA5t 1 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n.");
+          for (const a of ids) if (!tc.assignees.includes(a) && !canAssign(c, tc.access, a)) throw new AppError2(assignError(c, a));
+          if (ids.length === tc.assignees.length && ids.every((a) => tc.assignees.includes(a)) && ids[0] === tc.assignees[0]) return {};
+          await writeAssignees(c, tc.t.id, ids, { p: tc.p, members: tc.members });
+          const name = (id) => (c.byId[id] || { name: "?" }).name;
+          const added = ids.filter((a) => !tc.assignees.includes(a));
+          await c.q.query(
+            "INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)",
+            [
+              newId("c"),
+              tc.t.id,
+              c.me.id,
+              "\u0110\xE3 giao l\u1EA1i c\xF4ng vi\u1EC7c: " + tc.assignees.map(name).join(", ") + " \u2192 " + ids.map(name).join(", "),
+              (/* @__PURE__ */ new Date()).toISOString(),
+              JSON.stringify(added.filter((a) => a !== c.me.id))
+            ]
+          );
+          return {};
+        },
+        /** Tick / bỏ tick một việc con (tiến độ) — chỉ đổi trạng thái xong, không đổi nội dung việc con. */
+        async toggleSubtask(c, p) {
+          const tc = await taskCtx(c, p.id);
+          if (!tc) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y c\xF4ng vi\u1EC7c.");
+          if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny2("B\u1EA1n kh\xF4ng c\u1EADp nh\u1EADt \u0111\u01B0\u1EE3c ti\u1EBFn \u0111\u1ED9 c\xF4ng vi\u1EC7c n\xE0y.");
+          const subs = (tc.t.subtasks || []).map((s2) => ({ ...s2 }));
+          const s = subs.find((x) => x.id === str2(p.subId));
+          if (!s) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y vi\u1EC7c con.");
+          s.done = !!p.done;
+          await c.q.query("UPDATE tasks SET subtasks=$2 WHERE id=$1", [tc.t.id, JSON.stringify(subs)]);
+          return {};
         },
         /** Kéo thả Kanban: đổi cột và/hoặc vị trí (đặt trước việc beforeId; không có = cuối cột). */
         async moveTask(c, p) {
@@ -5870,21 +5969,17 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
           await renumberColumn(c.q, tc.t.project_id, status, tc.t.id, safeId(p.beforeId) ? p.beforeId : "");
           return result;
         },
-        /** Tương thích với màn báo cáo tuần: { id, patch: { status, title, due } }. */
+        /** Tương thích màn báo cáo tuần: { id, patch: { status } }. Tên/hạn của việc đã tạo không sửa được. */
         async updateTask(c, p) {
           const tc = await taskCtx(c, p.id);
           if (!tc) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y c\xF4ng vi\u1EC7c.");
           if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny2();
           const s = p.patch || {};
+          if (s.title !== void 0 || s.due !== void 0) throw new AppError2("T\xEAn v\xE0 h\u1EA1n c\u1EE7a c\xF4ng vi\u1EC7c \u0111\xE3 t\u1EA1o kh\xF4ng s\u1EEDa \u0111\u01B0\u1EE3c \u1EDF \u0111\xE2y.");
           if (s.status !== void 0 && !STATUSES.includes(s.status)) throw new AppError2("Tr\u1EA1ng th\xE1i kh\xF4ng h\u1EE3p l\u1EC7.");
-          await c.q.query(
-            "UPDATE tasks SET title = COALESCE($2, title), due = COALESCE($3, due) WHERE id=$1",
-            [p.id, s.title !== void 0 ? str2(s.title).slice(0, 300) : null, s.due !== void 0 ? normDue(s.due) : null]
-          );
           if (s.status !== void 0) {
-            const fresh = await one2(c.q, "SELECT * FROM tasks WHERE id=$1", [p.id]);
-            const r = await applyStatus(c, fresh, s.status);
-            if (fresh.status !== s.status) await c.q.query("UPDATE tasks SET position=$2 WHERE id=$1", [p.id, await nextPosition(c.q, fresh.project_id, s.status)]);
+            const r = await applyStatus(c, tc.t, s.status);
+            if (tc.t.status !== s.status) await c.q.query("UPDATE tasks SET position=$2 WHERE id=$1", [p.id, await nextPosition(c.q, tc.t.project_id, s.status)]);
             return r;
           }
           return {};
@@ -5901,6 +5996,55 @@ CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
           if (!canDeleteTask(c, tc.access, tc.t, tc.assignees)) deny2("B\u1EA1n kh\xF4ng \u0111\u01B0\u1EE3c xo\xE1 c\xF4ng vi\u1EC7c n\xE0y.");
           await c.q.query("DELETE FROM tasks WHERE id=$1", [p.id]);
           removeTaskFiles([p.id]);
+        },
+        /* ----- Việc lặp lại: MỘT nơi duy nhất để tạo/sửa lịch lặp (mẫu). Việc đã sinh ra giữ nguyên khi sửa mẫu. ----- */
+        async saveRecurring(c, p) {
+          const r = p.recurring || {};
+          if (!safeId(r.id)) throw new AppError2("Thi\u1EBFu m\xE3 vi\u1EC7c l\u1EB7p l\u1EA1i.");
+          const title = str2(r.title).trim().slice(0, 300);
+          if (!title) throw new AppError2("Nh\u1EADp t\xEAn c\xF4ng vi\u1EC7c.");
+          const rule = cleanRule(r.rule);
+          if (!rule) throw new AppError2("Ch\u1ECDn l\u1ECBch l\u1EB7p l\u1EA1i h\u1EE3p l\u1EC7 (theo ng\xE0y, tu\u1EA7n ho\u1EB7c th\xE1ng).");
+          const old = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [r.id]);
+          if (old && !canManageRecurring(c, old)) deny2("Ch\u1EC9 ng\u01B0\u1EDDi t\u1EA1o, c\u1EA5p tr\xEAn c\u1EE7a ng\u01B0\u1EDDi t\u1EA1o ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa vi\u1EC7c l\u1EB7p l\u1EA1i n\xE0y.");
+          const projectId = old ? old.project_id : safeId(r.projectId) ? r.projectId : DEFAULT_PROJECT;
+          const pc = await projectCtx(c, projectId);
+          if (!pc || !pc.p) throw new AppError2("D\u1EF1 \xE1n kh\xF4ng t\u1ED3n t\u1EA1i.");
+          if (!pc.access) deny2("B\u1EA1n ch\u01B0a tham gia d\u1EF1 \xE1n n\xE0y.");
+          if (!old && pc.p.archived) throw new AppError2("D\u1EF1 \xE1n \u0111\xE3 l\u01B0u tr\u1EEF, kh\xF4ng th\xEAm vi\u1EC7c m\u1EDBi \u0111\u01B0\u1EE3c.");
+          let ids = idList(r.assigneeIds);
+          if (!ids.length) ids = [c.me.id];
+          const prev = old ? idList(old.assignees) : [];
+          for (const a of ids) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError2(assignError(c, a));
+          const priority = PRIORITIES.includes(r.priority) ? r.priority : "medium";
+          const tags = cleanTags(r.tags), subtasks = cleanSubtasks(r.subtasks).map((s) => ({ ...s, done: false })), desc = str2(r.description).slice(0, 2e4);
+          const open = old ? await one2(c.q, `SELECT 1 FROM tasks WHERE series_id=$1 AND status <> 'done' LIMIT 1`, [r.id]) : null;
+          let due = "";
+          if (!old) {
+            due = normDue(r.firstDue) || todayISO2();
+            if (rule.end && due > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t \u0111\u1EA7u ti\xEAn.");
+          } else if (!open) {
+            const today = todayISO2();
+            due = nextDue(rule, isoOf(addDays(parseISO(today), -1)), today);
+            if (!due) throw new AppError2("L\u1ECBch l\u1EB7p \u0111\xE3 qu\xE1 ng\xE0y k\u1EBFt th\xFAc. H\xE3y ch\u1ECDn ng\xE0y k\u1EBFt th\xFAc mu\u1ED9n h\u01A1n.");
+          }
+          const now = (/* @__PURE__ */ new Date()).toISOString();
+          const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule)];
+          if (old) await c.q.query("UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, updated_at=$10 WHERE id=$1", [...row, now]);
+          else await c.q.query("INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)", [...row, c.me.id, now]);
+          const result = {};
+          if (due) {
+            const tpl = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [r.id]);
+            const id = await spawnInstance(c, tpl, rule, due);
+            if (id) result.spawned = { id, due, title };
+          }
+          return result;
+        },
+        async deleteRecurring(c, p) {
+          const old = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [p.id]);
+          if (!old) return;
+          if (!canManageRecurring(c, old)) deny2("Ch\u1EC9 ng\u01B0\u1EDDi t\u1EA1o, c\u1EA5p tr\xEAn c\u1EE7a ng\u01B0\u1EDDi t\u1EA1o ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 vi\u1EC7c l\u1EB7p l\u1EA1i n\xE0y.");
+          await c.q.query("DELETE FROM recurring_tasks WHERE id=$1", [p.id]);
         },
         /* ----- Bình luận (có @nhắc tên) ----- */
         async addTaskComment(c, p) {
@@ -6019,7 +6163,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 8;
+var VERSION = 9;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };

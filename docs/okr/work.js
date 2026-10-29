@@ -42,13 +42,14 @@ const WI = {
   check:  svg('<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>', 13),
   folder: svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>', 14),
   eye:    svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', 14),
+  lock:   svg('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>', 13),
   down:   svg('<path d="M12 5v14M5 12l7 7 7-7"/>', 14),
 };
 
 /* ---------- Trạng thái ---------- */
 const S = {
   data: null, loading: false, error: null, version: null, wsLoaded: null,
-  ws: lsGet('okr_work_ws') || '', mode: lsGet('okr_work_mode') || 'kanban', project: 'all', showArch: false,
+  ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', createdTab: 'open', project: 'all', showArch: false,
   f: { q: '', who: 'all', pri: 'all', st: 'all', mine: false },
   sort: { k: 'status', d: 1 }, doneLimit: DONE_SHOW, listLimit: 200,
   drag: null, over: null, draft: null, detail: null, mention: new Set(), uploading: 0,
@@ -68,20 +69,26 @@ const deptById = id => (S.data ? S.data.departments : []).find(d => d.id === id)
 const activeUsers = () => DB.users.filter(isActive);
 const meId = () => session();
 
-/** Quyền sửa công việc ở giao diện (máy chủ vẫn kiểm tra lại). */
+/** Quyền ở giao diện (máy chủ vẫn kiểm tra lại).
+ *  - canEdit: làm việc trên bảng (đổi trạng thái, tick việc con, giao lại): quản lý dự án, người tạo, người thực hiện, cấp trên của người thực hiện.
+ *  - canEditContent: sửa tên, mô tả, nội dung — CHỈ người tạo (và không phải việc sinh từ lịch lặp lại), ở mục "Việc tôi tạo".
+ *  - canDelete: người giao (người tạo) và cấp trên của người đó.
+ *  - assignable: giao việc không bị giới hạn bởi phân quyền — ai đang hoạt động cũng chọn được. */
 function canEdit(t){
   const p = projById(t.projectId); if(!p) return false;
   if(p.access === 'admin' || p.access === 'pm') return true;
   return t.createdBy === meId() || t.assigneeIds.includes(meId()) || t.assigneeIds.some(a => canManage(a));
 }
-const canDelete = t => { const p = projById(t.projectId); return !!p && (p.access === 'admin' || p.access === 'pm' || t.createdBy === meId() || t.assigneeIds.every(a => a === meId() || canManage(a))); };
+const canEditContent = t => !t.seriesId && !!t.createdBy && t.createdBy === meId();
+function canDelete(t){
+  const p = projById(t.projectId); if(!p) return false;
+  if(isDir()) return true;
+  if(t.createdBy) return t.createdBy === meId() || canManage(t.createdBy);
+  return t.assigneeIds.some(a => canManage(a));
+}
 const canCreateProject = () => isMgr();
 const canEditProject = p => isDir() || p.managerId === meId();
-/** Người có thể được giao việc trong dự án p (giống quy tắc ở máy chủ). */
-function assignable(p){
-  const full = p && (p.access === 'admin' || p.access === 'pm');
-  return activeUsers().filter(u => full || u.id === meId() || canManage(u.id));
-}
+const assignable = () => activeUsers();
 function creatableProjects(){ return (S.data ? S.data.projects : []).filter(p => !p.archived); }
 
 /* ---------- Gọi máy chủ ---------- */
@@ -219,7 +226,7 @@ function view(){
   }
   const d = S.data, ws = d.workspaces.find(w => w.id === d.currentId);
   const projs = d.projects.filter(p => !p.archived);
-  const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : dashboard();
+  const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : S.mode === 'created' ? createdView() : S.mode === 'rec' ? recView() : dashboard();
   return `
   ${toolbar(ws)}
   <div class="flex gap-4 items-start">
@@ -242,14 +249,14 @@ function toolbar(ws){
       </div>
       ${isDir() ? `<button class="btn btn-ghost btn-sm" title="Quản lý Workspace" onclick="W.openWorkspace('${esc(d.currentId)}')">${I.gear} Workspace</button><button class="btn btn-ghost btn-sm" title="Thêm Workspace mới" onclick="W.openWorkspace('')">${I.plus}</button>` : ''}
       <span class="w-px h-6 bg-gray-200 mx-1"></span>
-      ${tab('kanban', WI.kanban, 'Kanban')}${tab('list', WI.list, 'Danh sách')}${tab('dash', WI.chart, 'Tổng quan')}
+      ${tab('kanban', WI.kanban, 'Kanban')}${tab('list', WI.list, 'Danh sách')}${tab('dash', WI.chart, 'Tổng quan')}<span class="w-px h-6 bg-gray-200 mx-1"></span>${tab('created', I.edit, 'Việc tôi tạo')}${tab('rec', WI.repeat, 'Việc lặp lại')}
     </div>
     <div class="flex items-center gap-2 flex-wrap">
       <input class="input !w-48" id="wk-q" placeholder="Tìm công việc, nhãn..." value="${esc(S.f.q)}" oninput="W.setQ(this.value)">
-      ${people.length > 1 ? `<select class="input !w-auto" onchange="W.setF('who',this.value)"><option value="all">Mọi người</option>${people.map(u => `<option value="${u.id}" ${S.f.who === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
-      <select class="input !w-auto" onchange="W.setF('pri',this.value)"><option value="all">Mọi ưu tiên</option>${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${S.f.pri === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select>
-      <span class="chip ${S.f.mine ? 'active' : ''}" onclick="W.toggleMine()">Việc của tôi</span>
-      <button class="btn btn-primary" onclick="W.openTask('')">${I.plus} Thêm công việc</button>
+      ${S.mode === 'rec' || S.mode === 'created' ? '' : people.length > 1 ? `<select class="input !w-auto" onchange="W.setF('who',this.value)"><option value="all">Mọi người</option>${people.map(u => `<option value="${u.id}" ${S.f.who === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
+      ${S.mode === 'rec' || S.mode === 'created' ? '' : `<select class="input !w-auto" onchange="W.setF('pri',this.value)"><option value="all">Mọi ưu tiên</option>${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${S.f.pri === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select>
+      <span class="chip ${S.f.mine ? 'active' : ''}" onclick="W.toggleMine()">Việc của tôi</span>`}
+      ${S.mode === 'rec' ? `<button class="btn btn-primary" onclick="W.openRecurring('')">${I.plus} Thêm việc lặp lại</button>` : `<button class="btn btn-primary" onclick="W.openTaskForm('')">${I.plus} Thêm công việc</button>`}
     </div>
   </div>`;
 }
@@ -316,7 +323,7 @@ function kanban(){
       </div>`;
     }).join('')}
   </div>
-  <div class="text-[12px] text-gray-400 mt-2">Kéo thả thẻ để đổi trạng thái hoặc thứ tự. Việc chuyển sang <b>Hoàn thành</b> mà có cài lặp lại sẽ tự sinh việc kế tiếp.</div>`;
+  <div class="text-[12px] text-gray-400 mt-2">Kéo thả thẻ để đổi trạng thái hoặc thứ tự. Tên và mô tả của việc đã tạo bị khoá — người tạo sửa ở mục <b>Việc tôi tạo</b>; việc lặp lại được tạo ở mục <b>Việc lặp lại</b>.</div>`;
 }
 function card(t, multi){
   const p = projById(t.projectId), od = overdue(t), ed = canEdit(t);
@@ -487,58 +494,144 @@ function dashboard(){
 }
 
 /* ============================================================
-   CHI TIẾT CÔNG VIỆC (khung nhập)
+   NƠI TẠO / SỬA NỘI DUNG  ↔  CHI TIẾT TRÊN BẢNG (chỉ đọc nội dung)
+   - openTaskForm: form tạo việc; người TẠO sửa lại nội dung ở mục "Việc tôi tạo" cũng bằng form này.
+   - openDetail: bấm vào việc trên bảng. Tên, mô tả, ưu tiên, hạn, nhãn bị khoá; chỉ đổi trạng thái, tick việc con,
+     giao lại cho người khác, bình luận và đính kèm tệp.
    ============================================================ */
 const ro = () => S.draft && S.draft.readOnly;
-function openTask(id, status){
-  let t, isNew = !id;
+function openTask(id, status){ if(!id) openTaskForm('', status); else openDetail(id); }
+
+function openTaskForm(id, status){
+  const isNew = !id; let t;
   if(isNew){
     const ps = creatableProjects();
     if(!ps.length){ toast(canCreateProject() ? 'Hãy tạo dự án trước khi thêm công việc.' : 'Bạn chưa tham gia dự án nào để thêm công việc.', 'error'); return; }
     const pid = S.project !== 'all' && ps.some(p => p.id === S.project) ? S.project : ps[0].id;
-    t = { id: newId('t'), projectId: pid, title: '', description: '', status: status || 'todo', priority: 'medium', assigneeIds: [meId()], due: '', tags: [], subtasks: [], recurrence: null, createdBy: meId(), createdAt: new Date().toISOString(), commentCount: 0, attachCount: 0 };
+    t = { id: newId('t'), projectId: pid, title: '', description: '', status: status || 'todo', priority: 'medium', assigneeIds: [meId()], due: '', tags: [], subtasks: [], createdBy: meId() };
   } else {
     t = S.data.tasks.find(x => x.id === id); if(!t) return;
+    if(!canEditContent(t)){ toast('Chỉ người tạo công việc mới sửa được tên, mô tả và nội dung.', 'error'); return; }
   }
-  S.draft = JSON.parse(JSON.stringify(t)); S.draft.isNew = isNew; S.draft.readOnly = !isNew && !canEdit(t); S.detail = isNew ? { comments: [], attachments: [] } : null; S.mention = new Set();
-  const p = projById(S.draft.projectId), r = ro();
+  S.draft = JSON.parse(JSON.stringify(t)); S.draft.isNew = isNew; S.draft.readOnly = false; S.draft.kind = 'task'; S.detail = null; S.mention = new Set();
+  const p = projById(S.draft.projectId);
   openModal(`
-    ${modalHeader(isNew ? 'Thêm công việc' : (r ? 'Chi tiết công việc' : 'Sửa công việc'), isNew ? '' : `Tạo bởi ${esc(user(t.createdBy || (t.assigneeIds[0] || '')).name)} · ${t.createdAt ? fmtDT(t.createdAt) : ''}${t.reportId ? ' · Từ báo cáo tuần' : ''}`)}
+    ${modalHeader(isNew ? 'Thêm công việc' : 'Sửa nội dung công việc', isNew ? 'Giao việc cho bất kỳ ai. Sau khi tạo, tên và mô tả bị khoá trên bảng; chỉ bạn (người tạo) sửa lại được ở mục "Việc tôi tạo".' : 'Bạn là người tạo nên sửa được ở đây. Trên bảng, tên và mô tả của việc này đã bị khoá.')}
     <div class="p-6 grid md:grid-cols-5 gap-6">
       <div class="md:col-span-3 space-y-5 min-w-0">
-        <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(S.draft.title)}" maxlength="300" placeholder="Nhập nội dung công việc..." ${r ? 'disabled' : ''} oninput="W.d('title',this.value)"></div>
-        <div><label class="label">Mô tả</label><textarea id="tk-desc" class="input" style="min-height:110px" placeholder="Mô tả chi tiết, yêu cầu, liên kết..." ${r ? 'disabled' : ''} oninput="W.d('description',this.value)">${esc(S.draft.description)}</textarea></div>
+        <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(S.draft.title)}" maxlength="300" placeholder="Nhập nội dung công việc..." oninput="W.d('title',this.value)"></div>
+        <div><label class="label">Mô tả</label><textarea id="tk-desc" class="input" style="min-height:130px" placeholder="Mô tả chi tiết, yêu cầu, liên kết..." oninput="W.d('description',this.value)">${esc(S.draft.description)}</textarea></div>
         <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
-        ${isNew ? `<div class="text-[12.5px] text-gray-400 border border-dashed border-gray-300 rounded-lg p-3">Lưu công việc xong mới bình luận và đính kèm tệp được.</div>`
-          : `<div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm</label>${!r || true ? `<label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Thêm tệp<input type="file" multiple class="hidden" id="tk-file" onchange="event.stopPropagation();W.pickFiles(this)" accept=".${OK_EXT.join(',.')}"></label>` : ''}</div><div id="tk-att" class="space-y-1.5"><div class="text-[12.5px] text-gray-400">Đang tải...</div></div></div>
-          <div><label class="label">Bình luận</label><div id="tk-cm" class="space-y-3"></div>
-            <div class="mt-3 relative">
-              <textarea id="tk-cmt" class="input" style="min-height:70px" placeholder="Viết bình luận... gõ @ để nhắc tên đồng nghiệp" oninput="event.stopPropagation();W.cmInput(this)" onkeydown="W.cmKey(event)"></textarea>
-              <div id="tk-mention" class="hidden absolute left-2 right-2 z-10 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto" style="bottom:100%"></div>
-              <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400">Ctrl + Enter để gửi</span><button class="btn btn-primary btn-sm" id="tk-cm-send" onclick="W.postComment()">${I.chat} Gửi</button></div>
-            </div></div>`}
       </div>
       <div class="md:col-span-2 space-y-4 min-w-0">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === S.draft.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="label">Trạng thái</label><select class="input" ${r ? 'disabled' : ''} onchange="W.d('status',this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${S.draft.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select></div>
-          <div><label class="label">Ưu tiên</label><select class="input" ${r ? 'disabled' : ''} onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${S.draft.priority === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select></div>
+          ${isNew ? `<div><label class="label">Trạng thái ban đầu</label><select class="input" onchange="W.d('status',this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${S.draft.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select></div>` : ''}
+          <div class="${isNew ? '' : 'col-span-2'}"><label class="label">Ưu tiên</label><select class="input" onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${S.draft.priority === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select></div>
         </div>
-        <div><label class="label">Hạn chót</label><input type="date" class="input" value="${esc(S.draft.due)}" ${r ? 'disabled' : ''} onchange="W.d('due',this.value);W.paintRecurrence()"></div>
+        <div><label class="label">Hạn chót</label><input type="date" class="input" value="${esc(S.draft.due)}" onchange="W.d('due',this.value)"></div>
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
-        <div><label class="label">Lặp lại</label><div id="tk-rec"></div></div>
+        <div class="text-[12px] text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">Cần việc lặp lại (hằng ngày / tuần / tháng)? Tạo ở mục <a class="text-base-600 underline cursor-pointer" onclick="W.gotoRec()">Việc lặp lại</a>.</div>
       </div>
     </div>
-    <div class="px-6 py-4 border-t border-gray-200 flex items-center justify-between gap-2">
-      <div>${!isNew && canDelete(t) ? `<button class="btn btn-danger" onclick="W.deleteTask('${t.id}', true)">${I.trash} Xoá</button>` : ''}</div>
-      <div class="flex gap-2"><button class="btn btn-ghost" onclick="A.cancelModal()">${r ? 'Đóng' : 'Huỷ'}</button>${r ? '' : `<button class="btn btn-primary" id="tk-save" onclick="W.saveTask()">${I.check} ${isNew ? 'Thêm công việc' : 'Lưu thay đổi'}</button>`}</div>
+    <div class="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
+      <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button><button class="btn btn-primary" id="tk-save" onclick="W.saveTask()">${I.check} ${isNew ? 'Thêm công việc' : 'Lưu thay đổi'}</button>
     </div>`, 'max-w-4xl');
-  paintSubs(); paintAssignees(); paintTags(); paintRecurrence();
+  paintSubs(); paintAssignees(); paintTags();
   setTimeout(() => { const el = $('tk-title'); if(el && isNew) el.focus(); }, 50);
-  if(!isNew) loadDetail(t.id);
 }
 function d(k, v){ if(S.draft) S.draft[k] = v; }
+
+/* ----- Chi tiết trên bảng: chỉ đọc nội dung ----- */
+const curTask = () => (S.draft && S.data ? S.data.tasks.find(x => x.id === S.draft.id) : null) || null;
+function openDetail(id){
+  const t = S.data.tasks.find(x => x.id === id); if(!t) return;
+  S.draft = JSON.parse(JSON.stringify(t)); S.draft.isNew = false; S.draft.readOnly = false; S.draft.kind = 'detail'; S.draft.reassign = false; S.detail = null; S.mention = new Set();
+  openModal(`
+    ${modalHeader('Chi tiết công việc', `Tạo bởi ${esc(user(t.createdBy || (t.assigneeIds[0] || '')).name)} · ${t.createdAt ? fmtDT(t.createdAt) : ''}${t.reportId ? ' · Từ báo cáo tuần' : ''}`)}
+    <div class="p-6 grid md:grid-cols-5 gap-6">
+      <div class="md:col-span-3 space-y-5 min-w-0">
+        <div id="tk-head"></div>
+        <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
+        <div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm</label><label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Thêm tệp<input type="file" multiple class="hidden" id="tk-file" onchange="event.stopPropagation();W.pickFiles(this)" accept=".${OK_EXT.join(',.')}"></label></div><div id="tk-att" class="space-y-1.5"><div class="text-[12.5px] text-gray-400">Đang tải...</div></div></div>
+        <div><label class="label">Bình luận</label><div id="tk-cm" class="space-y-3"></div>
+          <div class="mt-3 relative">
+            <textarea id="tk-cmt" class="input" style="min-height:70px" placeholder="Viết bình luận... gõ @ để nhắc tên đồng nghiệp" oninput="event.stopPropagation();W.cmInput(this)" onkeydown="W.cmKey(event)"></textarea>
+            <div id="tk-mention" class="hidden absolute left-2 right-2 z-10 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto" style="bottom:100%"></div>
+            <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400">Ctrl + Enter để gửi</span><button class="btn btn-primary btn-sm" id="tk-cm-send" onclick="W.postComment()">${I.chat} Gửi</button></div>
+          </div></div>
+      </div>
+      <div class="md:col-span-2 space-y-4 min-w-0" id="tk-side"></div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex items-center justify-between gap-2">
+      <div>${canDelete(t) ? `<button class="btn btn-danger" onclick="W.deleteTask('${t.id}', true)">${I.trash} Xoá</button>` : ''}</div>
+      <div class="flex gap-2">${canEditContent(t) ? `<button class="btn btn-ghost" onclick="W.gotoCreated()">${I.edit} Sửa tên / mô tả (Việc tôi tạo)</button>` : ''}<button class="btn btn-ghost" onclick="A.cancelModal()">Đóng</button></div>
+    </div>`, 'max-w-4xl');
+  paintHead(); paintSubsView(); paintSide();
+  loadDetail(t.id);
+}
+function paintHead(){
+  const el = $('tk-head'), t = curTask() || S.draft; if(!el || !t) return;
+  const why = t.seriesId ? 'Việc sinh từ lịch lặp lại — muốn đổi tên/mô tả hãy sửa ở mục Việc lặp lại.'
+    : t.createdBy ? `Chỉ ${esc(user(t.createdBy).name)} (người tạo) sửa được tên và mô tả, ở mục Việc tôi tạo.` : 'Tên và mô tả của việc đã tạo không sửa được.';
+  el.innerHTML = `
+    <div class="text-[17px] font-semibold text-slate-900 leading-snug break-words ${t.status === 'done' ? 'line-through text-gray-500' : ''}">${esc(t.title)}</div>
+    <div class="mt-2 text-[14px] text-slate-700 whitespace-pre-wrap break-words">${t.description ? esc(t.description) : '<span class="text-gray-400">Chưa có mô tả.</span>'}</div>
+    <div class="mt-3 text-[12px] text-gray-400 flex items-start gap-1.5"><span class="mt-0.5 shrink-0">${WI.lock}</span><span>${why}</span></div>`;
+}
+function paintSubsView(){
+  const el = $('tk-subs'), t = curTask() || S.draft; if(!el || !t) return;
+  const subs = t.subtasks || [], ed = canEdit(t), dn = subs.filter(s => s.done).length;
+  const cnt = $('tk-subcount'); if(cnt) cnt.textContent = subs.length ? `(${dn}/${subs.length})` : '';
+  el.innerHTML = subs.length ? `<div class="mb-2">${progressBar(Math.round(dn / subs.length * 100), 'bg-green-500', 'h-1.5')}</div>
+    <div class="space-y-1.5">${subs.map(s => `<label class="flex items-center gap-2 text-[13.5px] ${ed ? 'cursor-pointer' : ''}"><input type="checkbox" class="checkbox shrink-0" ${s.done ? 'checked' : ''} ${ed ? '' : 'disabled'} onchange="event.stopPropagation();W.subTick('${esc(s.id)}',this.checked)"><span class="${s.done ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span></label>`).join('')}</div>`
+    : '<div class="text-[12.5px] text-gray-400">Không có việc con.</div>';
+}
+async function subTick(subId, done){
+  if(!S.draft) return;
+  await actQuiet('toggleSubtask', { id: S.draft.id, subId, done });
+  S.version = null; await load(true); modalDirty = false; paintSubsView();
+}
+function paintSide(){
+  const el = $('tk-side'), t = curTask(); if(!el || !t) return;
+  const p = projById(t.projectId), ed = canEdit(t);
+  el.innerHTML = `
+    <div><label class="label">Dự án</label><div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div></div>
+    <div class="grid grid-cols-2 gap-3">
+      <div><label class="label">Trạng thái</label>${ed ? `<select class="input" onchange="W.detailStatus(this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select>` : `<div class="py-1.5">${statusBadge(t.status)}</div>`}</div>
+      <div><label class="label">Ưu tiên</label><div class="py-1.5">${prioBadge(t.priority)}</div></div>
+    </div>
+    <div><label class="label">Hạn chót</label><div class="py-1.5 text-[14px]">${dueHtml(t)}</div></div>
+    <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
+    <div><label class="label">Nhãn</label><div class="flex flex-wrap gap-1.5">${t.tags.length ? tagChips(t.tags) : '<span class="text-[12.5px] text-gray-400">Không có</span>'}</div></div>
+    ${t.seriesId || t.recurrence ? `<div class="text-[12.5px] text-indigo-700 bg-indigo-50 rounded-lg px-2.5 py-2">${WI.repeat} Việc lặp lại${t.recurrence ? ': ' + esc(recText(t.recurrence)) : ''}. Lịch lặp được tạo và sửa ở mục <a class="underline cursor-pointer" onclick="W.gotoRec()">Việc lặp lại</a>.</div>` : ''}`;
+  paintAsgView();
+}
+async function detailStatus(v){ if(!S.draft) return; await move(S.draft.id, v, ''); modalDirty = false; paintHead(); paintSide(); }
+
+/* ----- Giao lại (người nhận / người tạo / cấp trên; giao cho bất kỳ ai) ----- */
+function paintAsgView(){
+  const el = $('tk-asg'), t = curTask(); if(!el || !t) return;
+  if(S.draft.reassign){ paintAssignees(); return; }
+  el.innerHTML = `<div class="flex flex-wrap gap-1.5">${t.assigneeIds.map(id => `<span class="inline-flex items-center gap-1.5 bg-base-50 text-base-700 rounded-full pl-1 pr-2.5 py-0.5 text-[12.5px]">${avatar(user(id), 'w-5 h-5 text-[9px]')}${esc(user(id).name)}</span>`).join('') || '<span class="text-[12.5px] text-gray-400">Chưa giao cho ai</span>'}</div>
+    ${canEdit(t) ? `<button class="btn btn-ghost btn-sm mt-2" onclick="W.reassignStart()">${I.edit} Giao lại cho người khác</button>` : ''}`;
+}
+function reassignStart(){ const t = curTask(); if(!t || !canEdit(t)) return; S.draft.reassign = true; S.draft.assigneeIds = [...t.assigneeIds]; paintAsgView(); }
+function reassignCancel(){ if(!S.draft) return; S.draft.reassign = false; modalDirty = false; paintAsgView(); }
+async function reassignSave(){
+  const t = curTask(); if(!t || !S.draft) return;
+  const ids = S.draft.assigneeIds; if(!ids.length){ toast('Cần ít nhất 1 người thực hiện.', 'error'); return; }
+  const j = await act('reassignTask', { id: t.id, assigneeIds: ids }, 'Đã giao lại công việc.');
+  if(!S.draft) return;
+  S.draft.reassign = false; modalDirty = false;
+  if(!j){ paintAsgView(); return; }
+  const now = curTask();
+  if(!now){ A.closeModal(); S.draft = null; toast('Công việc đã chuyển cho người khác nên bạn không còn thấy nó.', 'info'); return; }
+  S.draft.assigneeIds = [...now.assigneeIds]; paintSide(); loadDetail(now.id);
+}
+function gotoCreated(){ A.closeModal(); S.draft = null; setMode('created'); }
+function gotoRec(){ A.closeModal(); S.draft = null; setMode('rec'); }
 
 /* ----- Việc con ----- */
 function paintSubs(){
@@ -563,14 +656,14 @@ function subDel(i){ S.draft.subtasks.splice(i, 1); modalDirty = true; paintSubs(
 function paintAssignees(){
   const el = $('tk-asg'); if(!el) return;
   const p = projById(S.draft.projectId), r = ro(), sel = new Set(S.draft.assigneeIds);
-  const opts = assignable(p); opts.forEach(u => {});
+  const opts = assignable();
   const extra = S.draft.assigneeIds.filter(id => !opts.some(u => u.id === id)).map(user);          // đã được giao nhưng ngoài phạm vi chọn của bạn
   const list = [...opts, ...extra].sort((a, b) => (sel.has(b.id) - sel.has(a.id)) || a.name.localeCompare(b.name, 'vi'));
   el.innerHTML = `
     <div class="flex flex-wrap gap-1.5 mb-2">${S.draft.assigneeIds.map(id => `<span class="inline-flex items-center gap-1.5 bg-base-50 text-base-700 rounded-full pl-1 pr-2 py-0.5 text-[12.5px]">${avatar(user(id), 'w-5 h-5 text-[9px]')}${esc(user(id).name)}${r ? '' : `<button class="text-base-700/60 hover:text-red-600" onclick="W.asgToggle('${id}')">${I.x}</button>`}</span>`).join('') || '<span class="text-[12.5px] text-gray-400">Chưa giao cho ai</span>'}</div>
     ${r ? '' : `${list.length > 6 ? `<input class="input !py-1.5 text-[13px] mb-1.5" placeholder="Tìm người..." oninput="W.filterAsg(this.value)">` : ''}
     <div class="border border-gray-200 rounded-lg max-h-40 overflow-y-auto divide-y divide-gray-100" id="tk-asg-list">${list.map(u => `<label class="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-gray-50 text-[13px]" data-n="${esc(u.name.toLowerCase())}"><input type="checkbox" class="checkbox" ${sel.has(u.id) ? 'checked' : ''} onchange="event.stopPropagation();W.asgToggle('${u.id}')">${avatar(u, 'w-5 h-5 text-[9px]')}<span class="truncate flex-1">${esc(u.name)}${u.id === meId() ? ' (tôi)' : ''}</span><span class="text-[11px] text-gray-400">${ROLES[u.role].t}</span></label>`).join('')}</div>
-    ${isMgr() ? '' : '<div class="text-[11.5px] text-gray-400 mt-1">Nhân viên chỉ giao việc cho chính mình.</div>'}`}`;
+    ${S.draft.reassign ? `<div class="flex gap-2 mt-2"><button class="btn btn-primary btn-sm" onclick="W.reassignSave()">${I.check} Lưu giao lại</button><button class="btn btn-ghost btn-sm" onclick="W.reassignCancel()">Huỷ</button></div><div class="text-[11.5px] text-gray-400 mt-1">Giao cho bất kỳ ai. Việc giao lại được ghi vào bình luận.</div>` : '<div class="text-[11.5px] text-gray-400 mt-1">Giao được cho bất kỳ ai trong công ty.</div>'}`}`;
 }
 function asgToggle(id){
   const a = S.draft.assigneeIds, i = a.indexOf(id);
@@ -597,7 +690,7 @@ function paintRecurrence(){
   const nx = rule ? nextDueOf(rule, S.draft.due || today()) : null;
   el.innerHTML = `
     <select class="input" ${r ? 'disabled' : ''} onchange="W.recType(this.value)">
-      <option value="" ${!type ? 'selected' : ''}>Không lặp lại</option><option value="daily" ${type === 'daily' ? 'selected' : ''}>Theo ngày</option><option value="weekly" ${type === 'weekly' ? 'selected' : ''}>Theo tuần</option><option value="monthly" ${type === 'monthly' ? 'selected' : ''}>Theo tháng</option>
+      ${S.draft.kind === 'recurring' ? '' : `<option value="" ${!type ? 'selected' : ''}>Không lặp lại</option>`}<option value="daily" ${type === 'daily' ? 'selected' : ''}>Theo ngày</option><option value="weekly" ${type === 'weekly' ? 'selected' : ''}>Theo tuần</option><option value="monthly" ${type === 'monthly' ? 'selected' : ''}>Theo tháng</option>
     </select>
     ${type === 'daily' ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Cứ mỗi <input type="number" min="1" max="365" class="input !w-20 !py-1" value="${rule.interval || 1}" ${r ? 'disabled' : ''} onchange="W.recSet('interval',Math.max(1,Math.min(365,Number(this.value)||1)))"> ngày</div>` : ''}
     ${type === 'weekly' ? `<div class="flex gap-1 mt-2">${[1, 2, 3, 4, 5, 6, 7].map(n => `<button type="button" ${r ? 'disabled' : ''} class="w-9 h-8 rounded-md text-[12.5px] font-medium border ${rule.weekdays.includes(n) ? 'bg-base-500 text-white border-base-500' : 'bg-white text-slate-600 border-gray-300 hover:bg-gray-50'}" onclick="W.recWd(${n})">${WD[n]}</button>`).join('')}</div>` : ''}
@@ -610,7 +703,7 @@ function recType(v){
   else if(v === 'daily') S.draft.recurrence = { type: 'daily', interval: 1, end: '' };
   else if(v === 'weekly'){ const wd = S.draft.due ? (pIso(S.draft.due).getUTCDay() || 7) : (new Date().getDay() || 7); S.draft.recurrence = { type: 'weekly', weekdays: [wd], end: '' }; }
   else S.draft.recurrence = { type: 'monthly', monthDay: S.draft.due ? Number(S.draft.due.slice(8, 10)) : new Date().getDate(), end: '' };
-  if(v && !S.draft.due){ S.draft.due = today(); const di = document.querySelector('#modal input[type=date]'); if(di) di.value = S.draft.due; }
+  if(v && !S.draft.due){ S.draft.due = today(); if(S.draft.isNew){ const di = document.querySelector('#modal input[type=date]'); if(di) di.value = S.draft.due; } }
   modalDirty = true; paintRecurrence();
 }
 function recSet(k, v){ S.draft.recurrence[k] = v; modalDirty = true; paintRecurrence(); }
@@ -622,14 +715,14 @@ function recWd(n){
 
 /* ----- Lưu / xoá ----- */
 async function saveTask(){
-  const t = S.draft; if(!t || t.readOnly) return;
+  const t = S.draft; if(!t || t.readOnly || t.kind !== 'task') return;
   const title = t.title.trim(); if(!title){ toast('Nhập tên công việc.', 'error'); const el = $('tk-title'); if(el) el.focus(); return; }
-  if(t.recurrence && t.recurrence.end && t.due && t.recurrence.end < t.due){ toast('Ngày kết thúc lặp lại phải sau hạn chót.', 'error'); return; }
   const btn = $('tk-save'); if(btn){ btn.disabled = true; btn.textContent = 'Đang lưu...'; }
-  const payload = { id: t.id, projectId: t.projectId, title, description: t.description, status: t.status, priority: t.priority, assigneeIds: t.assigneeIds, due: t.due,
-    tags: t.tags, subtasks: t.subtasks.filter(s => s.text.trim()), recurrence: t.recurrence, okrId: t.okrId || null };
+  const payload = { id: t.id, projectId: t.projectId, title, description: t.description, priority: t.priority, assigneeIds: t.assigneeIds, due: t.due,
+    tags: t.tags, subtasks: t.subtasks.filter(s => s.text.trim()), okrId: t.okrId || null };
+  if(t.isNew) payload.status = t.status;
   const j = await act('saveTask', { task: payload });
-  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã thêm công việc.' : 'Đã lưu công việc.'); spawnNotice(j); }
+  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã thêm công việc.' : 'Đã lưu nội dung công việc.'); spawnNotice(j); }
   else if(btn){ btn.disabled = false; btn.innerHTML = I.check + ' ' + (t.isNew ? 'Thêm công việc' : 'Lưu thay đổi'); }
 }
 async function deleteTask(id, fromModal){
@@ -743,6 +836,136 @@ async function delComment(id){
   if(!confirm('Xoá bình luận này?')) return;
   const j = await actQuiet('deleteTaskComment', { id }); if(!j) return;
   if(S.draft) await loadDetail(S.draft.id); load(true);
+}
+
+/* ============================================================
+   VIỆC TÔI TẠO — nơi người tạo sửa tên, mô tả và nội dung
+   ============================================================ */
+function createdView(){
+  const q = S.f.q.trim().toLowerCase(), tab = S.createdTab;
+  const all = scopeTasks().filter(t => t.createdBy === meId() && !t.seriesId);
+  const cnt = k => all.filter(t => k === 'all' ? true : k === 'open' ? isOpen(t) : !isOpen(t)).length;
+  const ts = all.filter(t => (tab === 'all' || (tab === 'open' ? isOpen(t) : !isOpen(t))) && (!q || t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q))))
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const tabBtn = (k, label) => `<span class="chip ${tab === k ? 'active' : ''}" onclick="W.setCreatedTab('${k}')">${label} <span class="opacity-70">${cnt(k)}</span></span>`;
+  const multi = S.project === 'all';
+  return `
+  <div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
+    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa công việc.</b> Chỉ bạn — người tạo — sửa được <b>tên, mô tả</b>, ưu tiên, hạn, nhãn và việc con của các việc dưới đây. Trên bảng Kanban / Danh sách các trường này đã bị khoá; ở đó chỉ đổi trạng thái, giao lại, bình luận và đính kèm tệp.</div>
+    <button class="btn btn-primary" onclick="W.openTaskForm('')">${I.plus} Thêm công việc</button>
+  </div>
+  <div class="flex items-center gap-2 mb-3 flex-wrap">${tabBtn('open', 'Đang mở')}${tabBtn('done', 'Đã hoàn thành')}${tabBtn('all', 'Tất cả')}</div>
+  <div class="card overflow-x-auto">
+    <table class="w-full">
+      <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide"><tr>
+        <th class="text-left font-medium py-2.5 px-3">Công việc</th>${multi ? '<th class="text-left font-medium py-2.5 px-2">Dự án</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Người thực hiện</th><th class="text-left font-medium py-2.5 px-2">Ưu tiên</th><th class="text-left font-medium py-2.5 px-2">Hạn</th><th class="text-left font-medium py-2.5 px-2">Trạng thái</th><th class="w-44"></th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        ${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId); return `
+        <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
+          <td class="py-3 px-3 max-w-md"><div class="font-medium text-slate-900 ${t.status === 'done' ? 'line-through text-gray-400' : ''}">${esc(t.title)}</div>
+            ${t.description ? `<div class="text-[12.5px] text-gray-500 mt-0.5 truncate">${esc(t.description.replace(/\s+/g, ' ').slice(0, 140))}</div>` : ''}</td>
+          ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
+          <td class="py-3 px-2">${stack(t.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(t.priority)}</td><td class="py-3 px-2 text-[12.5px]">${dueHtml(t)}</td><td class="py-3 px-2">${statusBadge(t.status)}</td>
+          <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()"><button class="btn btn-ghost btn-sm" onclick="W.openTaskForm('${t.id}')">${I.edit} Sửa nội dung</button>${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
+        </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${all.length ? 'Không có việc nào trong mục này.' : 'Bạn chưa tạo công việc nào ở đây. Bấm "Thêm công việc" để giao việc cho mọi người.'}</td></tr>`}
+      </tbody>
+    </table>
+  </div>`;
+}
+function setCreatedTab(k){ S.createdTab = k; repaint(); }
+
+/* ============================================================
+   VIỆC LẶP LẠI — MỘT nơi duy nhất để tạo / sửa lịch lặp
+   ============================================================ */
+function recView(){
+  const q = S.f.q.trim().toLowerCase();
+  const rs = (S.data.recurring || []).filter(r => (S.project === 'all' ? !(projById(r.projectId) || {}).archived : r.projectId === S.project)
+    && (!q || r.title.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q) || r.tags.some(g => g.toLowerCase().includes(q))))
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const multi = S.project === 'all';
+  return `
+  <div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
+    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa việc lặp lại.</b> Ai cũng tạo được và giao cho bất kỳ ai. Khi một việc được đánh dấu <b>Hoàn thành</b>, hệ thống tự tạo việc kế tiếp theo lịch. Sửa lịch hay nội dung ở đây chỉ áp dụng cho các việc sinh <b>sau</b> — việc đã sinh ra giữ nguyên và bị khoá tên, mô tả như mọi việc khác. Người sửa/xoá: người tạo và cấp trên của họ.</div>
+    <button class="btn btn-primary" onclick="W.openRecurring('')">${I.plus} Thêm việc lặp lại</button>
+  </div>
+  <div class="card overflow-x-auto">
+    <table class="w-full">
+      <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide"><tr>
+        <th class="text-left font-medium py-2.5 px-3">Việc lặp lại</th>${multi ? '<th class="text-left font-medium py-2.5 px-2">Dự án</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Người thực hiện</th><th class="text-left font-medium py-2.5 px-2">Ưu tiên</th><th class="text-left font-medium py-2.5 px-2">Lịch lặp</th><th class="text-left font-medium py-2.5 px-2">Việc đang mở</th><th class="w-36"></th>
+      </tr></thead>
+      <tbody class="divide-y divide-gray-100">
+        ${rs.length ? rs.map(r => { const p = projById(r.projectId); return `
+        <tr class="hover:bg-gray-50 cursor-pointer" onclick="W.openRecurring('${r.id}')">
+          <td class="py-3 px-3 max-w-md"><div class="font-medium text-slate-900">${esc(r.title)}</div>
+            <div class="text-[12px] text-gray-400 mt-0.5">Tạo bởi ${esc(user(r.createdBy).name)}</div>${r.description ? `<div class="text-[12.5px] text-gray-500 mt-0.5 truncate">${esc(r.description.replace(/\s+/g, ' ').slice(0, 140))}</div>` : ''}</td>
+          ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
+          <td class="py-3 px-2">${stack(r.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(r.priority)}</td>
+          <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
+          <td class="py-3 px-2 text-[12.5px]">${r.openCount ? `<span class="text-slate-700">Hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</span>` : '<span class="text-amber-600">Chưa có (lịch đã kết thúc)</span>'}</td>
+          <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
+        </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.</td></tr>`}
+      </tbody>
+    </table>
+  </div>`;
+}
+function openRecurring(id){
+  const isNew = !id; let r;
+  if(isNew){
+    const ps = creatableProjects();
+    if(!ps.length){ toast(canCreateProject() ? 'Hãy tạo dự án trước khi thêm việc lặp lại.' : 'Bạn chưa tham gia dự án nào để thêm việc.', 'error'); return; }
+    const pid = S.project !== 'all' && ps.some(p => p.id === S.project) ? S.project : ps[0].id;
+    r = { id: newId('r'), projectId: pid, title: '', description: '', priority: 'medium', assigneeIds: [meId()], due: today(), tags: [], subtasks: [], recurrence: { type: 'weekly', weekdays: [new Date().getDay() || 7], end: '' }, createdBy: meId(), canEdit: true };
+  } else {
+    const x = (S.data.recurring || []).find(y => y.id === id); if(!x) return;
+    r = { id: x.id, projectId: x.projectId, title: x.title, description: x.description || '', priority: x.priority, assigneeIds: [...x.assigneeIds], due: x.nextDue || today(), tags: [...x.tags],
+      subtasks: JSON.parse(JSON.stringify(x.subtasks || [])), recurrence: JSON.parse(JSON.stringify(x.rule)), createdBy: x.createdBy, canEdit: x.canEdit, openDue: x.nextDue };
+  }
+  S.draft = r; S.draft.isNew = isNew; S.draft.kind = 'recurring'; S.draft.readOnly = !isNew && !r.canEdit; S.detail = null; S.mention = new Set();
+  const p = projById(r.projectId), v = ro();
+  openModal(`
+    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; mỗi lần có người bấm Hoàn thành, hệ thống tự tạo việc kế tiếp theo lịch.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
+    <div class="p-6 grid md:grid-cols-5 gap-6">
+      <div class="md:col-span-3 space-y-5 min-w-0">
+        <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(r.title)}" maxlength="300" placeholder="VD: Báo cáo doanh số cuối ngày" ${v ? 'disabled' : ''} oninput="W.d('title',this.value)"></div>
+        <div><label class="label">Mô tả</label><textarea id="tk-desc" class="input" style="min-height:110px" placeholder="Mô tả chi tiết, yêu cầu, liên kết..." ${v ? 'disabled' : ''} oninput="W.d('description',this.value)">${esc(r.description)}</textarea></div>
+        <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
+      </div>
+      <div class="md:col-span-2 space-y-4 min-w-0">
+        <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === r.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
+        <div><label class="label">Ưu tiên</label><select class="input" ${v ? 'disabled' : ''} onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, x]) => `<option value="${k}" ${r.priority === k ? 'selected' : ''}>${x.t}</option>`).join('')}</select></div>
+        ${isNew ? `<div><label class="label">Hạn chót của việc đầu tiên</label><input type="date" class="input" value="${esc(r.due)}" onchange="W.d('due',this.value);W.paintRecurrence()"></div>`
+          : `<div class="text-[12.5px] text-gray-500">${r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : 'Hiện chưa có việc nào đang mở.'}</div>`}
+        <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
+        <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
+        <div><label class="label">Lịch lặp lại</label><div id="tk-rec"></div></div>
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-200 flex items-center justify-between gap-2">
+      <div>${!isNew && r.canEdit ? `<button class="btn btn-danger" onclick="W.deleteRecurring('${r.id}', true)">${I.trash} Xoá</button>` : ''}</div>
+      <div class="flex gap-2"><button class="btn btn-ghost" onclick="A.cancelModal()">${v ? 'Đóng' : 'Huỷ'}</button>${v ? '' : `<button class="btn btn-primary" id="tk-save" onclick="W.saveRecurring()">${I.check} ${isNew ? 'Tạo việc lặp lại' : 'Lưu thay đổi'}</button>`}</div>
+    </div>`, 'max-w-4xl');
+  paintSubs(); paintAssignees(); paintTags(); paintRecurrence();
+  setTimeout(() => { const el = $('tk-title'); if(el && isNew) el.focus(); }, 50);
+}
+async function saveRecurring(){
+  const t = S.draft; if(!t || t.readOnly || t.kind !== 'recurring') return;
+  const title = t.title.trim(); if(!title){ toast('Nhập tên công việc.', 'error'); const el = $('tk-title'); if(el) el.focus(); return; }
+  if(!t.recurrence){ toast('Chọn lịch lặp lại.', 'error'); return; }
+  if(t.isNew && t.recurrence.end && t.due && t.recurrence.end < t.due){ toast('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.', 'error'); return; }
+  const btn = $('tk-save'); if(btn){ btn.disabled = true; btn.textContent = 'Đang lưu...'; }
+  const payload = { id: t.id, projectId: t.projectId, title, description: t.description, priority: t.priority, assigneeIds: t.assigneeIds, tags: t.tags,
+    subtasks: t.subtasks.filter(s => s.text.trim()), rule: t.recurrence };
+  if(t.isNew) payload.firstDue = t.due;
+  const j = await act('saveRecurring', { recurring: payload });
+  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã tạo việc lặp lại và việc đầu tiên.' : 'Đã lưu. Các việc đã sinh ra được giữ nguyên.'); }
+  else if(btn){ btn.disabled = false; btn.innerHTML = I.check + ' ' + (t.isNew ? 'Tạo việc lặp lại' : 'Lưu thay đổi'); }
+}
+async function deleteRecurring(id, fromModal){
+  const r = (S.data.recurring || []).find(x => x.id === id); if(!r) return;
+  if(!confirm('Xoá việc lặp lại "' + r.title + '"? Các việc đã sinh ra vẫn giữ nguyên nhưng hệ thống sẽ không tạo thêm việc kế tiếp.')) return;
+  if(fromModal) A.closeModal();
+  await act('deleteRecurring', { id }, 'Đã xoá việc lặp lại.');
 }
 
 /* ============================================================
@@ -882,7 +1105,8 @@ function retry(){ S.error = null; S.data = null; repaint(); }
 window.W = {
   view, load, reload, reset, setWs, setMode, setProject, setF, setQ, toggleMine, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
-  openTask, d, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
+  openTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setCreatedTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
+  d, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
   pickFiles, delAttachment, cmInput, cmPick, cmKey, postComment, delComment,
   openWorkspace, saveWorkspace, deleteWorkspace, openDepartments, saveDept, delDept, openProject, saveProject, deleteProject, filterPick,
   _test: { nextDueOf, recText, S },
