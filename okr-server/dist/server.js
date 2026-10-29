@@ -5315,6 +5315,697 @@ var require_lib2 = __commonJS({
   }
 });
 
+// src/work.js
+var require_work = __commonJS({
+  "src/work.js"(exports2, module2) {
+    "use strict";
+    var crypto2 = require("crypto");
+    var fs2 = require("fs");
+    var path = require("path");
+    var { pipeline } = require("stream/promises");
+    var { Transform } = require("stream");
+    var STATUSES = ["todo", "doing", "review", "done"];
+    var PRIORITIES = ["low", "medium", "high", "urgent"];
+    var DEFAULT_WS = "w_default";
+    var DEFAULT_DEPT = "d_default";
+    var DEFAULT_PROJECT = "p_general";
+    var UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads";
+    var MAX_FILE = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
+    var MAX_FILES_PER_TASK = 30;
+    var MIME = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      gif: "image/gif",
+      webp: "image/webp",
+      bmp: "image/bmp",
+      heic: "image/heic",
+      pdf: "application/pdf",
+      doc: "application/msword",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xls: "application/vnd.ms-excel",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ppt: "application/vnd.ms-powerpoint",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      txt: "text/plain; charset=utf-8",
+      csv: "text/csv; charset=utf-8",
+      rtf: "application/rtf",
+      odt: "application/vnd.oasis.opendocument.text",
+      ods: "application/vnd.oasis.opendocument.spreadsheet",
+      zip: "application/zip"
+    };
+    var INLINE_EXT = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "pdf"]);
+    var pad = (n) => String(n).padStart(2, "0");
+    var isoOf = (d) => d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
+    var parseISO = (s) => {
+      const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+      return new Date(Date.UTC(y, m - 1, d));
+    };
+    var validISO = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) && isoOf(parseISO(s)) === s;
+    var addDays = (d, n) => new Date(d.getTime() + n * 864e5);
+    var daysInMonth = (y, m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    var isoWeekday = (d) => d.getUTCDay() || 7;
+    function cleanRule(r) {
+      if (!r || typeof r !== "object" || !["daily", "weekly", "monthly"].includes(r.type)) return null;
+      const out = { type: r.type };
+      if (r.type === "daily") out.interval = Math.min(365, Math.max(1, Math.floor(Number(r.interval)) || 1));
+      if (r.type === "weekly") {
+        out.weekdays = [...new Set((Array.isArray(r.weekdays) ? r.weekdays : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7))].sort((a, b) => a - b);
+        if (!out.weekdays.length) return null;
+      }
+      if (r.type === "monthly") {
+        out.monthDay = Math.floor(Number(r.monthDay));
+        if (!(out.monthDay >= 1 && out.monthDay <= 31)) return null;
+      }
+      out.end = validISO(r.end) ? r.end : "";
+      return out;
+    }
+    function nextAfter(rule, d) {
+      if (rule.type === "daily") return addDays(d, rule.interval || 1);
+      if (rule.type === "weekly") {
+        for (let i = 1; i <= 7; i++) {
+          const n = addDays(d, i);
+          if (rule.weekdays.includes(isoWeekday(n))) return n;
+        }
+      }
+      if (rule.type === "monthly") {
+        let y = d.getUTCFullYear(), m = d.getUTCMonth();
+        for (let i = 0; i < 25; i++) {
+          const cand = new Date(Date.UTC(y, m, Math.min(rule.monthDay, daysInMonth(y, m))));
+          if (cand > d) return cand;
+          if (++m > 11) {
+            m = 0;
+            y++;
+          }
+        }
+      }
+      throw new Error("C\u1EA5u h\xECnh l\u1EB7p l\u1EA1i kh\xF4ng h\u1EE3p l\u1EC7");
+    }
+    function nextDue(rule, baseDue, today) {
+      let n = nextAfter(rule, validISO(baseDue) ? parseISO(baseDue) : parseISO(today));
+      for (let guard = 0; isoOf(n) < today && guard < 2e3; guard++) n = nextAfter(rule, n);
+      const out = isoOf(n);
+      return rule.end && out > rule.end ? null : out;
+    }
+    module2.exports = function makeWork(D) {
+      const { pool: pool2, AppError: AppError2, deny: deny2, str: str2, num: num2, one: one2, canManage: canManage2, todayISO: todayISO2, ctxFor: ctxFor2 } = D;
+      const newId = (p) => p + crypto2.randomBytes(6).toString("hex");
+      const uniq = (a) => [...new Set(a)];
+      const idList = (v) => uniq((Array.isArray(v) ? v : []).map(str2).filter(Boolean));
+      const safeId = (s) => /^[A-Za-z0-9_-]{1,64}$/.test(String(s));
+      const SCHEMA2 = `
+CREATE TABLE IF NOT EXISTS workspaces (id text PRIMARY KEY, name text NOT NULL, description text NOT NULL DEFAULT '', color text NOT NULL DEFAULT '#2f6fed',
+  open boolean NOT NULL DEFAULT false, archived boolean NOT NULL DEFAULT false, created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE TABLE IF NOT EXISTS workspace_members (workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (workspace_id, user_id));
+CREATE TABLE IF NOT EXISTS departments (id text PRIMARY KEY, workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name text NOT NULL,
+  head_id text NOT NULL DEFAULT '', seq bigserial);
+CREATE TABLE IF NOT EXISTS projects (id text PRIMARY KEY, workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, department_id text NOT NULL DEFAULT '',
+  name text NOT NULL, description text NOT NULL DEFAULT '', color text NOT NULL DEFAULT '#2f6fed', manager_id text NOT NULL DEFAULT '',
+  open boolean NOT NULL DEFAULT false, share_all boolean NOT NULL DEFAULT false, archived boolean NOT NULL DEFAULT false,
+  created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE TABLE IF NOT EXISTS project_members (project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (project_id, user_id));
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT '${DEFAULT_PROJECT}';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority text NOT NULL DEFAULT 'medium';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS subtasks jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence jsonb;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position double precision NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS spawned_id text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS series_id text NOT NULL DEFAULT '';
+ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS mentions jsonb NOT NULL DEFAULT '[]';
+CREATE TABLE IF NOT EXISTS task_assignees (task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (task_id, user_id));
+CREATE TABLE IF NOT EXISTS task_attachments (id text PRIMARY KEY, task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, name text NOT NULL,
+  mime text NOT NULL DEFAULT '', size bigint NOT NULL DEFAULT 0, uploaded_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS tasks_project ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS task_assignees_user ON task_assignees(user_id);
+CREATE INDEX IF NOT EXISTS task_attachments_task ON task_attachments(task_id);
+CREATE INDEX IF NOT EXISTS projects_ws ON projects(workspace_id);
+`;
+      async function migrate2() {
+        await pool2.query(SCHEMA2);
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        await pool2.query(`INSERT INTO workspaces(id,name,description,open,created_at) VALUES($1,'C\xF4ng ty','Kh\xF4ng gian chung c\u1EE7a c\u1EA3 c\xF4ng ty',true,$2) ON CONFLICT DO NOTHING`, [DEFAULT_WS, now]);
+        await pool2.query(`INSERT INTO departments(id,workspace_id,name) VALUES($1,$2,'Chung') ON CONFLICT DO NOTHING`, [DEFAULT_DEPT, DEFAULT_WS]);
+        await pool2.query(
+          `INSERT INTO projects(id,workspace_id,department_id,name,description,open,created_at) VALUES($1,$2,$3,'C\xF4ng vi\u1EC7c chung','C\xF4ng vi\u1EC7c h\u1EB1ng ng\xE0y v\xE0 vi\u1EC7c sinh ra t\u1EEB b\xE1o c\xE1o tu\u1EA7n',true,$4) ON CONFLICT DO NOTHING`,
+          [DEFAULT_PROJECT, DEFAULT_WS, DEFAULT_DEPT, now]
+        );
+        await pool2.query(`INSERT INTO task_assignees(task_id,user_id) SELECT t.id, t.assignee_id FROM tasks t
+      WHERE t.assignee_id <> '' AND NOT EXISTS (SELECT 1 FROM task_assignees a WHERE a.task_id = t.id) ON CONFLICT DO NOTHING`);
+        try {
+          fs2.mkdirSync(UPLOAD_DIR, { recursive: true });
+        } catch (e) {
+          console.error("Kh\xF4ng t\u1EA1o \u0111\u01B0\u1EE3c th\u01B0 m\u1EE5c t\u1EC7p \u0111\xEDnh k\xE8m " + UPLOAD_DIR + ": " + e.message);
+        }
+      }
+      function projectAccess(c, p, members, deptHeadId) {
+        const me = c.me;
+        if (me.role === "director") return "admin";
+        if (p.manager_id === me.id || deptHeadId && deptHeadId === me.id) return "pm";
+        if (p.open || members.has(me.id)) return "member";
+        for (const uid of members) if (canManage2(c, uid)) return "member";
+        return null;
+      }
+      const seesAll = (access, p) => access === "admin" || access === "pm" || !!(p && p.share_all);
+      function taskVisible(c, access, p, t, assignees) {
+        if (!access) return false;
+        if (seesAll(access, p)) return true;
+        return t.created_by === c.me.id || assignees.includes(c.me.id) || assignees.some((a) => canManage2(c, a));
+      }
+      function canEditTask(c, access, t, assignees) {
+        if (!access) return false;
+        if (access === "admin" || access === "pm") return true;
+        return t.created_by === c.me.id || assignees.includes(c.me.id) || assignees.some((a) => canManage2(c, a));
+      }
+      function canDeleteTask(c, access, t, assignees) {
+        if (access === "admin" || access === "pm") return true;
+        if (t.created_by === c.me.id) return true;
+        return !!access && assignees.length > 0 && assignees.every((a) => a === c.me.id || canManage2(c, a));
+      }
+      function canAssign(c, access, uid) {
+        const u = c.byId[uid];
+        if (!u || !u.active) return false;
+        return uid === c.me.id || access === "admin" || access === "pm" || canManage2(c, uid);
+      }
+      async function projectCtx(c, projectId) {
+        const p = await one2(c.q, "SELECT * FROM projects WHERE id=$1", [projectId]);
+        if (!p) return null;
+        const members = new Set((await c.q.query("SELECT user_id FROM project_members WHERE project_id=$1", [projectId])).rows.map((r) => r.user_id));
+        const dept = p.department_id ? await one2(c.q, "SELECT head_id FROM departments WHERE id=$1", [p.department_id]) : null;
+        return { p, members, access: projectAccess(c, p, members, dept && dept.head_id) };
+      }
+      async function taskCtx(c, taskId) {
+        const t = await one2(c.q, "SELECT * FROM tasks WHERE id=$1", [taskId]);
+        if (!t) return null;
+        const pc = await projectCtx(c, t.project_id);
+        const assignees = await taskAssignees(c.q, t);
+        return { t, assignees, p: pc ? pc.p : null, members: pc ? pc.members : /* @__PURE__ */ new Set(), access: pc ? pc.access : c.me.role === "director" ? "admin" : null };
+      }
+      async function taskAssignees(q, t) {
+        const ids = (await q.query("SELECT user_id FROM task_assignees WHERE task_id=$1", [t.id])).rows.map((r) => r.user_id);
+        if (t.assignee_id && !ids.includes(t.assignee_id)) ids.push(t.assignee_id);
+        return [...ids.filter((x) => x === t.assignee_id), ...ids.filter((x) => x !== t.assignee_id).sort()];
+      }
+      async function ensureMember(q, projectId, wsId, userId) {
+        await q.query("INSERT INTO project_members(project_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [projectId, userId]);
+        await q.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [wsId, userId]);
+      }
+      const jsonTask = (t, assignees, cc, ac) => ({
+        id: t.id,
+        projectId: t.project_id,
+        title: t.title,
+        description: t.description,
+        status: t.status,
+        priority: t.priority,
+        assigneeIds: assignees,
+        due: t.due,
+        tags: t.tags || [],
+        subtasks: t.subtasks || [],
+        recurrence: t.recurrence || null,
+        createdBy: t.created_by,
+        createdAt: t.created_at,
+        completedAt: t.completed_at,
+        position: t.position,
+        reportId: t.report_id || null,
+        okrId: t.okr_id || null,
+        seriesId: t.series_id || "",
+        spawned: !!t.spawned_id,
+        commentCount: cc || 0,
+        attachCount: ac || 0
+      });
+      async function loadWork(viewer, wsId, users) {
+        const c = ctxFor2(viewer, users);
+        const [wsr, wmr, dpr, prr, pmr] = await Promise.all([
+          pool2.query("SELECT * FROM workspaces ORDER BY seq"),
+          pool2.query("SELECT * FROM workspace_members"),
+          pool2.query("SELECT * FROM departments ORDER BY seq"),
+          pool2.query("SELECT * FROM projects ORDER BY seq"),
+          pool2.query("SELECT * FROM project_members")
+        ]);
+        const group = (rows, key) => {
+          const m = /* @__PURE__ */ new Map();
+          rows.forEach((r) => {
+            if (!m.has(r[key])) m.set(r[key], /* @__PURE__ */ new Set());
+            m.get(r[key]).add(r.user_id);
+          });
+          return m;
+        };
+        const wsMem = group(wmr.rows, "workspace_id"), prMem = group(pmr.rows, "project_id");
+        const deptById = new Map(dpr.rows.map((d) => [d.id, d]));
+        const isDir = c.me.role === "director";
+        const access = /* @__PURE__ */ new Map();
+        prr.rows.forEach((p) => {
+          const a = projectAccess(c, p, prMem.get(p.id) || /* @__PURE__ */ new Set(), p.department_id && deptById.get(p.department_id) ? deptById.get(p.department_id).head_id : "");
+          if (a) access.set(p.id, a);
+        });
+        const myWs = wsr.rows.filter((w) => isDir || w.open || w.created_by === c.me.id || (wsMem.get(w.id) || /* @__PURE__ */ new Set()).has(c.me.id) || prr.rows.some((p) => p.workspace_id === w.id && access.has(p.id)) || dpr.rows.some((d) => d.workspace_id === w.id && d.head_id === c.me.id));
+        const current = myWs.find((w) => w.id === wsId) || myWs.find((w) => w.id === DEFAULT_WS) || myWs[0] || null;
+        const projects = current ? prr.rows.filter((p) => p.workspace_id === current.id && access.has(p.id)) : [];
+        const pids = projects.map((p) => p.id), pById = new Map(projects.map((p) => [p.id, p]));
+        let tasks = [];
+        if (pids.length) {
+          const [tr, ar] = await Promise.all([
+            pool2.query(`SELECT t.*, (SELECT count(*) FROM task_comments k WHERE k.task_id = t.id)::int AS cc, (SELECT count(*) FROM task_attachments a WHERE a.task_id = t.id)::int AS ac
+                    FROM tasks t WHERE t.project_id = ANY($1) ORDER BY t.position, t.seq`, [pids]),
+            pool2.query("SELECT a.task_id, a.user_id FROM task_assignees a JOIN tasks t ON t.id = a.task_id WHERE t.project_id = ANY($1)", [pids])
+          ]);
+          const asg = /* @__PURE__ */ new Map();
+          ar.rows.forEach((r) => {
+            if (!asg.has(r.task_id)) asg.set(r.task_id, []);
+            asg.get(r.task_id).push(r.user_id);
+          });
+          tasks = tr.rows.map((t) => {
+            const ids = asg.get(t.id) || [];
+            if (t.assignee_id && !ids.includes(t.assignee_id)) ids.push(t.assignee_id);
+            const ordered = [...ids.filter((x) => x === t.assignee_id), ...ids.filter((x) => x !== t.assignee_id).sort()];
+            const p = pById.get(t.project_id);
+            return taskVisible(c, access.get(t.project_id), p, t, ordered) ? jsonTask(t, ordered, t.cc, t.ac) : null;
+          }).filter(Boolean);
+        }
+        return {
+          workspaces: myWs.map((w) => ({
+            id: w.id,
+            name: w.name,
+            description: w.description,
+            color: w.color,
+            open: w.open,
+            archived: w.archived,
+            memberIds: isDir ? [...wsMem.get(w.id) || []] : void 0
+          })),
+          currentId: current ? current.id : null,
+          departments: current ? dpr.rows.filter((d) => d.workspace_id === current.id).map((d) => ({ id: d.id, name: d.name, headId: d.head_id })) : [],
+          projects: projects.map((p) => ({
+            id: p.id,
+            workspaceId: p.workspace_id,
+            departmentId: p.department_id,
+            name: p.name,
+            description: p.description,
+            color: p.color,
+            managerId: p.manager_id,
+            open: p.open,
+            shareAll: p.share_all,
+            archived: p.archived,
+            createdAt: p.created_at,
+            access: access.get(p.id),
+            memberIds: [...prMem.get(p.id) || []]
+          })),
+          tasks,
+          viewerId: c.me.id,
+          loadedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+      }
+      async function loadTaskDetail(c, taskId) {
+        const tc = await taskCtx(c, taskId);
+        if (!tc || !taskVisible(c, tc.access, tc.p, tc.t, tc.assignees)) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y c\xF4ng vi\u1EC7c ho\u1EB7c b\u1EA1n kh\xF4ng c\xF3 quy\u1EC1n xem.");
+        const [cm, at] = await Promise.all([
+          pool2.query("SELECT * FROM task_comments WHERE task_id=$1 ORDER BY seq", [taskId]),
+          pool2.query("SELECT * FROM task_attachments WHERE task_id=$1 ORDER BY seq", [taskId])
+        ]);
+        return {
+          comments: cm.rows.map((r) => ({ id: r.id, authorId: r.author_id, text: r.text, createdAt: r.created_at, mentions: r.mentions || [] })),
+          attachments: at.rows.map((a) => ({ id: a.id, name: a.name, mime: a.mime, size: Number(a.size), uploadedBy: a.uploaded_by, createdAt: a.created_at })),
+          canEdit: canEditTask(c, tc.access, tc.t, tc.assignees),
+          canDelete: canDeleteTask(c, tc.access, tc.t, tc.assignees)
+        };
+      }
+      const cleanTags = (v) => uniq((Array.isArray(v) ? v : []).map((x) => str2(x).trim().slice(0, 30)).filter(Boolean)).slice(0, 12);
+      const cleanSubtasks = (v) => (Array.isArray(v) ? v : []).slice(0, 100).map((s) => ({ id: safeId(s && s.id) ? String(s.id) : newId("s"), text: str2(s && s.text).trim().slice(0, 300), done: !!(s && s.done) })).filter((s) => s.text);
+      const normDue = (v) => {
+        const s = str2(v).slice(0, 10);
+        return validISO(s) ? s : "";
+      };
+      async function nextPosition(q, projectId, status) {
+        const r = await one2(q, "SELECT COALESCE(MAX(position), 0) + 1000 AS p FROM tasks WHERE project_id=$1 AND status=$2", [projectId, status]);
+        return Number(r.p);
+      }
+      async function renumberColumn(q, projectId, status, movingId, beforeId) {
+        const ids = (await q.query("SELECT id FROM tasks WHERE project_id=$1 AND status=$2 AND id <> $3 ORDER BY position, seq", [projectId, status, movingId])).rows.map((r) => r.id);
+        const at = beforeId ? ids.indexOf(beforeId) : -1;
+        if (at >= 0) ids.splice(at, 0, movingId);
+        else ids.push(movingId);
+        await q.query("UPDATE tasks t SET position = v.ord * 1000 FROM unnest($1::text[]) WITH ORDINALITY AS v(id, ord) WHERE t.id = v.id", [ids]);
+      }
+      async function applyStatus(c, t, status) {
+        if (t.status === status) return {};
+        const done = status === "done";
+        await c.q.query("UPDATE tasks SET status=$2, completed_at=$3 WHERE id=$1", [t.id, status, done ? (/* @__PURE__ */ new Date()).toISOString() : ""]);
+        if (!done || !t.recurrence || t.spawned_id) return {};
+        const rule = cleanRule(t.recurrence);
+        if (!rule) return {};
+        const due = nextDue(rule, t.due, todayISO2());
+        if (!due) return {};
+        const id = newId("t");
+        await c.q.query(
+          `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id)
+      VALUES($1,$2,$3,$4,0,0,$5,'todo',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [
+            id,
+            t.title,
+            t.assignee_id,
+            t.okr_id || null,
+            due,
+            (/* @__PURE__ */ new Date()).toISOString(),
+            t.project_id,
+            t.description,
+            t.priority,
+            JSON.stringify(t.tags || []),
+            JSON.stringify((t.subtasks || []).map((s) => ({ ...s, done: false }))),
+            JSON.stringify(rule),
+            t.created_by,
+            await nextPosition(c.q, t.project_id, "todo"),
+            t.series_id || t.id
+          ]
+        );
+        await c.q.query("INSERT INTO task_assignees(task_id,user_id) SELECT $1, user_id FROM task_assignees WHERE task_id=$2 ON CONFLICT DO NOTHING", [id, t.id]);
+        await c.q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [id, t.assignee_id]);
+        await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, id]);
+        return { spawned: { id, due, title: t.title } };
+      }
+      const taskDir = (taskId) => path.join(UPLOAD_DIR, taskId);
+      function removeTaskFiles(taskIds) {
+        for (const id of taskIds || []) {
+          if (!safeId(id)) continue;
+          try {
+            fs2.rmSync(taskDir(id), { recursive: true, force: true });
+          } catch (e) {
+            console.error("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c t\u1EC7p c\u1EE7a vi\u1EC7c " + id + ": " + e.message);
+          }
+        }
+      }
+      const cleanFileName = (s) => {
+        const n = path.basename(str2(s).replace(/\\/g, "/")).replace(/[\u0000-\u001f<>:"|?*]/g, "_").trim().slice(0, 150);
+        return n || "tep";
+      };
+      const extOf = (name) => (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
+      const actions = {
+        /* ----- Workspace / Phòng ban: chỉ Giám đốc (Admin/Owner) ----- */
+        async saveWorkspace(c, p) {
+          if (c.me.role !== "director") deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c t\u1EA1o/s\u1EEDa Workspace.");
+          const w = p.workspace || {};
+          if (!safeId(w.id) || !str2(w.name).trim()) throw new AppError2("Nh\u1EADp t\xEAn Workspace.");
+          const old = await one2(c.q, "SELECT * FROM workspaces WHERE id=$1", [w.id]);
+          if (old && old.id === DEFAULT_WS && w.archived) throw new AppError2("Kh\xF4ng l\u01B0u tr\u1EEF \u0111\u01B0\u1EE3c Workspace m\u1EB7c \u0111\u1ECBnh.");
+          const row = [w.id, str2(w.name).trim().slice(0, 80), str2(w.description).slice(0, 500), str2(w.color) || "#2f6fed", old && old.id === DEFAULT_WS ? true : !!w.open, !!w.archived];
+          if (old) await c.q.query("UPDATE workspaces SET name=$2, description=$3, color=$4, open=$5, archived=$6 WHERE id=$1", row);
+          else await c.q.query("INSERT INTO workspaces(id,name,description,color,open,archived,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [...row, c.me.id, (/* @__PURE__ */ new Date()).toISOString()]);
+          if (Array.isArray(w.memberIds)) {
+            const ids = idList(w.memberIds).filter((id) => c.byId[id]);
+            await c.q.query("DELETE FROM workspace_members WHERE workspace_id=$1", [w.id]);
+            for (const id of ids) await c.q.query("INSERT INTO workspace_members(workspace_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [w.id, id]);
+          }
+        },
+        async deleteWorkspace(c, p) {
+          if (c.me.role !== "director") deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 Workspace.");
+          if (p.id === DEFAULT_WS) throw new AppError2("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c Workspace m\u1EB7c \u0111\u1ECBnh.");
+          if (await one2(c.q, "SELECT 1 FROM projects WHERE workspace_id=$1 LIMIT 1", [p.id])) throw new AppError2('Workspace c\xF2n d\u1EF1 \xE1n. H\xE3y xo\xE1 ho\u1EB7c l\u01B0u tr\u1EEF c\xE1c d\u1EF1 \xE1n tr\u01B0\u1EDBc, ho\u1EB7c d\xF9ng "L\u01B0u tr\u1EEF" Workspace.');
+          await c.q.query("DELETE FROM workspaces WHERE id=$1", [p.id]);
+        },
+        async saveDepartment(c, p) {
+          if (c.me.role !== "director") deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c t\u1EA1o/s\u1EEDa ph\xF2ng ban.");
+          const d = p.department || {};
+          if (!safeId(d.id) || !str2(d.name).trim() || !safeId(d.workspaceId)) throw new AppError2("Nh\u1EADp t\xEAn ph\xF2ng ban.");
+          if (!await one2(c.q, "SELECT 1 FROM workspaces WHERE id=$1", [d.workspaceId])) throw new AppError2("Workspace kh\xF4ng t\u1ED3n t\u1EA1i.");
+          const head = str2(d.headId);
+          if (head && (!c.byId[head] || c.byId[head].role === "employee")) throw new AppError2("Tr\u01B0\u1EDFng ph\xF2ng ban ph\u1EA3i l\xE0 Gi\xE1m \u0111\u1ED1c, Tr\u01B0\u1EDFng ph\xF2ng ho\u1EB7c Qu\u1EA3n l\xFD.");
+          const old = await one2(c.q, "SELECT workspace_id FROM departments WHERE id=$1", [d.id]);
+          if (old && old.workspace_id !== d.workspaceId) throw new AppError2("Kh\xF4ng chuy\u1EC3n ph\xF2ng ban sang Workspace kh\xE1c \u0111\u01B0\u1EE3c.");
+          if (old) await c.q.query("UPDATE departments SET name=$2, head_id=$3 WHERE id=$1", [d.id, str2(d.name).trim().slice(0, 80), head]);
+          else await c.q.query("INSERT INTO departments(id,workspace_id,name,head_id) VALUES($1,$2,$3,$4)", [d.id, d.workspaceId, str2(d.name).trim().slice(0, 80), head]);
+        },
+        async deleteDepartment(c, p) {
+          if (c.me.role !== "director") deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 ph\xF2ng ban.");
+          if (p.id === DEFAULT_DEPT) throw new AppError2("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c ph\xF2ng ban m\u1EB7c \u0111\u1ECBnh.");
+          if (await one2(c.q, "SELECT 1 FROM projects WHERE department_id=$1 LIMIT 1", [p.id])) throw new AppError2("Ph\xF2ng ban c\xF2n d\u1EF1 \xE1n. H\xE3y chuy\u1EC3n ho\u1EB7c xo\xE1 c\xE1c d\u1EF1 \xE1n tr\u01B0\u1EDBc.");
+          await c.q.query("DELETE FROM departments WHERE id=$1", [p.id]);
+        },
+        /* ----- Dự án: Giám đốc, hoặc Trưởng phòng/Quản lý với dự án do mình quản lý ----- */
+        async saveProject(c, p) {
+          const j = p.project || {};
+          if (!safeId(j.id) || !str2(j.name).trim() || !safeId(j.workspaceId)) throw new AppError2("Nh\u1EADp t\xEAn d\u1EF1 \xE1n.");
+          const isDir = c.me.role === "director";
+          const old = await one2(c.q, "SELECT * FROM projects WHERE id=$1", [j.id]);
+          if (old && old.workspace_id !== j.workspaceId) throw new AppError2("Kh\xF4ng chuy\u1EC3n d\u1EF1 \xE1n sang Workspace kh\xE1c \u0111\u01B0\u1EE3c.");
+          const ws = await one2(c.q, "SELECT * FROM workspaces WHERE id=$1", [j.workspaceId]);
+          if (!ws) throw new AppError2("Workspace kh\xF4ng t\u1ED3n t\u1EA1i.");
+          let managerId;
+          if (old) {
+            if (!isDir && old.manager_id !== c.me.id) deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c ho\u1EB7c ng\u01B0\u1EDDi qu\u1EA3n l\xFD d\u1EF1 \xE1n \u0111\u01B0\u1EE3c s\u1EEDa d\u1EF1 \xE1n n\xE0y.");
+            managerId = isDir ? str2(j.managerId) : old.manager_id;
+          } else {
+            if (c.me.role === "employee") deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c, Tr\u01B0\u1EDFng ph\xF2ng ho\u1EB7c Qu\u1EA3n l\xFD \u0111\u01B0\u1EE3c t\u1EA1o d\u1EF1 \xE1n.");
+            if (!isDir) {
+              const wm = await one2(c.q, "SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2", [ws.id, c.me.id]);
+              const isHead = await one2(c.q, "SELECT 1 FROM departments WHERE workspace_id=$1 AND head_id=$2", [ws.id, c.me.id]);
+              if (!ws.open && !wm && !isHead && ws.created_by !== c.me.id) deny2("B\u1EA1n ch\u01B0a thu\u1ED9c Workspace n\xE0y.");
+            }
+            managerId = isDir ? str2(j.managerId) || c.me.id : c.me.id;
+          }
+          if (managerId && (!c.byId[managerId] || c.byId[managerId].role === "employee" || !c.byId[managerId].active)) throw new AppError2("Ng\u01B0\u1EDDi qu\u1EA3n l\xFD d\u1EF1 \xE1n ph\u1EA3i l\xE0 Gi\xE1m \u0111\u1ED1c, Tr\u01B0\u1EDFng ph\xF2ng ho\u1EB7c Qu\u1EA3n l\xFD \u0111ang ho\u1EA1t \u0111\u1ED9ng.");
+          const dept = str2(j.departmentId);
+          if (dept && !await one2(c.q, "SELECT 1 FROM departments WHERE id=$1 AND workspace_id=$2", [dept, ws.id])) throw new AppError2("Ph\xF2ng ban kh\xF4ng thu\u1ED9c Workspace n\xE0y.");
+          if (old && old.id === DEFAULT_PROJECT && j.archived) throw new AppError2("Kh\xF4ng l\u01B0u tr\u1EEF \u0111\u01B0\u1EE3c d\u1EF1 \xE1n m\u1EB7c \u0111\u1ECBnh.");
+          const open = old && old.id === DEFAULT_PROJECT ? true : !!j.open;
+          const row = [j.id, ws.id, dept, str2(j.name).trim().slice(0, 100), str2(j.description).slice(0, 1e3), str2(j.color) || "#2f6fed", managerId, open, !!j.shareAll, !!j.archived];
+          if (old) await c.q.query("UPDATE projects SET workspace_id=$2, department_id=$3, name=$4, description=$5, color=$6, manager_id=$7, open=$8, share_all=$9, archived=$10 WHERE id=$1", row);
+          else await c.q.query(
+            "INSERT INTO projects(id,workspace_id,department_id,name,description,color,manager_id,open,share_all,archived,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+            [...row, c.me.id, (/* @__PURE__ */ new Date()).toISOString()]
+          );
+          if (Array.isArray(j.memberIds) || !old) {
+            const keep = (await c.q.query(`SELECT DISTINCT a.user_id FROM task_assignees a JOIN tasks t ON t.id = a.task_id WHERE t.project_id=$1 AND t.status <> 'done'`, [j.id])).rows.map((r) => r.user_id);
+            const ids = uniq([...idList(j.memberIds), managerId, c.me.id, ...keep].filter((id) => id && c.byId[id]));
+            await c.q.query("DELETE FROM project_members WHERE project_id=$1", [j.id]);
+            for (const id of ids) await ensureMember(c.q, j.id, ws.id, id);
+          }
+        },
+        async deleteProject(c, p) {
+          const pc = await projectCtx(c, p.id);
+          if (!pc) return;
+          if (pc.access !== "admin" && pc.p.manager_id !== c.me.id) deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c ho\u1EB7c ng\u01B0\u1EDDi qu\u1EA3n l\xFD d\u1EF1 \xE1n \u0111\u01B0\u1EE3c xo\xE1 d\u1EF1 \xE1n.");
+          if (p.id === DEFAULT_PROJECT) throw new AppError2("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c d\u1EF1 \xE1n m\u1EB7c \u0111\u1ECBnh.");
+          const n = await one2(c.q, "SELECT count(*)::int AS n FROM tasks WHERE project_id=$1", [p.id]);
+          if (n.n) throw new AppError2("D\u1EF1 \xE1n c\xF2n " + n.n + ' c\xF4ng vi\u1EC7c n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y chuy\u1EC3n d\u1EF1 \xE1n sang "L\u01B0u tr\u1EEF" \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.');
+          await c.q.query("DELETE FROM projects WHERE id=$1", [p.id]);
+        },
+        /* ----- Công việc ----- */
+        /** Tạo mới hoặc cập nhật đầy đủ 1 công việc (form chi tiết). */
+        async saveTask(c, p) {
+          const t = p.task || {};
+          if (!safeId(t.id)) throw new AppError2("Thi\u1EBFu m\xE3 c\xF4ng vi\u1EC7c.");
+          const title = str2(t.title).trim().slice(0, 300);
+          if (!title) throw new AppError2("Nh\u1EADp t\xEAn c\xF4ng vi\u1EC7c.");
+          const old = await taskCtx(c, t.id);
+          const projectId = old ? old.t.project_id : safeId(t.projectId) ? t.projectId : DEFAULT_PROJECT;
+          const pc = old ? { p: old.p, members: old.members, access: old.access } : await projectCtx(c, projectId);
+          if (!pc || !pc.p) throw new AppError2("D\u1EF1 \xE1n kh\xF4ng t\u1ED3n t\u1EA1i.");
+          if (!pc.access) deny2("B\u1EA1n ch\u01B0a tham gia d\u1EF1 \xE1n n\xE0y.");
+          if (!old && pc.p.archived) throw new AppError2("D\u1EF1 \xE1n \u0111\xE3 l\u01B0u tr\u1EEF, kh\xF4ng th\xEAm vi\u1EC7c m\u1EDBi \u0111\u01B0\u1EE3c.");
+          if (old && !canEditTask(c, old.access, old.t, old.assignees)) deny2("B\u1EA1n ch\u1EC9 s\u1EEDa \u0111\u01B0\u1EE3c c\xF4ng vi\u1EC7c c\u1EE7a m\xECnh, c\u1EE7a c\u1EA5p d\u01B0\u1EDBi ho\u1EB7c trong d\u1EF1 \xE1n b\u1EA1n qu\u1EA3n l\xFD.");
+          const status = STATUSES.includes(t.status) ? t.status : old ? old.t.status : "todo";
+          const priority = PRIORITIES.includes(t.priority) ? t.priority : old ? old.t.priority : "medium";
+          let assignees = idList(t.assigneeIds);
+          if (!assignees.length) assignees = old ? old.assignees : [c.me.id];
+          const prev = old ? old.assignees : [];
+          for (const a of assignees) if (!prev.includes(a) && !canAssign(c, pc.access, a)) {
+            const u = c.byId[a];
+            throw new AppError2(!u ? "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n kh\xF4ng t\u1ED3n t\u1EA1i." : !u.active ? u.name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n." : "B\u1EA1n ch\u1EC9 giao \u0111\u01B0\u1EE3c vi\u1EC7c cho ch\xEDnh m\xECnh ho\u1EB7c c\u1EA5p d\u01B0\u1EDBi (" + u.name + " ngo\xE0i ph\u1EA1m vi c\u1EE7a b\u1EA1n).");
+          }
+          let rule = cleanRule(t.recurrence), due = normDue(t.due);
+          if (rule && !due) due = todayISO2();
+          if (rule && rule.end && due > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t.");
+          const tags = cleanTags(t.tags), subtasks = cleanSubtasks(t.subtasks), desc = str2(t.description).slice(0, 2e4);
+          const okrId = old ? old.t.okr_id : t.okrId ? str2(t.okrId) : null;
+          const result = {};
+          if (old) {
+            await c.q.query(
+              `UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, recurrence=$8, assignee_id=$9 WHERE id=$1`,
+              [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), rule ? JSON.stringify(rule) : null, assignees[0]]
+            );
+            if (old.t.status !== status) {
+              Object.assign(result, await applyStatus(c, { ...old.t, due, recurrence: rule, title, description: desc, priority, tags, subtasks, assignee_id: assignees[0] }, status));
+              await c.q.query("UPDATE tasks SET position=$2 WHERE id=$1", [t.id, await nextPosition(c.q, projectId, status)]);
+            }
+          } else {
+            await c.q.query(
+              `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id)
+          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'')`,
+              [
+                t.id,
+                title,
+                assignees[0],
+                okrId,
+                due,
+                status,
+                (/* @__PURE__ */ new Date()).toISOString(),
+                projectId,
+                desc,
+                priority,
+                JSON.stringify(tags),
+                JSON.stringify(subtasks),
+                rule ? JSON.stringify(rule) : null,
+                c.me.id,
+                await nextPosition(c.q, projectId, status),
+                status === "done" ? (/* @__PURE__ */ new Date()).toISOString() : ""
+              ]
+            );
+          }
+          await c.q.query("DELETE FROM task_assignees WHERE task_id=$1 AND NOT (user_id = ANY($2))", [t.id, assignees]);
+          for (const a of assignees) {
+            await c.q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [t.id, a]);
+            if (!pc.members.has(a) && !pc.p.open) await ensureMember(c.q, projectId, pc.p.workspace_id, a);
+          }
+          return result;
+        },
+        /** Kéo thả Kanban: đổi cột và/hoặc vị trí (đặt trước việc beforeId; không có = cuối cột). */
+        async moveTask(c, p) {
+          const tc = await taskCtx(c, p.id);
+          if (!tc) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y c\xF4ng vi\u1EC7c.");
+          if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny2("B\u1EA1n ch\u1EC9 chuy\u1EC3n \u0111\u01B0\u1EE3c tr\u1EA1ng th\xE1i vi\u1EC7c c\u1EE7a m\xECnh, c\u1EE7a c\u1EA5p d\u01B0\u1EDBi ho\u1EB7c trong d\u1EF1 \xE1n b\u1EA1n qu\u1EA3n l\xFD.");
+          if (p.status !== void 0 && !STATUSES.includes(p.status)) throw new AppError2("Tr\u1EA1ng th\xE1i kh\xF4ng h\u1EE3p l\u1EC7.");
+          const status = p.status !== void 0 ? p.status : tc.t.status;
+          const result = await applyStatus(c, tc.t, status);
+          await renumberColumn(c.q, tc.t.project_id, status, tc.t.id, safeId(p.beforeId) ? p.beforeId : "");
+          return result;
+        },
+        /** Tương thích với màn báo cáo tuần: { id, patch: { status, title, due } }. */
+        async updateTask(c, p) {
+          const tc = await taskCtx(c, p.id);
+          if (!tc) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y c\xF4ng vi\u1EC7c.");
+          if (!canEditTask(c, tc.access, tc.t, tc.assignees)) deny2();
+          const s = p.patch || {};
+          if (s.status !== void 0 && !STATUSES.includes(s.status)) throw new AppError2("Tr\u1EA1ng th\xE1i kh\xF4ng h\u1EE3p l\u1EC7.");
+          await c.q.query(
+            "UPDATE tasks SET title = COALESCE($2, title), due = COALESCE($3, due) WHERE id=$1",
+            [p.id, s.title !== void 0 ? str2(s.title).slice(0, 300) : null, s.due !== void 0 ? normDue(s.due) : null]
+          );
+          if (s.status !== void 0) {
+            const fresh = await one2(c.q, "SELECT * FROM tasks WHERE id=$1", [p.id]);
+            const r = await applyStatus(c, fresh, s.status);
+            if (fresh.status !== s.status) await c.q.query("UPDATE tasks SET position=$2 WHERE id=$1", [p.id, await nextPosition(c.q, fresh.project_id, s.status)]);
+            return r;
+          }
+          return {};
+        },
+        /** Tương thích bản giao diện cũ (form "Thêm công việc" đơn giản). */
+        async addTask(c, p) {
+          const t = p.task;
+          if (!t || !t.id || !str2(t.title).trim()) throw new AppError2("Thi\u1EBFu d\u1EEF li\u1EC7u c\xF4ng vi\u1EC7c.");
+          return actions.saveTask(c, { task: { id: t.id, title: t.title, due: t.due, okrId: t.okrId, projectId: DEFAULT_PROJECT, assigneeIds: [t.assigneeId || c.me.id], status: "todo" } });
+        },
+        async deleteTask(c, p) {
+          const tc = await taskCtx(c, p.id);
+          if (!tc) return;
+          if (!canDeleteTask(c, tc.access, tc.t, tc.assignees)) deny2("B\u1EA1n kh\xF4ng \u0111\u01B0\u1EE3c xo\xE1 c\xF4ng vi\u1EC7c n\xE0y.");
+          await c.q.query("DELETE FROM tasks WHERE id=$1", [p.id]);
+          removeTaskFiles([p.id]);
+        },
+        /* ----- Bình luận (có @nhắc tên) ----- */
+        async addTaskComment(c, p) {
+          const cm = p.comment || {};
+          if (!safeId(cm.id) || !safeId(cm.taskId) || !str2(cm.text).trim()) throw new AppError2("Thi\u1EBFu n\u1ED9i dung b\xECnh lu\u1EADn.");
+          const tc = await taskCtx(c, cm.taskId);
+          if (!tc) throw new AppError2("C\xF4ng vi\u1EC7c kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+          if (!taskVisible(c, tc.access, tc.p, tc.t, tc.assignees)) deny2();
+          const mentions = idList(cm.mentions).filter((id) => c.byId[id]).slice(0, 20);
+          await c.q.query(
+            "INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)",
+            [cm.id, cm.taskId, c.me.id, str2(cm.text).trim().slice(0, 4e3), (/* @__PURE__ */ new Date()).toISOString(), JSON.stringify(mentions)]
+          );
+        },
+        async deleteTaskComment(c, p) {
+          const row = await one2(c.q, "SELECT author_id, task_id FROM task_comments WHERE id=$1", [p.id]);
+          if (!row) return;
+          const tc = await taskCtx(c, row.task_id);
+          if (!tc || !taskVisible(c, tc.access, tc.p, tc.t, tc.assignees)) deny2();
+          if (row.author_id !== c.me.id && c.me.role !== "director") deny2("Ch\u1EC9 ng\u01B0\u1EDDi vi\u1EBFt ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 b\xECnh lu\u1EADn n\xE0y.");
+          await c.q.query("DELETE FROM task_comments WHERE id=$1", [p.id]);
+        },
+        async deleteAttachment(c, p) {
+          const a = await one2(c.q, "SELECT * FROM task_attachments WHERE id=$1", [p.id]);
+          if (!a) return;
+          const tc = await taskCtx(c, a.task_id);
+          if (!tc || !taskVisible(c, tc.access, tc.p, tc.t, tc.assignees)) deny2();
+          if (a.uploaded_by !== c.me.id && !canEditTask(c, tc.access, tc.t, tc.assignees)) deny2("B\u1EA1n kh\xF4ng \u0111\u01B0\u1EE3c xo\xE1 t\u1EC7p n\xE0y.");
+          await c.q.query("DELETE FROM task_attachments WHERE id=$1", [p.id]);
+          try {
+            fs2.rmSync(path.join(taskDir(a.task_id), a.id), { force: true });
+          } catch (e) {
+          }
+        }
+      };
+      async function upload(c, req, params) {
+        const taskId = str2(params.taskId);
+        if (!safeId(taskId)) throw new AppError2("Thi\u1EBFu m\xE3 c\xF4ng vi\u1EC7c.");
+        const name = cleanFileName(params.name), ext = extOf(name);
+        if (!MIME[ext]) throw new AppError2("Lo\u1EA1i t\u1EC7p ." + (ext || "?") + " ch\u01B0a \u0111\u01B0\u1EE3c h\u1ED7 tr\u1EE3. H\u1ED7 tr\u1EE3: \u1EA3nh, PDF, Word, Excel, PowerPoint, v\u0103n b\u1EA3n, CSV, ZIP.");
+        const declared = Number(req.headers["content-length"] || 0);
+        if (declared > MAX_FILE) throw new AppError2("T\u1EC7p qu\xE1 l\u1EDBn (t\u1ED1i \u0111a " + Math.round(MAX_FILE / 1048576) + "MB).");
+        const tc = await taskCtx(c, taskId);
+        if (!tc) throw new AppError2("C\xF4ng vi\u1EC7c kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        if (!taskVisible(c, tc.access, tc.p, tc.t, tc.assignees)) deny2();
+        if (tc.p && tc.p.archived) throw new AppError2("D\u1EF1 \xE1n \u0111\xE3 l\u01B0u tr\u1EEF.");
+        const cnt = await one2(c.q, "SELECT count(*)::int AS n FROM task_attachments WHERE task_id=$1", [taskId]);
+        if (cnt.n >= MAX_FILES_PER_TASK) throw new AppError2("M\u1ED7i c\xF4ng vi\u1EC7c t\u1ED1i \u0111a " + MAX_FILES_PER_TASK + " t\u1EC7p.");
+        const id = newId("f"), dir = taskDir(taskId), file = path.join(dir, id);
+        try {
+          fs2.mkdirSync(dir, { recursive: true });
+        } catch (e) {
+          console.error(e);
+          throw new AppError2("M\xE1y ch\u1EE7 ch\u01B0a c\u1EA5u h\xECnh \u0111\u01B0\u1EE3c n\u01A1i l\u01B0u t\u1EC7p.");
+        }
+        let size = 0;
+        const counter = new Transform({ transform(chunk, _enc, cb) {
+          size += chunk.length;
+          if (size > MAX_FILE) cb(new AppError2("T\u1EC7p qu\xE1 l\u1EDBn (t\u1ED1i \u0111a " + Math.round(MAX_FILE / 1048576) + "MB)."));
+          else cb(null, chunk);
+        } });
+        try {
+          await pipeline(req, counter, fs2.createWriteStream(file, { flags: "wx", mode: 416 }));
+          if (!size) throw new AppError2("T\u1EC7p r\u1ED7ng.");
+          const now = (/* @__PURE__ */ new Date()).toISOString();
+          await c.q.query("INSERT INTO task_attachments(id,task_id,name,mime,size,uploaded_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)", [id, taskId, name, MIME[ext], size, c.me.id, now]);
+          return { id, name, mime: MIME[ext], size, uploadedBy: c.me.id, createdAt: now };
+        } catch (e) {
+          try {
+            fs2.rmSync(file, { force: true });
+          } catch (_) {
+          }
+          throw e;
+        }
+      }
+      async function download(c, res, attId) {
+        if (!safeId(attId)) throw new AppError2("T\u1EC7p kh\xF4ng h\u1EE3p l\u1EC7.");
+        const a = await one2(c.q, "SELECT * FROM task_attachments WHERE id=$1", [attId]);
+        if (!a) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y t\u1EC7p.");
+        const tc = await taskCtx(c, a.task_id);
+        if (!tc || !taskVisible(c, tc.access, tc.p, tc.t, tc.assignees)) deny2("B\u1EA1n kh\xF4ng c\xF3 quy\u1EC1n xem t\u1EC7p n\xE0y.");
+        const file = path.join(taskDir(a.task_id), a.id);
+        let st;
+        try {
+          st = fs2.statSync(file);
+        } catch (e) {
+          throw new AppError2("T\u1EC7p kh\xF4ng c\xF2n tr\xEAn m\xE1y ch\u1EE7.");
+        }
+        const inline = INLINE_EXT.has(extOf(a.name));
+        res.writeHead(200, {
+          "Content-Type": a.mime || "application/octet-stream",
+          "Content-Length": st.size,
+          "X-Content-Type-Options": "nosniff",
+          "Content-Disposition": (inline ? "inline" : "attachment") + "; filename*=UTF-8''" + encodeURIComponent(a.name),
+          "Cache-Control": "private, max-age=300",
+          "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        });
+        fs2.createReadStream(file).pipe(res);
+      }
+      return { SCHEMA: SCHEMA2, migrate: migrate2, actions, loadWork, loadTaskDetail, upload, download, removeTaskFiles, STATUSES, DEFAULT_PROJECT };
+    };
+    module2.exports.recurrence = { cleanRule, nextAfter, nextDue, validISO };
+  }
+});
+
 // src/server.js
 var http = require("http");
 var crypto = require("crypto");
@@ -5328,7 +6019,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 7;
+var VERSION = 8;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
@@ -5364,6 +6055,7 @@ CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 async function migrate() {
   await pool.query(SCHEMA);
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true");
+  await W.migrate();
 }
 var AppError = class extends Error {
   constructor(msg, auth) {
@@ -5448,6 +6140,13 @@ async function ctx(viewer, q = pool) {
   });
   return { me: byId[viewer.id] || viewer, users, byId, q };
 }
+function ctxFor(viewer, users) {
+  const byId = {};
+  users.forEach((u) => {
+    byId[u.id] = u;
+  });
+  return { me: byId[viewer.id] || viewer, users, byId, q: pool };
+}
 function canManage(c, targetId) {
   if (c.me.role === "director") return true;
   if (c.me.role !== "head" && c.me.role !== "manager") return false;
@@ -5491,7 +6190,7 @@ async function viewerTasks(viewer, users) {
   return tasksWithComments(ids);
 }
 async function tasksWithComments(assigneeIds) {
-  const tr = await pool.query("SELECT * FROM tasks WHERE assignee_id = ANY($1) ORDER BY seq", [assigneeIds]);
+  const tr = await pool.query(`SELECT * FROM tasks WHERE assignee_id = ANY($1) AND (report_id IS NOT NULL OR project_id = '${W.DEFAULT_PROJECT}') ORDER BY seq`, [assigneeIds]);
   const ids = tr.rows.map((t) => t.id), by = {};
   if (ids.length) {
     const cr = await pool.query("SELECT * FROM task_comments WHERE task_id = ANY($1) ORDER BY seq", [ids]);
@@ -5597,6 +6296,7 @@ async function tx(fn) {
   }
 }
 var one = async (q, sql, args) => (await q.query(sql, args)).rows[0];
+var W = require_work()({ pool, AppError, deny, str, num, one, canManage, todayISO, ctxFor });
 async function login(p, ip) {
   const username = str(p.username).trim();
   const k1 = "u:" + ip + ":" + username.toLowerCase(), k2 = "ip:" + ip;
@@ -5646,7 +6346,7 @@ var A = {
     const r = await one(c.q, "SELECT user_id FROM reports WHERE id=$1", [p.id]);
     if (!r) return;
     if (r.user_id !== c.me.id && c.me.role !== "director") deny("Ch\u1EC9 ng\u01B0\u1EDDi vi\u1EBFt b\xE1o c\xE1o ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 b\xE1o c\xE1o.");
-    await c.q.query("DELETE FROM tasks WHERE report_id=$1", [p.id]);
+    W.removeTaskFiles((await c.q.query("DELETE FROM tasks WHERE report_id=$1 RETURNING id", [p.id])).rows.map((x) => x.id));
     await c.q.query("DELETE FROM reports WHERE id=$1", [p.id]);
   },
   /* Sửa báo cáo tuần: chỉ người gửi, và chỉ khi chưa có cấp trên nào phản hồi/đánh giá. */
@@ -5679,7 +6379,10 @@ var A = {
     for (const ku of kus) if (!newerKr.has(ku.krId)) await c.q.query("UPDATE krs SET current=$1 WHERE id=$2 AND okr_id=$3", [num(ku.value), ku.krId, old.okr_id]);
     const ex = (await c.q.query("SELECT id, solution_id, status FROM tasks WHERE report_id=$1", [old.id])).rows;
     const keepSol = new Set(solutions.map((s) => s.id));
-    for (const t of ex) if (t.solution_id && !keepSol.has(t.solution_id) && t.status === "todo") await c.q.query("DELETE FROM tasks WHERE id=$1", [t.id]);
+    for (const t of ex) if (t.solution_id && !keepSol.has(t.solution_id) && t.status === "todo") {
+      await c.q.query("DELETE FROM tasks WHERE id=$1", [t.id]);
+      W.removeTaskFiles([t.id]);
+    }
     for (const s of solutions) {
       const cur = ex.find((t) => t.solution_id === s.id);
       if (cur) await c.q.query("UPDATE tasks SET title=$2, due=$3 WHERE id=$1", [cur.id, str(s.text), str(s.due)]);
@@ -5872,8 +6575,11 @@ var A = {
     if (u.id === c.me.id) throw new AppError("Kh\xF4ng th\u1EC3 t\u1EF1 xo\xE1 t\xE0i kho\u1EA3n c\u1EE7a ch\xEDnh m\xECnh.");
     if (c.users.some((x) => x.managerId === u.id)) throw new AppError(u.name + " c\xF2n ng\u01B0\u1EDDi tr\u1EF1c thu\u1ED9c, kh\xF4ng th\u1EC3 xo\xE1.");
     const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
-      + (SELECT count(*) FROM tasks WHERE assignee_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+      + (SELECT count(*) FROM tasks WHERE assignee_id=$1 OR created_by=$1) + (SELECT count(*) FROM task_assignees WHERE user_id=$1)
+      + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
     if (Number(used.n)) throw new AppError(u.name + ' \u0111\xE3 c\xF3 OKR, b\xE1o c\xE1o, c\xF4ng vi\u1EC7c ho\u1EB7c ph\u1EA3n h\u1ED3i trong h\u1EC7 th\u1ED1ng n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y d\xF9ng "Kho\xE1 t\xE0i kho\u1EA3n" \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.');
+    await c.q.query("DELETE FROM workspace_members WHERE user_id=$1", [u.id]);
+    await c.q.query("DELETE FROM project_members WHERE user_id=$1", [u.id]);
     await c.q.query("DELETE FROM users WHERE id=$1", [u.id]);
   },
   /* Mỗi người tự đổi mật khẩu của mình (cần mật khẩu hiện tại). */
@@ -5892,9 +6598,10 @@ var A = {
     await c.q.query("UPDATE users SET pass_hash=$2 WHERE id=$1", [c.me.id, hashPassword(pw)]);
   }
 };
+Object.assign(A, W.actions);
 async function insertTask(q, t) {
   await q.query(
-    `INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    `INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at,project_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       t.id,
       str(t.title),
@@ -5905,10 +6612,13 @@ async function insertTask(q, t) {
       num(t.week),
       num(t.year),
       str(t.due),
-      ["todo", "doing", "done"].includes(t.status) ? t.status : "todo",
-      str(t.createdAt) || (/* @__PURE__ */ new Date()).toISOString()
+      W.STATUSES.includes(t.status) ? t.status : "todo",
+      str(t.createdAt) || (/* @__PURE__ */ new Date()).toISOString(),
+      t.projectId || W.DEFAULT_PROJECT,
+      str(t.createdBy) || t.assigneeId
     ]
   );
+  await q.query("INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [t.id, t.assigneeId]);
 }
 function cors(req, res) {
   const origin = req.headers.origin;
@@ -5916,7 +6626,7 @@ function cors(req, res) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Okr-Token");
     res.setHeader("Access-Control-Max-Age", "86400");
   }
 }
@@ -5966,11 +6676,29 @@ async function handle(req, res) {
       }
       if (url.searchParams.get("ping")) return send(res, { ok: true, ping: "pong", version: VERSION, backend: "postgres", time: (/* @__PURE__ */ new Date()).toISOString() });
       const tok = url.searchParams.get("token");
+      const fileM = url.pathname.match(/\/file\/([A-Za-z0-9_-]+)$/);
+      if (fileM) return await W.download(await ctx(await verifyToken(tok)), res, fileM[1]);
       const viewer2 = tok ? await verifyToken(tok) : null;
+      if (url.searchParams.get("work")) {
+        if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
+        if (url.searchParams.get("v") && url.searchParams.get("v") === dataVersion) return send(res, { ok: true, unchanged: true, version: dataVersion });
+        const v = dataVersion, users = (await publicPart()).users;
+        return send(res, { ok: true, version: v, work: await W.loadWork(viewer2, str(url.searchParams.get("ws")), users) }, 200, req);
+      }
+      if (url.searchParams.get("workTask")) {
+        if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
+        return send(res, { ok: true, ...await W.loadTaskDetail(await ctx(viewer2), str(url.searchParams.get("workTask"))) }, 200, req);
+      }
       if (url.searchParams.get("v") && url.searchParams.get("v") === dataVersion) return send(res, { ok: true, unchanged: true, version: dataVersion });
       return send(res, await dbResponse(viewer2), 200, req);
     }
     if (req.method !== "POST") return send(res, { ok: false, error: "Method not allowed" }, 405);
+    if (url.pathname.endsWith("/upload")) {
+      const viewer2 = await verifyToken(req.headers["x-okr-token"]);
+      const file = await W.upload(await ctx(viewer2), req, { taskId: url.searchParams.get("taskId"), name: url.searchParams.get("name") });
+      bumpVersion();
+      return send(res, { ok: true, version: dataVersion, attachment: file });
+    }
     let body;
     try {
       body = JSON.parse(await readBody(req) || "{}");
@@ -5985,14 +6713,14 @@ async function handle(req, res) {
     }
     if (!Object.prototype.hasOwnProperty.call(A, action)) throw new AppError("H\xE0nh \u0111\u1ED9ng kh\xF4ng h\u1EE3p l\u1EC7: " + action);
     let viewer = await verifyToken(body.token);
-    await tx(async (client) => {
+    const result = await tx(async (client) => {
       const c = await ctx(viewer, client);
-      await A[action](c, p);
+      return await A[action](c, p);
     });
     bumpVersion();
-    if (body.lite) return send(res, { ok: true, version: dataVersion });
+    if (body.lite) return send(res, { ok: true, version: dataVersion, result });
     viewer = (await getUsers()).find((u) => u.id === viewer.id) || viewer;
-    return send(res, await dbResponse(viewer), 200, req);
+    return send(res, await dbResponse(viewer, { result }), 200, req);
   } catch (e) {
     errOut(res, e);
   }
@@ -6002,7 +6730,7 @@ async function importDB(db, opts = {}) {
   if (existing.n && !opts.force) throw new Error("C\u01A1 s\u1EDF d\u1EEF li\u1EC7u \u0111\xE3 c\xF3 d\u1EEF li\u1EC7u (" + existing.n + " ng\u01B0\u1EDDi d\xF9ng). Th\xEAm --force \u0111\u1EC3 ghi \u0111\xE8.");
   const temp = [];
   await tx(async (q) => {
-    if (opts.force) await q.query("TRUNCATE comments, krs, reports, okrs, tasks, cycles, users");
+    if (opts.force) await q.query("TRUNCATE comments, krs, reports, okrs, tasks, cycles, users CASCADE");
     for (const c of db.cycles || []) await q.query("INSERT INTO cycles(id,name,start_date,end_date,active) VALUES($1,$2,$3,$4,$5)", [c.id, str(c.name), str(c.start), str(c.end), !!c.active]);
     for (const u of db.users || []) {
       let pw = u.password || (opts.passwords || {})[u.username];

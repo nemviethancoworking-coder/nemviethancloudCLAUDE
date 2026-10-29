@@ -17,13 +17,26 @@ curl -fsSL https://raw.githubusercontent.com/nemviethancoworking-coder/nemvietha
 | `dist/server.js` | bản đóng gói 1 file (kèm thư viện `pg`) — máy chủ không cần `npm install`. Build: `npm run build` |
 | `docker-compose.yml` | `db` (PostgreSQL 16, 512MB) + `api` (Node 22, 256MB, chỉ mở `127.0.0.1:3100`) |
 | `install.sh` | cài / cập nhật |
-| `backup.sh` | `pg_dump` hằng ngày 02:30 vào `/opt/okr/backups`, giữ 14 bản |
+| `src/work.js` | module quản lý công việc (v8): Workspace → Phòng ban → Dự án → Công việc, phân quyền, lặp lại, bình luận, tệp đính kèm |
+| `test/work.test.js` | 21 kiểm thử với PostgreSQL thật (gồm nâng cấp v7 → v8): `PGHOST=… PGUSER=… PGPASSWORD=… npm test` |
+| `backup.sh` | `pg_dump` hằng ngày 02:30 + nén thư mục `uploads/` (tệp đính kèm), giữ 14 / 7 bản trong `/opt/okr/backups` |
 
 ## Khác Apps Script
 - Mật khẩu mã hoá scrypt; khoá đăng nhập 15 phút sau 8 lần sai (theo IP + tài khoản).
 - Mỗi thao tác ghi là 1 giao dịch PostgreSQL, ghi tuần tự → không mất/trùng dữ liệu khi nhiều người gửi cùng lúc.
 - `dataVersion`: app tự làm mới gửi `v=`; không có gì mới → trả 54 byte. Dữ liệu nén gzip. Thao tác ghi trả kết quả gọn (`lite`).
 - CORS chỉ cho phép `https://nemviethancoworking-coder.github.io`.
+
+## Quản lý công việc (v8)
+Giao diện: màn **Công việc** (`docs/okr/work.js`): Kanban kéo thả, Danh sách, Tổng quan thống kê.
+- **Cấp bậc**: Workspace → Phòng ban → Dự án → Công việc. Bản nâng cấp tự tạo Workspace "Công ty", phòng ban "Chung", dự án "Công việc chung"; công việc cũ (kể cả việc sinh từ báo cáo tuần) được gom vào dự án này, không mất dữ liệu.
+- **Phân quyền** (ánh xạ từ 4 cấp sẵn có): Giám đốc = Admin/Owner; Trưởng phòng / Quản lý = quản lý dự án (tạo dự án, thấy toàn bộ việc dự án mình quản lý hoặc thuộc phòng mình đứng đầu); Nhân viên = thành viên. Mặc định nhân viên chỉ thấy việc của mình, cấp trên thấy việc của cấp dưới; bật "Mọi thành viên xem được tất cả" ở dự án để cả nhóm xem hết. Mọi quyền được máy chủ kiểm tra lại.
+- **Công việc**: tên, mô tả, trạng thái (Cần làm / Đang làm / Chờ duyệt / Hoàn thành), ưu tiên (Thấp → Khẩn cấp), nhiều người thực hiện (một trạng thái chung), hạn, nhãn, việc con.
+- **Lặp lại** (hằng ngày mỗi N ngày / hằng tuần theo thứ chọn / hằng tháng theo ngày cố định, kèm ngày kết thúc tuỳ chọn): khi chuyển sang **Hoàn thành**, máy chủ tự tạo đúng 1 việc kế tiếp, hạn tính từ hạn cũ (trễ thì nhảy tới lần gần nhất trong tương lai), sao chép người làm/nhãn/ưu tiên, bỏ tích việc con.
+- **Bình luận** có `@nhắc tên` và giờ; **tệp đính kèm** (ảnh, PDF, Office, txt/csv, zip…) tối đa 20 MB/tệp, 30 tệp/việc, lưu ở `/opt/okr/uploads` (volume Docker `./uploads`), chỉ người xem được việc mới tải được.
+- **API mới**: GET `?work=1&ws=<id>` (dữ liệu Workspace), GET `?workTask=<id>` (bình luận + tệp), GET `/file/<id>?token=`, POST `/upload?taskId=&name=` (header `X-Okr-Token`), hành động `saveWorkspace`, `saveDepartment`, `saveProject`, `saveTask`, `moveTask`, `deleteTask`, `deleteAttachment`, `addTaskComment`… Giao thức cũ vẫn dùng được.
+- **Cập nhật**: chạy lại `install.sh` (tạo thư mục `uploads`, nới Nginx `client_max_body_size 22m`). Cập nhật máy chủ **trước**, rồi mới hợp nhất giao diện để GitHub Pages triển khai.
+- **Khôi phục tệp**: `tar -xzf backups/uploads-YYYY-MM-DD.tar.gz -C /opt/okr` (cùng với khôi phục `pg_dump`).
 
 ## Tài khoản (v6)
 - Giám đốc thêm/sửa/đặt lại mật khẩu ở màn **Nhân sự & phân quyền**.

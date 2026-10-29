@@ -52,6 +52,7 @@
 <div id="modal"></div>
 <div id="toast" class="fixed bottom-5 right-5 z-[100] flex flex-col gap-2"></div>
 
+<script src="work.js"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
@@ -294,7 +295,7 @@ function scheduleRefresh(){ clearTimeout(refreshTimer); refreshTimer = setTimeou
 }
 /* Token hết hạn / không hợp lệ → đăng xuất, yêu cầu đăng nhập lại. */
 function forceLogout(msg){
-  localStorage.removeItem(SESSION_KEY); sync.version = null;
+  localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset();
   if(online() && DB){ DB.tasks = []; save(); }
   document.getElementById('modal').innerHTML = '';
   render(); toast(msg || 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.', 'error');
@@ -425,7 +426,7 @@ function reportStatus(r){
   if(mc.some(c => !c.acknowledged)) return { t:'Chờ nhân viên xác nhận', c:'bg-blue-50 text-blue-700 border-blue-200', key:'ack' };
   return { t:'Đã xác nhận', c:'bg-green-50 text-green-700 border-green-200', key:'done' };
 }
-const TASK_STATUS = { todo:{ t:'Cần làm', c:'bg-slate-100 text-slate-700 border-slate-200' }, doing:{ t:'Đang làm', c:'bg-blue-50 text-blue-700 border-blue-200' }, done:{ t:'Hoàn thành', c:'bg-green-50 text-green-700 border-green-200' } };
+const TASK_STATUS = { todo:{ t:'Cần làm', c:'bg-slate-100 text-slate-700 border-slate-200' }, doing:{ t:'Đang làm', c:'bg-blue-50 text-blue-700 border-blue-200' }, review:{ t:'Chờ duyệt', c:'bg-amber-50 text-amber-700 border-amber-200' }, done:{ t:'Hoàn thành', c:'bg-green-50 text-green-700 border-green-200' } };
 const badge = (t,c) => `<span class="badge ${c}">${t}</span>`;
 const isOverdue = t => t.status !== 'done' && t.due && t.due < toISO(new Date());
 /* Số báo cáo cần mình xử lý: báo cáo của người mình quản lý đang chờ phản hồi + chỉ đạo mình chưa xác nhận. */
@@ -980,73 +981,8 @@ function openReportForm(editId){
     </div>`, 'max-w-3xl');
   A.renderKrInputs();
 }
-function openTaskForm(){
-  const assignees = scopeUsers().filter(isActive);
-  openModal(`
-    ${modalHeader('Thêm công việc', isMgr() ? 'Bạn giao được việc cho chính mình hoặc cấp dưới.' : '')}
-    <div class="p-6 space-y-4">
-      <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tf-title" class="input" placeholder="Nhập nội dung công việc..."></div>
-      <div class="grid grid-cols-2 gap-4">
-        <div><label class="label">Hạn hoàn thành</label><input id="tf-due" type="date" class="input" value="${toISO(addDays(new Date(), 7))}"></div>
-        <div><label class="label">Người thực hiện</label>${assignees.length > 1 ? `<select id="tf-user" class="input">${assignees.map(u => `<option value="${u.id}">${esc(u.name)}${u.id === session() ? ' (tôi)' : ''}</option>`).join('')}</select>` : `<input class="input bg-gray-50" value="${esc(me().name)}" disabled>`}</div>
-      </div>
-      <div><label class="label">Gắn với mục tiêu</label><select id="tf-okr" class="input"><option value="">— Không —</option>${DB.okrs.filter(o => o.ownerId === session() || canManage(o.ownerId)).map(o => `<option value="${o.id}">${esc(o.title)}</option>`).join('')}</select></div>
-    </div>
-    <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
-      <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button>
-      <button class="btn btn-primary" id="tf-submit" onclick="A.submitTask()">${I.plus} Thêm</button>
-    </div>`, 'max-w-lg');
-  setTimeout(() => { const el = document.getElementById('tf-title'); if(el) el.focus(); }, 50);
-}
-
-/* ---------- Quản lý công việc (lọc theo quyền) ---------- */
-function viewTasks(){
-  const scope = scopeUsers();
-  let ts = visibleTasks();
-  if(state.taskUser !== 'all' && !scope.some(u => u.id === state.taskUser)) state.taskUser = 'all';
-  if(state.taskUser !== 'all') ts = ts.filter(t => t.assigneeId === state.taskUser);
-  const counts = { all: ts.length, todo: ts.filter(t => t.status === 'todo').length, doing: ts.filter(t => t.status === 'doing').length, done: ts.filter(t => t.status === 'done').length, overdue: ts.filter(isOverdue).length };
-  if(state.taskStatus !== 'all') ts = state.taskStatus === 'overdue' ? ts.filter(isOverdue) : ts.filter(t => t.status === state.taskStatus);
-  const order = { todo:0, doing:1, done:2 };
-  ts = [...ts].sort((a,b) => (order[a.status] - order[b.status]) || (a.due || '9').localeCompare(b.due || '9'));
-  const tab = (key, label, cnt, cls='') => `<span class="chip ${state.taskStatus === key ? 'active' : ''} ${cls}" onclick="A.set('taskStatus','${key}')">${label} <span class="opacity-70">${cnt}</span></span>`;
-  const stat = (label, value, color='text-slate-900') => `<div class="card p-4"><div class="text-[12.5px] text-gray-500">${label}</div><div class="text-2xl font-semibold mt-1 ${color}">${value}</div></div>`;
-  const staffN = scope.length - 1;
-  const scopeNote = isDir() ? 'Bạn là Giám đốc: xem được công việc của toàn bộ nhân sự.'
-    : isMgr() ? `Bạn xem được công việc của mình và <b>${staffN}</b> người cấp dưới${me().role === 'head' ? ' trong phòng' : ''}${staffN ? ` (${scope.slice(1).map(u => esc(u.name)).join(', ')})` : ''}.`
-    : 'Bạn chỉ xem được công việc của chính mình.';
-  return `
-  <div class="card px-4 py-2.5 mb-4 text-[13px] text-slate-600 flex items-center gap-2" id="task-scope">${I.lock}<span>${scopeNote}</span></div>
-  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-5">
-    ${stat('Tổng công việc', counts.all)}${stat('Cần làm', counts.todo)}${stat('Đang làm', counts.doing, 'text-blue-600')}${stat('Hoàn thành', counts.done, 'text-green-600')}${stat('Quá hạn', counts.overdue, counts.overdue ? 'text-red-600' : 'text-green-600')}
-  </div>
-  <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
-    <div class="flex items-center gap-2 flex-wrap">
-      ${tab('all','Tất cả',counts.all)}${tab('todo','Cần làm',counts.todo)}${tab('doing','Đang làm',counts.doing)}${tab('done','Hoàn thành',counts.done)}${tab('overdue','Quá hạn',counts.overdue)}
-      ${isMgr() ? `<select class="input !w-auto ml-2" onchange="A.set('taskUser',this.value)"><option value="all">${isDir() ? 'Tất cả nhân sự' : 'Tôi & cấp dưới'}</option>${scope.map(u => `<option value="${u.id}" ${state.taskUser === u.id ? 'selected' : ''}>${esc(u.name)}${u.id === session() ? ' (tôi)' : ''}</option>`).join('')}</select>` : ''}
-    </div>
-    <button class="btn btn-primary" onclick="A.openTaskForm()">${I.plus} Thêm công việc</button>
-  </div>
-  <div class="card overflow-hidden">
-    <table class="w-full">
-      <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide">
-        <tr><th class="w-10 py-2.5"></th><th class="text-left font-medium py-2.5 px-2">Công việc</th>${isMgr() ? '<th class="text-left font-medium py-2.5 px-2">Người làm</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Nguồn</th><th class="text-left font-medium py-2.5 px-2">Hạn</th><th class="text-left font-medium py-2.5 px-2 w-36">Trạng thái</th><th class="w-24"></th></tr>
-      </thead>
-      <tbody class="divide-y divide-gray-100" id="task-rows">
-        ${ts.length ? ts.slice(0, state.taskLimit).map(t => { const u = user(t.assigneeId), o = okrById(t.okrId), od = isOverdue(t); return `
-        <tr class="hover:bg-gray-50 ${t.status === 'done' ? 'opacity-70' : ''}" data-task="${t.id}" data-assignee="${t.assigneeId}">
-          <td class="text-center py-3"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} onchange="A.toggleTask('${t.id}')"></td>
-          <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>${o ? `<div class="text-[12px] text-gray-500 mt-0.5 flex items-center gap-1">${I.flag} ${esc(o.title)}</div>` : ''}${t.comments && t.comments.length ? (lc => `<div class="task-note-preview text-[12px] text-slate-500 mt-0.5 flex items-center gap-1 cursor-pointer hover:text-base-600" onclick="A.openTaskNotes('${t.id}')"><span class="shrink-0">${I.chat}</span><span class="truncate max-w-[420px]"><b class="font-medium">${esc(user(lc.authorId).name)}:</b> ${esc(lc.text)}</span></div>`)(t.comments[t.comments.length-1]) : ''}</td>
-          ${isMgr() ? `<td class="py-3 px-2"><div class="flex items-center gap-2">${avatar(u, 'w-6 h-6 text-[10px]')}<span class="text-slate-700 whitespace-nowrap">${esc(u.name)}</span></div></td>` : ''}
-          <td class="py-3 px-2 text-[12.5px] text-gray-500 whitespace-nowrap">${t.reportId ? `<a class="text-base-600 hover:underline cursor-pointer" onclick="A.gotoReport('${t.reportId}')">Báo cáo ${weekLabel(t.week, t.year, true)}</a>` : 'Thêm thủ công'}</td>
-          <td class="py-3 px-2 text-[12.5px] whitespace-nowrap ${od ? 'text-red-600 font-medium' : 'text-slate-700'}">${t.due ? fmt(t.due) : '—'}${od ? ' · Quá hạn' : ''}</td>
-          <td class="py-3 px-2"><select class="input !py-1 !px-2 text-[12.5px]" onchange="A.setTaskStatus('${t.id}',this.value)">${Object.entries(TASK_STATUS).map(([k,v]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select></td>
-          <td class="py-3 text-center whitespace-nowrap"><button class="task-notes-btn text-gray-400 hover:text-base-600 p-1 inline-flex items-center gap-0.5" title="Ghi chú / bình luận" onclick="A.openTaskNotes('${t.id}')">${I.chat}${t.comments && t.comments.length ? `<span class="text-[11px] font-semibold text-base-600">${t.comments.length}</span>` : ''}</button><button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="A.deleteTask('${t.id}')">${I.trash}</button></td>
-        </tr>`; }).join('') + (ts.length > state.taskLimit ? `<tr><td colspan="7" class="p-3 text-center"><button class="btn btn-ghost btn-sm" id="more-tasks" onclick="A.more('taskLimit')">Xem thêm ${Math.min(PAGE.taskLimit, ts.length - state.taskLimit)} công việc (còn ${ts.length - state.taskLimit})</button></td></tr>` : '') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
-      </tbody>
-    </table>
-  </div>`;
-}
+/* ---------- Quản lý công việc: module riêng trong work.js (Workspace → Phòng ban → Dự án → Công việc) ---------- */
+function viewTasks(){ return W.view(); }
 
 /* ---------- Nhân sự & phân quyền (chỉ Giám đốc) ---------- */
 function orgNode(u, depth, seen){
@@ -1210,11 +1146,11 @@ const A = {
     setSession(u.id, tk); state = { ...state, view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all', okrUser:'all', okrStatus:'all' };
     render(); toast(`Xin chào, ${u.name}!`, 'info');
   },
-  logout(){ localStorage.removeItem(SESSION_KEY); sync.version = null; if(online()){ DB.tasks = []; save(); } render(); },
-  refresh(){ refreshFromServer(false); },
+  logout(){ localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset(); if(online()){ DB.tasks = []; save(); } render(); },
+  refresh(){ refreshFromServer(false); if(state.view === 'tasks') W.reload(); },
   selectReport(id){ state.reportId = id; render(); },
   gotoReport(id){ const r = DB.reports.find(r => r.id === id); if(!r) return; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = id; render(); },
-  openReportForm, openTaskForm, openOkrForm, openReview, openCycles, openUserForm, openPasswordForm,
+  openReportForm, openOkrForm, openReview, openCycles, openUserForm, openPasswordForm,
   async changePassword(){
     const old = document.getElementById('pw-old').value, n1 = document.getElementById('pw-new').value, n2 = document.getElementById('pw-new2').value;
     const err = document.getElementById('pw-err'), btn = document.getElementById('pw-submit');
@@ -1461,61 +1397,7 @@ const A = {
     const ackAt = new Date().toISOString();
     mutate('ackComment', { id:cid, ackAt }, () => { const c = DB.reports.find(r => r.id === rid).comments.find(c => c.id === cid); c.acknowledged = true; c.ackAt = ackAt; }, 'Đã xác nhận: Đã đọc và hiểu chỉ đạo.');
   },
-  openTaskNotes(id){
-    const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return;
-    const u = user(t.assigneeId), list = t.comments || [];
-    openModal(`
-      ${modalHeader('Ghi chú / bình luận công việc', esc(t.title))}
-      <div class="p-6 space-y-4 max-h-[60vh] overflow-y-auto" id="tn-list" data-task="${t.id}">
-        <div class="text-[12.5px] text-gray-500 flex items-center gap-2">${avatar(u, 'w-5 h-5 text-[9px]')} Người làm: <b class="text-slate-700">${esc(u.name)}</b>${t.due ? ` · Hạn ${fmt(t.due)}` : ''}</div>
-        ${list.length ? list.map(c => { const a = user(c.authorId), mine = c.authorId === session(); return `
-        <div class="flex gap-3" data-note="${c.id}">
-          ${avatar(a, 'w-8 h-8 text-[11px]')}
-          <div class="flex-1 rounded-lg px-3.5 py-2.5 ${mine ? 'bg-base-50 border border-base-100' : 'bg-gray-50 border border-gray-200'}">
-            <div class="flex items-center gap-2 text-[12px]"><span class="font-semibold text-slate-900">${esc(a.name)}</span><span class="text-gray-400">${fmtDT(c.createdAt)}</span>${mine || isDir() ? `<button class="ml-auto text-gray-400 hover:text-red-600" title="Xoá ghi chú" onclick="A.deleteTaskNote('${t.id}','${c.id}')">${I.trash}</button>` : ''}</div>
-            <div class="text-slate-700 mt-1 whitespace-pre-line leading-relaxed">${esc(c.text)}</div>
-          </div>
-        </div>`; }).join('') : '<div class="text-gray-400 text-[13px] italic" id="tn-empty">Chưa có ghi chú nào.</div>'}
-      </div>
-      <div class="px-6 py-4 border-t border-gray-200 flex gap-3">
-        ${avatar(me(), 'w-8 h-8 text-[11px]')}
-        <div class="flex-1">
-          <textarea id="tn-text" class="input" placeholder="Viết ghi chú, cập nhật tiến độ hoặc bình luận..." style="min-height:70px" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){A.addTaskNote('${t.id}')}"></textarea>
-          <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400">Người làm, cấp trên của họ và Giám đốc đều xem được.</span><button class="btn btn-primary btn-sm" id="tn-send" onclick="A.addTaskNote('${t.id}')">${I.chat} Gửi</button></div>
-        </div>
-      </div>`, 'max-w-xl');
-    setTimeout(() => { const el = document.getElementById('tn-text'); if(el) el.focus(); }, 50);
-  },
-  addTaskNote(id){
-    const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return;
-    const ta = document.getElementById('tn-text'), text = ta ? ta.value.trim() : '';
-    if(!text){ toast('Vui lòng nhập nội dung ghi chú.', 'error'); return; }
-    const c = { id:uid(), taskId:id, authorId:session(), text, createdAt:new Date().toISOString() };
-    mutate('addTaskComment', { comment:c }, () => { t.comments = t.comments || []; t.comments.push(c); }, 'Đã thêm ghi chú.');
-    A.openTaskNotes(id);
-    const list = document.getElementById('tn-list'); if(list) list.scrollTop = list.scrollHeight;
-  },
-  deleteTaskNote(taskId, cid){
-    const t = DB.tasks.find(t => t.id === taskId); if(!t || !canSeeTask(t)) return;
-    const c = (t.comments || []).find(c => c.id === cid); if(!c || !(c.authorId === session() || isDir())) return;
-    if(!confirm('Xoá ghi chú này?')) return;
-    mutate('deleteTaskComment', { id:cid }, () => { t.comments = t.comments.filter(x => x.id !== cid); }, 'Đã xoá ghi chú.');
-    A.openTaskNotes(taskId);
-  },
   toggleTask(id){ const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return; const s = t.status === 'done' ? 'todo' : 'done'; mutate('updateTask', { id, patch:{ status:s } }, () => { t.status = s; }); },
-  setTaskStatus(id, s){ const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return; mutate('updateTask', { id, patch:{ status:s } }, () => { t.status = s; }); },
-  deleteTask(id){ const t = DB.tasks.find(t => t.id === id); if(!t || !canSeeTask(t)) return; if(!confirm('Xoá công việc này?')) return; mutate('deleteTask', { id }, () => { DB.tasks = DB.tasks.filter(t => t.id !== id); }, 'Đã xoá công việc.'); },
-  submitTask(){
-    const title = document.getElementById('tf-title').value.trim();
-    if(!title){ toast('Vui lòng nhập tên công việc.', 'error'); return; }
-    const cw = isoWeek(new Date());
-    const sel = document.getElementById('tf-user');
-    const assigneeId = sel ? sel.value : session();
-    if(!(assigneeId === session() || canManage(assigneeId))){ toast('Bạn chỉ giao được việc cho chính mình hoặc nhân viên trực thuộc.', 'error'); return; }
-    const t = { id:uid(), title, assigneeId, reportId:null, solutionId:null, okrId:document.getElementById('tf-okr').value || null, week:cw.week, year:cw.year, due:document.getElementById('tf-due').value, status:'todo', createdAt:new Date().toISOString() };
-    A.closeModal();
-    mutate('addTask', { task:t }, () => { DB.tasks.push(t); }, `Đã thêm công việc${assigneeId !== session() ? ' cho ' + user(assigneeId).name : ''}.`);
-  },
   saveUser(id){
     if(!isDir()) return;
     const g = k => document.getElementById(k).value.trim();
