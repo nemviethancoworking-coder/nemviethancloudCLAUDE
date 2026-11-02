@@ -51,7 +51,7 @@ const WI = {
 /* ---------- Trạng thái ---------- */
 const S = {
   data: null, loading: false, error: null, version: null, wsLoaded: null,
-  ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, project: 'all', showArch: false,
+  ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, mineView: lsGet('okr_work_mine_view') === 'list' ? 'list' : 'kanban', project: 'all', showArch: false,
   f: { q: '', who: 'all', pri: 'all', st: 'all', fol: false },
   sort: { k: 'status', d: 1 }, doneLimit: DONE_SHOW, listLimit: 200,
   drag: null, over: null, draft: null, detail: null, mention: new Set(), uploading: 0,
@@ -245,7 +245,7 @@ function view(){
   }
   const d = S.data, ws = d.workspaces.find(w => w.id === d.currentId);
   const projs = d.projects.filter(p => !p.archived);
-  const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : S.mode === 'mine' ? personalView('mine') : S.mode === 'created' ? personalView('created') : S.mode === 'rec' ? recView() : dashboard();
+  const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : S.mode === 'mine' ? mineBoard() : S.mode === 'created' ? personalView('created') : S.mode === 'rec' ? recView() : dashboard();
   return `
   ${toolbar(ws)}
   <div class="text-[12px] text-gray-400 mb-3 -mt-1 flex items-center gap-1.5">${WI.eye} ${esc(scopeNote())}</div>
@@ -328,8 +328,8 @@ function emptyWorkspace(){
 /* ============================================================
    KANBAN
    ============================================================ */
-function kanban(){
-  const ts = filtered({ kanban: true }), multi = S.project === 'all';
+function kanban(list){
+  const ts = list || filtered({ kanban: true }), multi = S.project === 'all';
   const cols = STATUS_KEYS.map(k => ({ k, items: ts.filter(t => t.status === k) }));
   return `
   <div id="kb-board" class="grid gap-3 items-start overflow-x-auto pb-2" style="grid-template-columns:repeat(4,minmax(250px,1fr))">
@@ -951,6 +951,18 @@ function byUrgency(a, b){
   if(!ao) return (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || '');
   return (a.due || '9999').localeCompare(b.due || '9999') || PRIO[b.priority].w - PRIO[a.priority].w || (b.createdAt || '').localeCompare(a.createdAt || '');
 }
+/** Việc của tôi: chuyển giữa dạng Kanban (mặc định) và Danh sách. Kanban chỉ gồm việc tôi là người thực hiện, theo dự án đang chọn. */
+function mineBoard(){
+  const v = S.mineView === 'list' ? 'list' : 'kanban';
+  const btn = (k, ic, label) => `<button class="btn btn-sm ${v === k ? 'btn-primary' : 'btn-ghost'}" onclick="W.setMineView('${k}')">${ic} ${label}</button>`;
+  const sw = `<div class="flex items-center gap-2 mb-3"><span class="text-[12.5px] text-gray-500">Xem dạng:</span>${btn('kanban', WI.kanban, 'Kanban')}${btn('list', WI.list, 'Danh sách')}</div>`;
+  if(v === 'list') return sw + personalView('mine');
+  const q = S.f.q.trim().toLowerCase();
+  const ts = mineTasks().filter(t => !q || t.title.toLowerCase().includes(q) || richPlain(t.description).toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q)));
+  const note = mineTasks().length ? '' : '<div class="card p-4 mb-3 text-[13px] text-gray-500">Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.</div>';
+  return sw + note + kanban(ts);
+}
+function setMineView(v){ S.mineView = v === 'list' ? 'list' : 'kanban'; lsSet('okr_work_mine_view', S.mineView); repaint(); }
 function personalView(kind){
   const mine = kind === 'mine', q = S.f.q.trim().toLowerCase(), tab = S.tabs[kind], lb = TAB_LABEL[kind];
   const all = mine ? mineTasks() : createdTasks();
@@ -1223,7 +1235,7 @@ function reload(){ S.version = null; load(); }
 function retry(){ S.error = null; S.data = null; repaint(); }
 
 window.W = {
-  view, load, reload, reset, setWs, setMode, setProject, setF, setQ, toggleFol, toggleArch, sortBy, moreDone, moreList, retry,
+  view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
