@@ -1,6 +1,6 @@
 {
   "name": "okr-weekly-server",
-  "version": "11.0.0",
+  "version": "12.0.0",
   "private": true,
   "description": "OKR Weekly API (Node.js + PostgreSQL)",
   "main": "dist/server.js",
@@ -9,6 +9,7 @@
     "test": "node --test test/work.test.js test/rich.test.js"
   },
   "dependencies": {
+    "nodemailer": "^10.3.1",
     "pg": "^8.13.0"
   },
   "devDependencies": {

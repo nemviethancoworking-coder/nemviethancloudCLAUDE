@@ -428,6 +428,8 @@ function seedData(){
 const ROLE_KEYS = ['director','head','manager','employee'];
 const ROLE_RANK = { director:0, head:1, manager:2, employee:3 };
 const PARENT_ROLE = { head:'director', manager:'head', employee:'manager' };      // cấp trên trực tiếp bắt buộc (khớp Code.gs)
+/* Email chỉ do máy chủ gửi riêng cho Giám đốc (db.emails: id → email); người khác không thấy. */
+function emailOf(u){ return (DB && DB.emails && DB.emails[u.id]) || u.email || ''; }
 function normalizeUsers(users){
   users.forEach(u => { u.role = String(u.role || '').trim().toLowerCase(); if(!ROLE_KEYS.includes(u.role)) u.role = 'employee'; u.managerId = u.managerId || ''; });
   if(!users.some(u => u.role === 'director')) users.forEach(u => { if((u.role === 'manager' || u.role === 'head') && !u.managerId) u.role = 'director'; });
@@ -632,7 +634,7 @@ function reportStatus(r){
   if(mc.some(c => !c.acknowledged)) return { t:'Chờ nhân viên xác nhận', c:'bg-blue-50 text-blue-700 border-blue-200', key:'ack' };
   return { t:'Đã xác nhận', c:'bg-green-50 text-green-700 border-green-200', key:'done' };
 }
-const TASK_STATUS = { todo:{ t:'Cần làm', c:'bg-slate-100 text-slate-700 border-slate-200' }, doing:{ t:'Đang làm', c:'bg-blue-50 text-blue-700 border-blue-200' }, review:{ t:'Chờ duyệt', c:'bg-amber-50 text-amber-700 border-amber-200' }, done:{ t:'Hoàn thành', c:'bg-green-50 text-green-700 border-green-200' } };
+const TASK_STATUS = { todo:{ t:'Chưa thực hiện', c:'bg-slate-100 text-slate-700 border-slate-200' }, doing:{ t:'Đang làm', c:'bg-blue-50 text-blue-700 border-blue-200' }, review:{ t:'Chờ duyệt', c:'bg-amber-50 text-amber-700 border-amber-200' }, done:{ t:'Hoàn thành', c:'bg-green-50 text-green-700 border-green-200' } };
 const badge = (t,c) => `<span class="badge ${c}">${t}</span>`;
 const isOverdue = t => t.status !== 'done' && t.due && t.due < toISO(new Date());
 /* Số báo cáo cần mình xử lý: báo cáo của người mình quản lý đang chờ phản hồi + chỉ đạo mình chưa xác nhận. */
@@ -1200,7 +1202,7 @@ function orgNode(u, depth, seen){
     <div class="flex items-center gap-2.5 py-1.5 ${isActive(u) ? '' : 'opacity-60'}" data-node="${u.id}">
       ${avatar(u, 'w-7 h-7 text-[10px]')}
       <span class="font-medium text-slate-900">${esc(u.name)}</span>${roleBadge(u)}${isActive(u) ? '' : LOCKED_BADGE}
-      <span class="text-[12px] text-gray-500 truncate">${esc(u.title || u.dept)}</span>
+      <span class="text-[12px] text-gray-500 truncate">${esc(u.title || u.dept)}</span>${isDir() && isActive(u) && !emailOf(u) ? '<span class="text-[11.5px] text-amber-700" title="Chưa nhập email: người này sẽ không nhận được thông báo qua email">· chưa có email</span>' : ''}
       ${kids.length ? `<span class="text-[11.5px] text-gray-400">· ${kids.length} trực thuộc</span>` : ''}
       ${bad ? `<span class="text-[11.5px] text-amber-700">· cấp trên chưa đúng cấp</span>` : ''}
       <button class="ml-auto text-gray-400 hover:text-slate-700 p-1" title="Sửa" onclick="A.openUserForm('${u.id}')">${I.edit}</button>
@@ -1234,7 +1236,7 @@ function viewPeople(){
   <div class="card overflow-hidden">
     <table class="w-full">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide">
-        <tr><th class="text-left font-medium py-2.5 px-4">Nhân sự</th><th class="text-left font-medium py-2.5 px-2">Vai trò</th><th class="text-left font-medium py-2.5 px-2">Cấp trên trực tiếp</th><th class="text-left font-medium py-2.5 px-2">Tên đăng nhập</th><th class="w-32"></th></tr>
+        <tr><th class="text-left font-medium py-2.5 px-4">Nhân sự</th><th class="text-left font-medium py-2.5 px-2">Vai trò</th><th class="text-left font-medium py-2.5 px-2">Cấp trên trực tiếp</th><th class="text-left font-medium py-2.5 px-2">Tên đăng nhập</th><th class="text-left font-medium py-2.5 px-2">Email nhận thông báo</th><th class="w-32"></th></tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
         ${rows.map(u => { const m = u.managerId ? user(u.managerId) : null; return `
@@ -1243,6 +1245,7 @@ function viewPeople(){
           <td class="py-2.5 px-2">${roleBadge(u)}</td>
           <td class="py-2.5 px-2">${m ? `<div class="flex items-center gap-2">${avatar(m, 'w-6 h-6 text-[9px]')}<span class="text-slate-700">${esc(m.name)}</span></div>` : `<span class="text-gray-400">${u.role === 'director' ? '—' : 'Chưa gán'}</span>`}</td>
           <td class="py-2.5 px-2"><code class="text-[12px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">${esc(u.username)}</code></td>
+          <td class="py-2.5 px-2 text-[12.5px]">${emailOf(u) ? esc(emailOf(u)) : '<span class="text-amber-700">Chưa có</span>'}</td>
           <td class="py-2.5 pr-3"><div class="flex items-center justify-end gap-1">
             <button class="btn btn-ghost btn-sm" title="Sửa" onclick="A.openUserForm('${u.id}')">${I.edit}</button>
             ${u.id === session() ? '' : isActive(u)
@@ -1296,6 +1299,7 @@ function openUserForm(id, presetRole){
         <div><label class="label">Phòng ban</label><input id="uf-dept" class="input" value="${esc(u ? u.dept : '')}"></div>
         <div><label class="label">Chức danh</label><input id="uf-title" class="input" value="${esc(u ? u.title : '')}"></div>
       </div>
+      <div><label class="label">Email nhận thông báo</label><input id="uf-email" type="email" class="input" value="${esc(u ? emailOf(u) : '')}" placeholder="ten@congty.com" autocomplete="off"><div class="text-[12px] text-gray-400 mt-1">Dùng để gửi email khi được giao việc, được giao lại việc, có phản hồi báo cáo tuần hoặc bình luận mới. Để trống nếu không muốn gửi email.</div></div>
       <div><label class="label">Mật khẩu ${u ? '' : '<span class="text-red-500">*</span>'}</label><input id="uf-password" class="input" type="text" autocomplete="new-password" placeholder="${u ? 'Để trống để giữ mật khẩu hiện tại' : 'Mật khẩu đăng nhập'}"></div>
     </div>
     <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
@@ -1608,9 +1612,10 @@ const A = {
     if(!isDir()) return;
     const g = k => document.getElementById(k).value.trim();
     const old = id ? DB.users.find(x => x.id === id) : null;
-    const u = { id: id || 'u' + uid(), name:g('uf-name'), username:g('uf-username'), role:g('uf-role'), managerId:g('uf-manager'), dept:g('uf-dept'), title:g('uf-title'), password:document.getElementById('uf-password').value };
+    const u = { id: id || 'u' + uid(), name:g('uf-name'), username:g('uf-username'), role:g('uf-role'), managerId:g('uf-manager'), dept:g('uf-dept'), title:g('uf-title'), email:g('uf-email').toLowerCase(), password:document.getElementById('uf-password').value };
     if(!u.name || !u.username){ toast('Nhập đủ họ tên và tên đăng nhập.', 'error'); return; }
     if(DB.users.some(x => x.username === u.username && x.id !== u.id)){ toast(`Tên đăng nhập "${u.username}" đã được dùng.`, 'error'); return; }
+    if(u.email && !/^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]+$/.test(u.email)){ toast('Email không hợp lệ.', 'error'); return; }
     if(!old && !u.password){ toast('Tài khoản mới cần có mật khẩu.', 'error'); return; }
     if(old && old.id === session() && u.role !== 'director'){ toast('Không thể tự bỏ vai trò Giám đốc của chính mình.', 'error'); return; }
     if(u.role === 'director') u.managerId = '';
@@ -1622,6 +1627,8 @@ const A = {
     A.closeModal();
     mutate('saveUser', { user:u }, () => {
       const rec = { ...u };
+      DB.emails = DB.emails || {}; if(u.email) DB.emails[u.id] = u.email; else delete DB.emails[u.id];
+      delete rec.email;
       if(online()) delete rec.password;                 // mật khẩu chỉ lưu trên Sheet
       const i = DB.users.findIndex(x => x.id === u.id);
       if(i >= 0) DB.users[i] = { ...DB.users[i], ...rec }; else DB.users.push(rec);

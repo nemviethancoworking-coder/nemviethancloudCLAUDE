@@ -33,10 +33,19 @@ Giao diện: màn **Công việc** (`docs/okr/work.js`): Kanban kéo thả, Danh
 - **Phân quyền** (ánh xạ từ 4 cấp sẵn có): Giám đốc = Admin/Owner; Trưởng phòng / Quản lý tạo dự án, giao việc. Quyền **xem / sửa / xoá việc** theo quy tắc v11 bên dưới; mọi quyền được máy chủ kiểm tra lại.
 - **Công việc**: tên, mô tả, trạng thái (Cần làm / Đang làm / Chờ duyệt / Hoàn thành), ưu tiên (Thấp → Khẩn cấp), nhiều người thực hiện (một trạng thái chung), hạn, nhãn, việc con.
 - **Lặp lại** (hằng ngày mỗi N ngày / hằng tuần theo thứ chọn / hằng tháng theo ngày cố định, kèm ngày kết thúc tuỳ chọn): khi chuyển sang **Hoàn thành**, máy chủ tự tạo đúng 1 việc kế tiếp, hạn tính từ hạn cũ (trễ thì nhảy tới lần gần nhất trong tương lai), nội dung lấy theo **mẫu** hiện tại, bỏ tích việc con. Từ v9 lịch lặp chỉ tạo/sửa ở mục **Việc lặp lại** (bảng `recurring_tasks`).
-- **Bình luận** có `@nhắc tên` và giờ; **tệp đính kèm** (ảnh, PDF, Office, txt/csv, zip…) tối đa 20 MB/tệp, 30 tệp/việc, lưu ở `/opt/okr/uploads` (volume Docker `./uploads`), chỉ người xem được việc mới tải được.
+- **Bình luận** có `@nhắc tên` và giờ; **tệp đính kèm** (ảnh, PDF, Office, txt/csv, zip…) tối đa 10 MB/tệp (từ v12; trước là 20 MB), 30 tệp/việc, lưu ở `/opt/okr/uploads` (volume Docker `./uploads`), chỉ người xem được việc mới tải được.
 - **API mới**: GET `?work=1&ws=<id>` (dữ liệu Workspace), GET `?workTask=<id>` (bình luận + tệp), GET `/file/<id>?token=`, POST `/upload?taskId=&name=` (header `X-Okr-Token`), hành động `saveWorkspace`, `saveDepartment`, `saveProject`, `saveTask`, `moveTask`, `deleteTask`, `deleteAttachment`, `addTaskComment`… Giao thức cũ vẫn dùng được.
-- **Cập nhật**: chạy lại `install.sh` (tạo thư mục `uploads`, nới Nginx `client_max_body_size 22m`). Cập nhật máy chủ **trước**, rồi mới hợp nhất giao diện để GitHub Pages triển khai.
+- **Cập nhật**: chạy lại `install.sh` (tạo thư mục `uploads`, nới Nginx `client_max_body_size 12m`). Cập nhật máy chủ **trước**, rồi mới hợp nhất giao diện để GitHub Pages triển khai.
 - **Khôi phục tệp**: `tar -xzf backups/uploads-YYYY-MM-DD.tar.gz -C /opt/okr` (cùng với khôi phục `pg_dump`).
+
+## Ngày bắt đầu, đính kèm khi tạo việc, email thông báo (v12)
+- Nhãn trạng thái **"Cần làm" → "Chưa thực hiện"** (chỉ đổi tên hiển thị; mã `todo` trong dữ liệu giữ nguyên).
+- **Ngày bắt đầu** (`tasks.start_date`): bắt buộc khi tạo việc, không được sau hạn chót; việc cũ chưa có thì để trống, sửa lại không bị ép nhập. Việc sinh từ việc lặp lại / báo cáo tuần lấy ngày hôm nay (hoặc hạn nếu hạn đã qua).
+- **Đính kèm ngay trong form tạo việc**: chọn tệp trong form, bấm Thêm công việc → việc được lưu rồi tệp tải lên lần lượt (lỗi từng tệp được báo riêng, việc vẫn giữ). Giới hạn 10 MB/tệp (`MAX_UPLOAD_MB`).
+- **Email thông báo** (Gmail SMTP, `src/mail.js`) gửi khi: được giao việc mới, được giao lại việc, quản lý phản hồi báo cáo tuần, có bình luận mới trên việc (gửi người tạo, người nhận, người theo dõi và người được @nhắc, trừ người viết). Gửi ở nền sau khi lưu thành công; lỗi chỉ ghi log, không làm hỏng thao tác.
+  - Cấu hình: `SMTP_USER` (mặc định `nemviethancoworking@gmail.com`), `SMTP_PASS` = **Mật khẩu ứng dụng** 16 ký tự của tài khoản Gmail đó (Tài khoản Google → Bảo mật → Xác minh 2 bước → Mật khẩu ứng dụng), `APP_URL`. Không có `SMTP_PASS` thì email tắt, app vẫn chạy.
+  - Địa chỉ nhận là **email trong tài khoản từng người** (Nhân sự → Sửa → "Email nhận thông báo"). Người chưa có email, hoặc đã bị khoá, sẽ không nhận. Email không nằm trong dữ liệu chung; chỉ Giám đốc xem/sửa được.
+- **Cập nhật**: sao lưu (`./backup.sh`) rồi chạy lại `install.sh`; có thể truyền sẵn `SMTP_PASS='xxxx xxxx xxxx xxxx' bash install.sh` hoặc nhập khi script hỏi (Enter = bỏ qua, tắt email). Cập nhật máy chủ trước, rồi mới hợp nhất giao diện.
 
 ## Tách "nơi tạo" và "bảng làm việc" (v9)
 - **Việc đã tạo bị khoá nội dung**: trên Kanban / Danh sách, bấm vào việc chỉ xem tên, mô tả, ưu tiên, hạn, nhãn. Chỉ đổi được trạng thái, tick việc con (`toggleSubtask`), giao lại (`reassignTask`), bình luận, đính kèm tệp.

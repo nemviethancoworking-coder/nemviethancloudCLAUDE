@@ -14,7 +14,7 @@
 
 /* ---------- Hằng số hiển thị ---------- */
 const STATUS = {
-  todo:   { t:'Cần làm',    dot:'#94a3b8', c:'bg-slate-100 text-slate-700 border-slate-200' },
+  todo:   { t:'Chưa thực hiện', dot:'#94a3b8', c:'bg-slate-100 text-slate-700 border-slate-200' },
   doing:  { t:'Đang làm',   dot:'#2f6fed', c:'bg-blue-50 text-blue-700 border-blue-200' },
   review: { t:'Chờ duyệt',  dot:'#d97706', c:'bg-amber-50 text-amber-700 border-amber-200' },
   done:   { t:'Hoàn thành', dot:'#16a34a', c:'bg-green-50 text-green-700 border-green-200' },
@@ -29,7 +29,7 @@ const PRIO = {
 const COLORS = ['#2f6fed', '#059669', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#dc2626', '#4f46e5', '#0d9488'];
 const WD = ['', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 const OK_EXT = ['jpg','jpeg','png','gif','webp','bmp','heic','pdf','doc','docx','xls','xlsx','ppt','pptx','txt','csv','rtf','odt','ods','zip'];
-const MAX_MB = 20;
+const MAX_MB = 10;
 const DONE_SHOW = 30;           // số thẻ "Hoàn thành" hiện sẵn trong Kanban
 
 /* ---------- Biểu tượng riêng của module ---------- */
@@ -365,7 +365,7 @@ function card(t, multi){
         ${t.tags.length ? `<div class="flex flex-wrap gap-1 mt-1.5">${tagChips(t.tags.slice(0, 4))}</div>` : ''}
         <div class="flex items-center justify-between gap-2 mt-2.5">
           <div class="flex items-center gap-2.5 text-[12px] text-gray-500 flex-wrap">
-            ${t.due ? dueHtml(t) : ''}${subProg(t)}
+            ${t.startDate ? `<span class="inline-flex items-center gap-1 whitespace-nowrap" title="Ngày bắt đầu">Từ ${fmt(t.startDate)}</span>` : ''}${t.due ? dueHtml(t) : ''}${subProg(t)}
             ${t.commentCount ? `<span class="inline-flex items-center gap-1">${I.chat}${t.commentCount}</span>` : ''}
             ${t.attachCount ? `<span class="inline-flex items-center gap-1">${WI.clip}${t.attachCount}</span>` : ''}
             ${folBadge(t)}
@@ -439,7 +439,7 @@ function listView(){
   let ts = filtered(), multi = S.project === 'all';
   const cnt = k => scopeTasks().filter(t => k === 'overdue' ? overdue(t) : k === 'all' ? true : t.status === k).length;
   const tab = (k, label) => `<span class="chip ${S.f.st === k ? 'active' : ''}" onclick="W.setF('st','${k}')">${label} <span class="opacity-70">${cnt(k)}</span></span>`;
-  const so = { status: t => STATUS_KEYS.indexOf(t.status), due: t => t.due || '9999', title: t => t.title.toLowerCase(), pri: t => -PRIO[t.priority].w, proj: t => (projById(t.projectId) || { name: '' }).name.toLowerCase() };
+  const so = { status: t => STATUS_KEYS.indexOf(t.status), start: t => t.startDate || '9999', due: t => t.due || '9999', title: t => t.title.toLowerCase(), pri: t => -PRIO[t.priority].w, proj: t => (projById(t.projectId) || { name: '' }).name.toLowerCase() };
   const fn = so[S.sort.k] || so.status;
   ts = [...ts].sort((a, b) => { const x = fn(a), y = fn(b); return (x < y ? -1 : x > y ? 1 : 0) * S.sort.d || (a.due || '9').localeCompare(b.due || '9'); });
   const th = (k, label, cls = '') => `<th class="text-left font-medium py-2.5 px-2 cursor-pointer select-none hover:text-slate-800 ${cls}" onclick="W.sortBy('${k}')">${label}${S.sort.k === k ? (S.sort.d > 0 ? ' ▲' : ' ▼') : ''}</th>`;
@@ -448,7 +448,7 @@ function listView(){
   <div class="card overflow-x-auto">
     <table class="w-full">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide"><tr>
-        <th class="w-10 py-2.5"></th>${th('title', 'Công việc')}${multi ? th('proj', 'Dự án') : ''}<th class="text-left font-medium py-2.5 px-2">Người làm</th>${th('pri', 'Ưu tiên')}${th('due', 'Hạn')}${th('status', 'Trạng thái', 'w-36')}<th class="w-16"></th>
+        <th class="w-10 py-2.5"></th>${th('title', 'Công việc')}${multi ? th('proj', 'Dự án') : ''}<th class="text-left font-medium py-2.5 px-2">Người làm</th>${th('pri', 'Ưu tiên')}${th('start', 'Bắt đầu')}${th('due', 'Hạn')}${th('status', 'Trạng thái', 'w-36')}<th class="w-16"></th>
       </tr></thead>
       <tbody class="divide-y divide-gray-100">
         ${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId), ed = canEdit(t); return `
@@ -459,11 +459,12 @@ function listView(){
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(t.assigneeIds, 4)}</td>
           <td class="py-3 px-2">${prioBadge(t.priority)}</td>
+          <td class="py-3 px-2 text-[12.5px] whitespace-nowrap ${t.startDate ? 'text-slate-700' : 'text-gray-400'}">${t.startDate ? fmt(t.startDate) : '—'}</td>
           <td class="py-3 px-2 text-[12.5px]">${dueHtml(t)}</td>
           <td class="py-3 px-2" onclick="event.stopPropagation()">${statusCell(t)}</td>
           <td class="py-3 text-center whitespace-nowrap" onclick="event.stopPropagation()">${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
-        </tr>`; }).join('') + (ts.length > S.listLimit ? `<tr><td colspan="8" class="p-3 text-center"><button class="btn btn-ghost btn-sm" onclick="W.moreList()">Xem thêm ${Math.min(200, ts.length - S.listLimit)} việc (còn ${ts.length - S.listLimit})</button></td></tr>` : '')
-        : `<tr><td colspan="8" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
+        </tr>`; }).join('') + (ts.length > S.listLimit ? `<tr><td colspan="9" class="p-3 text-center"><button class="btn btn-ghost btn-sm" onclick="W.moreList()">Xem thêm ${Math.min(200, ts.length - S.listLimit)} việc (còn ${ts.length - S.listLimit})</button></td></tr>` : '')
+        : `<tr><td colspan="9" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
       </tbody>
     </table>
   </div>`;
@@ -509,7 +510,7 @@ function dashboard(){
       <div class="flex items-end gap-2 h-32">${weeks.map(w => `<div class="flex-1 flex flex-col items-center justify-end h-full" title="${w.label}: ${w.n} việc"><div class="text-[11px] text-gray-500 mb-0.5">${w.n || ''}</div><div class="w-full rounded-t bg-green-500/80" style="height:${w.n / maxW * 100}%;min-height:${w.n ? 4 : 1}px"></div><div class="text-[11px] text-gray-400 mt-1">${w.label}</div></div>`).join('')}</div></div>
   </div>
   <div class="grid lg:grid-cols-2 gap-4">
-    <div class="card p-4"><div class="section-title mb-1">Tải công việc theo nhân sự</div><div class="text-[12px] text-gray-400 mb-3">Số việc đang mở của mỗi người <span class="inline-flex items-center gap-1 ml-2"><i class="w-2 h-2 rounded-sm inline-block" style="background:#94a3b8"></i>Cần làm <i class="w-2 h-2 rounded-sm inline-block ml-1" style="background:#2f6fed"></i>Đang làm <i class="w-2 h-2 rounded-sm inline-block ml-1" style="background:#d97706"></i>Chờ duyệt</span></div>
+    <div class="card p-4"><div class="section-title mb-1">Tải công việc theo nhân sự</div><div class="text-[12px] text-gray-400 mb-3">Số việc đang mở của mỗi người <span class="inline-flex items-center gap-1 ml-2"><i class="w-2 h-2 rounded-sm inline-block" style="background:#94a3b8"></i>Chưa thực hiện <i class="w-2 h-2 rounded-sm inline-block ml-1" style="background:#2f6fed"></i>Đang làm <i class="w-2 h-2 rounded-sm inline-block ml-1" style="background:#d97706"></i>Chờ duyệt</span></div>
       ${people.length ? `<div class="space-y-2.5">${people.map(([id, w]) => `<div class="flex items-center gap-2.5">${avatar(user(id), 'w-7 h-7 text-[10px]')}<div class="w-28 truncate text-[13px] text-slate-700" title="${esc(user(id).name)}">${esc(user(id).name)}</div>
         <div class="flex-1 h-4 bg-gray-100 rounded overflow-hidden flex">${['todo', 'doing', 'review'].map(k => `<div style="width:${w[k] / maxN * 100}%;background:${STATUS[k].dot}" title="${STATUS[k].t}: ${w[k]}"></div>`).join('')}</div>
         <div class="w-16 text-right text-[12.5px]"><b>${w.n}</b>${w.od ? ` <span class="text-red-600" title="Quá hạn">· ${w.od} trễ</span>` : ''}</div></div>`).join('')}</div>` : '<div class="text-gray-400 text-[13px] py-6 text-center">Không có việc đang mở.</div>'}</div>
@@ -537,12 +538,12 @@ function openTaskForm(id, status){
     const ps = creatableProjects();
     if(!ps.length){ toast(canCreateProject() ? 'Hãy tạo dự án trước khi thêm công việc.' : 'Bạn chưa tham gia dự án nào để thêm công việc.', 'error'); return; }
     const pid = S.project !== 'all' && ps.some(p => p.id === S.project) ? S.project : ps[0].id;
-    t = { id: newId('t'), projectId: pid, title: '', description: '', status: status || 'todo', priority: 'medium', assigneeIds: [meId()], followerIds: [], due: '', tags: [], subtasks: [], createdBy: meId() };
+    t = { id: newId('t'), projectId: pid, title: '', description: '', status: status || 'todo', priority: 'medium', assigneeIds: [meId()], followerIds: [], startDate: today(), due: '', tags: [], subtasks: [], createdBy: meId() };
   } else {
     t = S.data.tasks.find(x => x.id === id); if(!t) return;
     if(!canEditContent(t)){ toast('Chỉ người tạo công việc mới sửa được tên, mô tả và nội dung.', 'error'); return; }
   }
-  S.draft = JSON.parse(JSON.stringify(t)); S.draft.isNew = isNew; S.draft.readOnly = false; S.draft.kind = 'task'; S.detail = null; S.mention = new Set();
+  S.draft = JSON.parse(JSON.stringify(t)); S.draft.isNew = isNew; S.draft.readOnly = false; S.draft.kind = 'task'; S.detail = null; S.mention = new Set(); S.draft.files = [];
   S.draft.followerIds = [...fids(t)].filter(id => !t.assigneeIds.includes(id));
   const p = projById(S.draft.projectId);
   openModal(`
@@ -552,6 +553,7 @@ function openTaskForm(id, status){
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(S.draft.title)}" maxlength="300" placeholder="Nhập nội dung công việc..." oninput="W.d('title',this.value)"></div>
         <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: S.draft.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết...', minHeight: 130 })}</div>
         <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
+        <div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm <span class="font-normal text-gray-400">(tối đa ${MAX_MB}MB/tệp)</span></label><label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Chọn tệp<input type="file" multiple class="hidden" onchange="event.stopPropagation();W.pendFiles(this)" accept=".${OK_EXT.join(',.')}"></label></div><div id="tk-pfiles" class="space-y-1.5"></div></div>
       </div>
       <div class="md:col-span-2 space-y-4 min-w-0">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === S.draft.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
@@ -559,7 +561,10 @@ function openTaskForm(id, status){
           ${isNew ? `<div><label class="label">Trạng thái ban đầu</label><select class="input" onchange="W.d('status',this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${S.draft.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select></div>` : ''}
           <div class="${isNew ? '' : 'col-span-2'}"><label class="label">Ưu tiên</label><select class="input" onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${S.draft.priority === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select></div>
         </div>
-        <div><label class="label">Hạn chót</label><input type="date" class="input" value="${esc(S.draft.due)}" onchange="W.d('due',this.value)"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Ngày bắt đầu <span class="text-red-500">*</span></label><input id="tk-start" type="date" class="input" value="${esc(S.draft.startDate || '')}" ${S.draft.due ? 'max="' + esc(S.draft.due) + '"' : ''} onchange="W.d('startDate',this.value);W.checkDates()"></div>
+          <div><label class="label">Hạn chót</label><input id="tk-due" type="date" class="input" value="${esc(S.draft.due)}" ${S.draft.startDate ? 'min="' + esc(S.draft.startDate) + '"' : ''} onchange="W.d('due',this.value);W.checkDates()"></div>
+        </div>
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
         <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
@@ -569,10 +574,63 @@ function openTaskForm(id, status){
     <div class="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
       <button class="btn btn-ghost" onclick="A.cancelModal()">Huỷ</button><button class="btn btn-primary" id="tk-save" onclick="W.saveTask()">${I.check} ${isNew ? 'Thêm công việc' : 'Lưu thay đổi'}</button>
     </div>`, 'max-w-4xl');
-  paintSubs(); paintAssignees(); paintFollowers(); paintTags();
+  paintSubs(); paintAssignees(); paintFollowers(); paintTags(); paintPend();
   setTimeout(() => { const el = $('tk-title'); if(el && isNew) el.focus(); }, 50);
 }
 function d(k, v){ if(S.draft) S.draft[k] = v; }
+/** Ngày bắt đầu không được sau hạn chót: cập nhật giới hạn của 2 ô ngày và báo ngay khi nhập sai. */
+function checkDates(){
+  const t = S.draft; if(!t) return;
+  const a = $('tk-start'), b = $('tk-due');
+  if(a){ if(t.due) a.setAttribute('max', t.due); else a.removeAttribute('max'); }
+  if(b){ if(t.startDate) b.setAttribute('min', t.startDate); else b.removeAttribute('min'); }
+  if(t.startDate && t.due && t.startDate > t.due) toast('Ngày bắt đầu không được sau hạn chót.', 'error');
+}
+
+/* ----- Tệp đính kèm chọn ngay trong form tạo việc: giữ trong máy, tải lên sau khi việc được lưu ----- */
+const MAX_FILES_TASK = 30;
+function pendFiles(input){
+  const files = [...input.files]; input.value = ''; if(!files.length || !S.draft) return;
+  const q = S.draft.files = S.draft.files || [];
+  for(const f of files){
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if(!OK_EXT.includes(ext)){ toast('Không hỗ trợ tệp .' + ext + ' (' + f.name + ').', 'error'); continue; }
+    if(f.size > MAX_MB * 1048576){ toast(f.name + ' lớn hơn ' + MAX_MB + 'MB.', 'error'); continue; }
+    if(!f.size){ toast(f.name + ' là tệp rỗng.', 'error'); continue; }
+    if(q.length >= MAX_FILES_TASK){ toast('Mỗi công việc tối đa ' + MAX_FILES_TASK + ' tệp.', 'error'); break; }
+    if(q.some(x => x.name === f.name && x.size === f.size)) continue;
+    q.push(f); modalDirty = true;
+  }
+  paintPend();
+}
+function pendDel(i){ if(!S.draft || !S.draft.files) return; S.draft.files.splice(i, 1); paintPend(); }
+function paintPend(){
+  const el = $('tk-pfiles'); if(!el || !S.draft) return;
+  const fs = S.draft.files || [];
+  el.innerHTML = fs.length ? fs.map((f, i) => `
+    <div class="flex items-center gap-2.5 border border-gray-200 rounded-lg p-2">
+      <div class="w-9 h-9 rounded bg-gray-100 text-gray-500 flex items-center justify-center text-[10px] font-bold uppercase shrink-0">${esc((f.name.split('.').pop() || '').slice(0, 4))}</div>
+      <div class="min-w-0 flex-1"><div class="text-[13px] font-medium text-slate-800 truncate" title="${esc(f.name)}">${esc(f.name)}</div><div class="text-[11.5px] text-gray-400">${sizeText(f.size)} · sẽ tải lên khi bấm ${S.draft.isNew ? 'Thêm công việc' : 'Lưu thay đổi'}</div></div>
+      <button class="text-gray-400 hover:text-red-600 p-1" title="Bỏ tệp này" onclick="W.pendDel(${i})">${I.x}</button></div>`).join('')
+    : '<div class="text-[12.5px] text-gray-400">Chưa chọn tệp nào.</div>';
+}
+/** Tải lên lần lượt các tệp đã chọn cho việc vừa lưu (chạy nền sau khi form đã đóng). Lỗi từng tệp được báo riêng, việc vẫn được giữ. */
+async function uploadQueued(taskId, files){
+  const bad = []; let ok = 0;
+  toast('Đang tải ' + files.length + ' tệp lên...', 'info');
+  S.uploading += files.length;
+  for(const f of files){
+    try { await wfetch(apiUrl() + 'upload?taskId=' + enc(taskId) + '&name=' + enc(f.name), { method:'POST', headers:{ 'X-Okr-Token': token(), 'Content-Type':'application/octet-stream' }, body: f }); ok++; }
+    catch(e){
+      if(e.auth){ S.uploading = 0; forceLogout(e.message); return; }
+      bad.push(f.name + ' (' + (e.message === 'Failed to fetch' ? 'mất kết nối' : e.message) + ')');
+    }
+    S.uploading--;
+  }
+  S.version = null; await load(true);
+  if(bad.length) toast('Công việc đã lưu nhưng ' + bad.length + ' tệp chưa tải lên được: ' + bad.join('; ') + '. Mở công việc để thêm lại.', 'error');
+  else toast('Đã đính kèm ' + ok + ' tệp vào công việc.');
+}
 
 /* ----- Chi tiết trên bảng: chỉ đọc nội dung ----- */
 const curTask = () => (S.draft && S.data ? S.data.tasks.find(x => x.id === S.draft.id) : null) || null;
@@ -637,7 +695,10 @@ function paintSide(){
       <div><label class="label">Trạng thái</label>${ed ? `<select class="input" onchange="W.detailStatus(this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select>` : `<div class="py-1.5">${statusBadge(t.status)}</div>`}</div>
       <div><label class="label">Ưu tiên</label><div class="py-1.5">${prioBadge(t.priority)}</div></div>
     </div>
-    <div><label class="label">Hạn chót</label><div class="py-1.5 text-[14px]">${dueHtml(t)}</div></div>
+    <div class="grid grid-cols-2 gap-3">
+      <div><label class="label">Ngày bắt đầu</label><div class="py-1.5 text-[14px] ${t.startDate ? 'text-slate-700' : 'text-gray-400'}">${t.startDate ? fmt(t.startDate) : '—'}</div></div>
+      <div><label class="label">Hạn chót</label><div class="py-1.5 text-[14px]">${dueHtml(t)}</div></div>
+    </div>
     <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
     <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
     <div><label class="label">Nhãn</label><div class="flex flex-wrap gap-1.5">${t.tags.length ? tagChips(t.tags) : '<span class="text-[12.5px] text-gray-400">Không có</span>'}</div></div>
@@ -798,12 +859,14 @@ function recWd(n){
 async function saveTask(){
   const t = S.draft; if(!t || t.readOnly || t.kind !== 'task') return;
   const title = t.title.trim(); if(!title){ toast('Nhập tên công việc.', 'error'); const el = $('tk-title'); if(el) el.focus(); return; }
+  if(!t.startDate){ toast('Chọn ngày bắt đầu của công việc.', 'error'); const el = $('tk-start'); if(el) el.focus(); return; }
+  if(t.due && t.startDate > t.due){ toast('Ngày bắt đầu không được sau hạn chót.', 'error'); return; }
   const btn = $('tk-save'); if(btn){ btn.disabled = true; btn.textContent = 'Đang lưu...'; }
-  const payload = { id: t.id, projectId: t.projectId, title, description: richGet('tk-desc'), priority: t.priority, assigneeIds: t.assigneeIds, followerIds: t.followerIds.filter(id => !t.assigneeIds.includes(id)), due: t.due,
+  const payload = { id: t.id, projectId: t.projectId, title, description: richGet('tk-desc'), priority: t.priority, assigneeIds: t.assigneeIds, followerIds: t.followerIds.filter(id => !t.assigneeIds.includes(id)), startDate: t.startDate, due: t.due,
     tags: t.tags, subtasks: t.subtasks.filter(s => s.text.trim()), okrId: t.okrId || null };
   if(t.isNew) payload.status = t.status;
   const j = await act('saveTask', { task: payload });
-  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã thêm công việc.' : 'Đã lưu nội dung công việc.'); spawnNotice(j); }
+  if(j){ const isNew = t.isNew, files = t.files || []; A.closeModal(); S.draft = null; toast(isNew ? 'Đã thêm công việc.' : 'Đã lưu nội dung công việc.'); spawnNotice(j); if(files.length) uploadQueued(t.id, files); }
   else if(btn){ btn.disabled = false; btn.innerHTML = I.check + ' ' + (t.isNew ? 'Thêm công việc' : 'Lưu thay đổi'); }
 }
 async function deleteTask(id, fromModal){
@@ -1238,7 +1301,7 @@ window.W = {
   view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
-  d, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
+  d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
   pickFiles, delAttachment, cmInput, cmPick, cmKey, postComment, delComment,
   openWorkspace, saveWorkspace, deleteWorkspace, openDepartments, saveDept, delDept, openProject, saveProject, deleteProject, filterPick,
   _test: { nextDueOf, recText, S, canEdit, canDelete, filtered, mineTasks, createdTasks, personalView, scopeNote, fmtComment },

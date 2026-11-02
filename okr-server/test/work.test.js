@@ -179,7 +179,7 @@ describe('API công việc', () => {
     await denied(ptok.mgr2, 'saveProject', { project: { id: p1, workspaceId: w1, name: 'Chiếm dự án' } }, /quản lý dự án|Giám đốc/);
   });
 
-  const T = (extra) => ({ id: nid('t'), projectId: p1, title: 'Việc ' + seqId, ...extra });
+  const T = (extra) => ({ id: nid('t'), projectId: p1, title: 'Việc ' + seqId, startDate: todayISO(), ...extra });
   test('Thuộc tính đầy đủ: nhiều người làm, nhãn, việc con, ưu tiên, hạn', async () => {
     const t = T({ title: 'Thiết kế trang chủ', description: 'Mô tả dài', priority: 'urgent', status: 'doing', due: plusDays(5), assigneeIds: [a, b], tags: ['ui', 'ui', ' gấp '],
       subtasks: [{ text: 'Wireframe', done: true }, { text: 'Mockup' }, { text: '  ' }] });
@@ -413,7 +413,7 @@ describe('API công việc', () => {
   });
   test('Giới hạn dung lượng tệp', async () => {
     const t = T({ assigneeIds: [a] }); await call(ptok.mgr, 'saveTask', { task: t });
-    const r = await fetch(BASE + 'upload?taskId=' + t.id + '&name=lon.zip', { method: 'POST', headers: { 'x-okr-token': ptok.a }, body: Buffer.alloc(21 * 1024 * 1024) }).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }));
+    const r = await fetch(BASE + 'upload?taskId=' + t.id + '&name=lon.zip', { method: 'POST', headers: { 'x-okr-token': ptok.a }, body: Buffer.alloc(11 * 1024 * 1024) }).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }));
     assert.equal(r.ok, false);
     assert.deepEqual(fs.existsSync(path.join(UP, t.id)) ? fs.readdirSync(path.join(UP, t.id)) : [], [], 'không để lại tệp dở dang');
   });
@@ -457,7 +457,7 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
   const taskIn = async (who, tid, ws = WS) => (await work(tk[who], ws)).tasks.find(x => x.id === tid);
   const vis = async (who, tid) => !!(await taskIn(who, tid));
   const legacy = async who => (await (await fetch(BASE + '?token=' + encodeURIComponent(tk[who]))).json()).db;
-  const TT = extra => ({ id: nid('t'), projectId: PRJ, title: 'Việc v11 ' + seqId, ...extra });
+  const TT = extra => ({ id: nid('t'), projectId: PRJ, title: 'Việc v11 ' + seqId, startDate: todayISO(), ...extra });
   const up = (who, taskId, name, body) => fetch(BASE + 'upload?taskId=' + taskId + '&name=' + encodeURIComponent(name), { method: 'POST', headers: { 'x-okr-token': tk[who] }, body }).then(r => r.json());
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
   const RT = '<!--rt-->';
@@ -518,7 +518,7 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
   });
 
   test('đường cũ db.tasks (màn báo cáo tuần) lọc cùng quy tắc xem và có followerIds', async () => {
-    const mkL = async (who, extra) => { const t = { id: nid('tl'), projectId: 'p_general', title: 'L ' + seqId, ...extra }; await call(tk[who], 'saveTask', { task: t }); return t.id; };
+    const mkL = async (who, extra) => { const t = { id: nid('tl'), projectId: 'p_general', title: 'L ' + seqId, startDate: todayISO(), ...extra }; await call(tk[who], 'saveTask', { task: t }); return t.id; };
     const l1 = await mkL('mgrA', { assigneeIds: [id.ea1], followerIds: [id.eb1] });
     const l2 = await mkL('mgrB', { assigneeIds: [id.eb1] });
     const l3 = await mkL('ea2', { assigneeIds: [id.ea2] });
@@ -745,8 +745,8 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
     assert.equal(await count(), before);
     const col = await pg.query("SELECT data_type FROM information_schema.columns WHERE table_name='recurring_tasks' AND column_name='followers'");
     assert.equal(col.rows[0].data_type, 'jsonb');
-    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 11);
-    assert.equal((await (await fetch(BASE + 'health')).json()).version, 11);
+    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 12);
+    assert.equal((await (await fetch(BASE + 'health')).json()).version, 12);
   });
 });
 
@@ -776,7 +776,7 @@ describe('KR nguồn của việc sinh từ báo cáo tuần (v10)', () => {
   });
   test('việc tạo tay / việc lặp lại không có KR', async () => {
     const id = nid('t');
-    await call(tk, 'saveTask', { task: { id, projectId: 'p_general', title: 'Việc tay', assigneeIds: [me], due: plusDays(2), krId: 'krKA' } });
+    await call(tk, 'saveTask', { task: { id, projectId: 'p_general', title: 'Việc tay', startDate: todayISO(), assigneeIds: [me], due: plusDays(2), krId: 'krKA' } });
     assert.equal((await taskOf(id)).krId, '');
   });
   test('sửa báo cáo: đổi KR của giải pháp, thêm giải pháp mới; trạng thái việc giữ nguyên', async () => {
@@ -798,5 +798,66 @@ describe('KR nguồn của việc sinh từ báo cáo tuần (v10)', () => {
       assert.equal((await taskOf('tks1')).krId, 'krKB'); assert.equal((await taskOf('tks3')).krId, 'krKA');
       assert.equal((await taskOf('tkso')).krId, '');
     } finally { await pg.end(); }
+  });
+});
+
+describe('v12: ngày bắt đầu, email thông báo, giới hạn 10MB', () => {
+  let tk, me;
+  const taskOf = async id => (await work(tk)).tasks.find(x => x.id === id);
+  const mk = extra => ({ id: nid('t'), projectId: 'p_general', title: 'Việc v12 ' + seqId, ...extra });
+  before(async () => { if (!proc) await startServer(); tk = await login('admin'); me = (await work(tk)).viewerId; });
+
+  test('ngày bắt đầu bắt buộc khi tạo, không sau hạn chót, lưu và trả về đúng', async () => {
+    await denied(tk, 'saveTask', { task: mk({ assigneeIds: [me] }) }, /ngày bắt đầu/i);
+    await denied(tk, 'saveTask', { task: mk({ assigneeIds: [me], startDate: plusDays(3), due: plusDays(1) }) }, /không được sau hạn/i);
+    await denied(tk, 'saveTask', { task: mk({ assigneeIds: [me], startDate: '2026-13-45' }) }, /không hợp lệ/i);
+    const t = mk({ assigneeIds: [me], startDate: plusDays(1), due: plusDays(5) });
+    await call(tk, 'saveTask', { task: t });
+    assert.equal((await taskOf(t.id)).startDate, plusDays(1));
+    await call(tk, 'saveTask', { task: { ...t, title: 'Đổi tên v12' } });                           // không gửi startDate → giữ nguyên
+    assert.equal((await taskOf(t.id)).startDate, plusDays(1));
+    await call(tk, 'saveTask', { task: { ...t, startDate: plusDays(2) } });
+    assert.equal((await taskOf(t.id)).startDate, plusDays(2));
+    await denied(tk, 'saveTask', { task: { ...t, startDate: '' } }, /ngày bắt đầu/i);               // việc đã có ngày bắt đầu thì không xoá được
+  });
+
+  test('nhãn trạng thái todo vẫn là "todo" trong dữ liệu', async () => {
+    const t = mk({ assigneeIds: [me], startDate: todayISO() });
+    await call(tk, 'saveTask', { task: t });
+    assert.equal((await taskOf(t.id)).status, 'todo');
+  });
+
+  test('email: không lộ trong dữ liệu chung, Giám đốc nhập và xem được; email sai bị từ chối', async () => {
+    const r = await (await fetch(BASE + '?token=' + encodeURIComponent(tk))).json();
+    assert.ok(r.db.users.every(u => !('email' in u)), 'users công khai không có email');
+    const admin0 = r.db.users.find(u => u.id === me);
+    await denied(tk, 'saveUser', { user: { ...admin0, email: 'khong-hop-le' } }, /email/i);
+    await call(tk, 'saveUser', { user: { ...admin0, email: 'Admin.Test@Example.com' } });
+    const r2 = await (await fetch(BASE + '?token=' + encodeURIComponent(tk))).json();
+    assert.equal(r2.db.emails[me], 'admin.test@example.com');
+    assert.ok(r2.db.users.every(u => !('email' in u)));
+  });
+
+  test('mail.build: dựng đúng nội dung 4 loại thông báo, escape HTML, tắt khi thiếu SMTP', () => {
+    const mail = require('../src/mail.js')({ pool: null, env: {}, log: { warn() {}, error() {} } });
+    assert.equal(mail.enabled, false);
+    mail.queue([{ kind: 'assigned', to: ['x'] }]);                                                  // tắt → không lỗi
+    const actor = { name: 'Sếp <b>' };
+    const t = { title: 'Làm <script>', project: 'Dự án', due: '2026-12-31', startDate: '2026-12-01', priority: 'high' };
+    const a = mail.build({ kind: 'assigned', task: t }, actor);
+    assert.match(a.subject, /giao việc/); assert.match(a.html, /01\/12\/2026/); assert.match(a.html, /31\/12\/2026/); assert.match(a.html, /Cao/);
+    assert.ok(!a.html.includes('<script>') && !a.html.includes('Sếp <b>'), 'đã escape HTML');
+    assert.match(mail.build({ kind: 'reassigned', task: t }, actor).subject, /giao lại/);
+    assert.match(mail.build({ kind: 'taskComment', task: t, text: 'Xin chào' }, actor).html, /Xin chào/);
+    assert.match(mail.build({ kind: 'reportFeedback', report: { week: 5, year: 2026, okrTitle: 'OKR' }, text: 'Tốt' }, actor).subject, /5\/2026/);
+    assert.equal(mail.build({ kind: 'lạ' }, actor), null);
+    assert.ok(mail.EMAIL_RE.test('a@b.vn') && !mail.EMAIL_RE.test('a b@c.d') && !mail.EMAIL_RE.test('abc'));
+  });
+
+  test('tệp: 9MB qua, 11MB bị từ chối', async () => {
+    const t = mk({ assigneeIds: [me], startDate: todayISO() }); await call(tk, 'saveTask', { task: t });
+    const up = n => fetch(BASE + 'upload?taskId=' + t.id + '&name=f' + n + '.zip', { method: 'POST', headers: { 'x-okr-token': tk }, body: Buffer.alloc(n * 1024 * 1024, 1) }).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }));
+    assert.equal((await up(9)).ok, true);
+    assert.equal((await up(11)).ok, false);
   });
 });

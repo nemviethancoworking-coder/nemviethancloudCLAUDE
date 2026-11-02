@@ -27,7 +27,7 @@ const STATUSES = ['todo', 'doing', 'review', 'done'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const DEFAULT_WS = 'w_default', DEFAULT_DEPT = 'd_default', DEFAULT_PROJECT = 'p_general';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/uploads';
-const MAX_FILE = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
+const MAX_FILE = Number(process.env.MAX_UPLOAD_MB || 10) * 1024 * 1024;
 const MAX_FILES_PER_TASK = 30;
 const MIME = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic',
@@ -200,6 +200,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at text NOT NULL DEFAULT ''
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS spawned_id text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS series_id text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS kr_id text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date text NOT NULL DEFAULT '';
 ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS mentions jsonb NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS task_assignees (task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (task_id, user_id));
 CREATE TABLE IF NOT EXISTS task_attachments (id text PRIMARY KEY, task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, name text NOT NULL,
@@ -358,7 +359,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
   /* ---------- Đọc dữ liệu ---------- */
   const jsonTask = (t, assignees, followers, cc, ac) => ({
     id: t.id, projectId: t.project_id, title: t.title, description: t.description, status: t.status, priority: t.priority,
-    assigneeIds: assignees, followerIds: followers || [], due: t.due, tags: t.tags || [], subtasks: t.subtasks || [], recurrence: t.recurrence || null,
+    assigneeIds: assignees, followerIds: followers || [], startDate: t.start_date || '', due: t.due, tags: t.tags || [], subtasks: t.subtasks || [], recurrence: t.recurrence || null,
     createdBy: t.created_by, createdAt: t.created_at, completedAt: t.completed_at, position: t.position,
     reportId: t.report_id || null, okrId: t.okr_id || null, krId: t.kr_id || '', seriesId: t.series_id || '', spawned: !!t.spawned_id, commentCount: cc || 0, attachCount: ac || 0,
   });
@@ -470,10 +471,12 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
     let ids = idList(tpl.assignees).filter(id => c.byId[id] && c.byId[id].active);
     if (!ids.length) ids = [c.byId[tpl.created_by] && c.byId[tpl.created_by].active ? tpl.created_by : c.me.id];
     const id = newId('t');
-    await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id)
-      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    const today = todayISO();
+    await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id,start_date)
+      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [id, tpl.title, ids[0], due, new Date().toISOString(), tpl.project_id, tpl.description, tpl.priority, JSON.stringify(tpl.tags || []),
-       JSON.stringify((tpl.subtasks || []).map(s => ({ ...s, done: false }))), JSON.stringify(rule), tpl.created_by || ids[0], await nextPosition(c.q, tpl.project_id, 'todo'), tpl.id]);
+       JSON.stringify((tpl.subtasks || []).map(s => ({ ...s, done: false }))), JSON.stringify(rule), tpl.created_by || ids[0], await nextPosition(c.q, tpl.project_id, 'todo'), tpl.id,
+       due && due < today ? due : today]);        // việc lặp lại bắt đầu từ lúc được sinh ra (không sau hạn)
     for (const a of ids) {
       await c.q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, a]);
       if (!proj.open) await ensureMember(c.q, tpl.project_id, proj.workspace_id, a);
@@ -630,21 +633,37 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const prev = old ? old.assignees : [];
       for (const a of assignees) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError(assignError(c, a));
       const due = normDue(t.due);
+      // Ngày bắt đầu: bắt buộc khi tạo mới, không được sau hạn chót. Việc cũ chưa có ngày bắt đầu thì được để trống cho đến khi người tạo chọn.
+      const startRaw = str(t.startDate).trim().slice(0, 10);
+      let startDate;
+      if (old) {
+        if (t.startDate === undefined) startDate = old.t.start_date || '';
+        else if (!startRaw) { if (old.t.start_date) throw new AppError('Chọn ngày bắt đầu của công việc.'); startDate = ''; }
+        else startDate = startRaw;
+      } else {
+        if (!startRaw) throw new AppError('Chọn ngày bắt đầu của công việc.');
+        startDate = startRaw;
+      }
+      if (startDate && !validISO(startDate)) throw new AppError('Ngày bắt đầu không hợp lệ.');
+      if (startDate && due && startDate > due) throw new AppError('Ngày bắt đầu không được sau hạn chót.');
       const tags = cleanTags(t.tags), subtasks = cleanSubtasks(t.subtasks), desc = cleanRich(t.description, 20000);
       const followers = Array.isArray(t.followerIds) ? cleanFollowers(c, t.followerIds, assignees, old ? old.followers : []) : null;     // không gửi = giữ nguyên
       if (old) {
-        await c.q.query('UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7 WHERE id=$1',
-          [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks)]);
+        await c.q.query('UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, start_date=$8 WHERE id=$1',
+          [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), startDate]);
       } else {
         const status = STATUSES.includes(t.status) ? t.status : 'todo';
         const okrId = t.okrId ? str(t.okrId) : null;
-        await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id)
-          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'')`,
+        await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id,start_date)
+          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'',$16)`,
           [t.id, title, assignees[0], okrId, due, status, new Date().toISOString(), projectId, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks),
-           c.me.id, await nextPosition(c.q, projectId, status), status === 'done' ? new Date().toISOString() : '']);
+           c.me.id, await nextPosition(c.q, projectId, status), status === 'done' ? new Date().toISOString() : '', startDate]);
       }
       await writeAssignees(c, t.id, assignees, pc);
       if (followers) await writeFollowers(c, t.id, followers, pc);
+      // Email: người MỚI được giao việc (tạo mới, hoặc người tạo thêm người thực hiện khi sửa). Gửi sau khi giao dịch thành công.
+      const newcomers = assignees.filter(a => !prev.includes(a) && a !== c.me.id);
+      if (c.notes && newcomers.length) c.notes.push({ kind: 'assigned', to: newcomers, actorId: c.me.id, task: { id: t.id, title, due, startDate, priority, project: pc.p.name } });
       return {};
     },
     /** Giao lại công việc cho người khác: người đang thực hiện, người tạo hoặc cấp trên; không giới hạn theo cấp bậc. Ghi lại vào bình luận. */
@@ -662,6 +681,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       await c.q.query('INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)',
         [newId('c'), tc.t.id, c.me.id, 'Đã giao lại công việc: ' + tc.assignees.map(name).join(', ') + ' → ' + ids.map(name).join(', '), new Date().toISOString(),
          JSON.stringify(added.filter(a => a !== c.me.id))]);
+      const toMail = added.filter(a => a !== c.me.id);
+      if (c.notes && toMail.length) c.notes.push({ kind: 'reassigned', to: toMail, actorId: c.me.id, task: { id: tc.t.id, title: tc.t.title, due: tc.t.due, startDate: tc.t.start_date || '', priority: tc.t.priority, project: tc.p ? tc.p.name : '' } });
       return {};
     },
     /** Tick / bỏ tick một việc con (tiến độ) — chỉ đổi trạng thái xong, không đổi nội dung việc con. */
@@ -702,7 +723,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
     async addTask(c, p) {
       const t = p.task;
       if (!t || !t.id || !str(t.title).trim()) throw new AppError('Thiếu dữ liệu công việc.');
-      return actions.saveTask(c, { task: { id: t.id, title: t.title, due: t.due, okrId: t.okrId, projectId: DEFAULT_PROJECT, assigneeIds: [t.assigneeId || c.me.id], status: 'todo' } });
+      const due = normDue(t.due), today = todayISO();
+      return actions.saveTask(c, { task: { id: t.id, title: t.title, due: t.due, startDate: t.startDate || (due && due < today ? due : today), okrId: t.okrId, projectId: DEFAULT_PROJECT, assigneeIds: [t.assigneeId || c.me.id], status: 'todo' } });
     },
     async deleteTask(c, p) {
       const tc = await taskCtx(c, p.id); if (!tc) return;
@@ -788,6 +810,9 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const mentions = idList(cm.mentions).filter(id => c.byId[id]).slice(0, 20);
       await c.q.query('INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)',
         [cm.id, cm.taskId, c.me.id, text, new Date().toISOString(), JSON.stringify(mentions)]);
+      // Email: người giao (tạo), người thực hiện, người theo dõi và người được @nhắc — trừ chính người viết.
+      const toMail = uniq([tc.t.created_by, ...tc.assignees, ...tc.followers, ...mentions].filter(id => id && id !== c.me.id));
+      if (c.notes && toMail.length) c.notes.push({ kind: 'taskComment', to: toMail, actorId: c.me.id, task: { id: tc.t.id, title: tc.t.title }, text: plainOf(text).trim().slice(0, 600) });
     },
     async deleteTaskComment(c, p) {
       const row = await one(c.q, 'SELECT author_id, task_id FROM task_comments WHERE id=$1', [p.id]); if (!row) return;

@@ -59,6 +59,16 @@ getenv() { grep "^$1=" "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true;
 [ -n "$(getenv TOKEN_SECRET)" ] || setenv TOKEN_SECRET "$(rand 64)"
 setenv ALLOWED_ORIGINS "$ORIGINS"
 
+# Email thông báo (Gmail SMTP): gửi khi giao việc, giao lại, phản hồi báo cáo tuần, bình luận. Thiếu mật khẩu ứng dụng thì tắt, app vẫn chạy.
+[ -n "$(getenv SMTP_USER)" ] || setenv SMTP_USER "${SMTP_USER:-nemviethancoworking@gmail.com}"
+[ -n "$(getenv APP_URL)" ]   || setenv APP_URL "https://nemviethancoworking-coder.github.io/nemviethancloudCLAUDE/okr/"
+if [ -n "${SMTP_PASS:-}" ]; then
+  setenv SMTP_PASS "$(printf '%s' "$SMTP_PASS" | tr -d ' ')"
+elif [ -z "$(getenv SMTP_PASS)" ]; then
+  P=$(asks "  Mật khẩu ứng dụng Gmail (App Password, 16 ký tự) của $(getenv SMTP_USER) — Enter để bỏ qua (email sẽ tắt): ")
+  if [ -n "$P" ]; then setenv SMTP_PASS "$(printf '%s' "$P" | tr -d ' ')"; else warn "Chưa có mật khẩu ứng dụng → email thông báo đang TẮT. Bật sau: SMTP_PASS=xxxx chạy lại install.sh."; fi
+fi
+
 pick_image() {  # 1) ảnh đã có sẵn trên máy  2) tải về (tối đa 3 phút mỗi nguồn, có hiện tiến độ)
   local img
   for img in "$@"; do docker image inspect "$img" >/dev/null 2>&1 && { echo "$img"; return; }; done
@@ -112,7 +122,7 @@ location /okr-api/ {
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_read_timeout 120s;
-    client_max_body_size 22m;            # tệp đính kèm tối đa 20MB (giới hạn thật nằm trong API)
+    client_max_body_size 12m;            # tệp đính kèm tối đa 10MB (giới hạn thật nằm trong API)
 }
 EOF
 NGBK="$DIR/backups/nginx-$TS"; mkdir -p "$NGBK"

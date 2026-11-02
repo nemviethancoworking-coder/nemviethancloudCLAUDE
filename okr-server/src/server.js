@@ -1,5 +1,6 @@
 /**
  * OKR Weekly — API máy chủ (Node.js + PostgreSQL), thay cho Apps Script (Code.gs v4).
+ * v12: ngày bắt đầu của công việc (bắt buộc, không sau hạn), tệp đính kèm khi tạo việc (tối đa 10MB/tệp), thông báo email (Gmail SMTP) khi giao việc / giao lại / phản hồi báo cáo tuần / bình luận; nhãn trạng thái "Cần làm" đổi thành "Chưa thực hiện".
  * v11: người theo dõi (chỉ xem + bình luận), quy tắc xem/sửa/xoá việc theo người tạo/người nhận/chuỗi quản lý (bỏ share_all), rich text được làm sạch ở máy chủ.
  * v9: tách nơi tạo/sửa công việc (người tạo) khỏi bảng làm việc (khoá tên, mô tả), giao việc không giới hạn cấp bậc, mục Việc lặp lại riêng.
  * v8: thêm module quản lý công việc kiểu Base WeWork (src/work.js): Workspace → Phòng ban → Dự án → Công việc,
@@ -24,12 +25,13 @@ const { promisify } = require('util');
 const scryptAsync = promisify(crypto.scrypt);
 const gzipAsync = promisify(zlib.gzip);
 const { Pool } = require('pg');
+const makeMail = require('./mail');
 
 const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 11;
+const VERSION = 12;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -65,6 +67,7 @@ CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 async function migrate() {
   await pool.query(SCHEMA);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true');   // v6: khoá tài khoản
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''");          // v12: email nhận thông báo
   await W.migrate();                                                                                       // v8: workspace, dự án, việc nhiều người làm, tệp đính kèm
 }
 
@@ -122,8 +125,8 @@ function normalizeRoles(users) {
   return users;
 }
 async function getUsers(q = pool) {
-  const r = await q.query('SELECT id, username, name, role, dept, title, color, manager_id, active FROM users ORDER BY seq');
-  return normalizeRoles(r.rows.map(u => ({ id: u.id, username: u.username, name: u.name, role: u.role, dept: u.dept, title: u.title, color: u.color, managerId: u.manager_id, active: u.active !== false })));
+  const r = await q.query('SELECT id, username, name, role, dept, title, color, manager_id, active, email FROM users ORDER BY seq');
+  return normalizeRoles(r.rows.map(u => ({ id: u.id, username: u.username, name: u.name, role: u.role, dept: u.dept, title: u.title, color: u.color, managerId: u.manager_id, active: u.active !== false, email: u.email || '' })));
 }
 async function ctx(viewer, q = pool) {
   const users = await getUsers(q), byId = {};
@@ -164,7 +167,9 @@ function publicPart() {
 }
 async function buildPublic() {
   const db = await loadDB(null);
-  return { users: db.users, json: JSON.stringify({ cycles: db.cycles, users: db.users, okrs: db.okrs, reports: db.reports }).slice(1, -1) };
+  // Email chỉ dùng để gửi thông báo: không đưa vào dữ liệu chung ai cũng tải được (Giám đốc nhận riêng bản đồ email để quản lý tài khoản).
+  const publicUsers = db.users.map(({ email, ...u }) => u);
+  return { users: db.users, json: JSON.stringify({ cycles: db.cycles, users: publicUsers, okrs: db.okrs, reports: db.reports }).slice(1, -1) };
 }
 /* Công việc cho đường cũ (db.tasks của màn báo cáo tuần): chỉ việc sinh từ báo cáo tuần + việc ở dự án mặc định, và CHỈ việc người xem được thấy
  * theo cùng quy tắc với màn Công việc (W.filterVisibleTasks). Kèm bình luận/ghi chú của từng việc. */
@@ -193,7 +198,9 @@ async function dbResponse(viewer, extra) {
   const v = dataVersion, pub = await publicPart();
   const tasks = viewer ? await viewerTasks(viewer, pub.users) : [];
   const head = JSON.stringify({ ok: true, version: v, ...(extra || {}) }).slice(0, -1);
-  return head + ',"db":{' + pub.json + ',"tasks":' + JSON.stringify(tasks) + ',"viewerId":' + JSON.stringify(viewer ? viewer.id : null) + ',"loadedAt":"' + new Date().toISOString() + '"}}';
+  let emails = '';
+  if (viewer && viewer.role === 'director') { const m = {}; pub.users.forEach(u => { if (u.email) m[u.id] = u.email; }); emails = ',"emails":' + JSON.stringify(m); }
+  return head + ',"db":{' + pub.json + emails + ',"tasks":' + JSON.stringify(tasks) + ',"viewerId":' + JSON.stringify(viewer ? viewer.id : null) + ',"loadedAt":"' + new Date().toISOString() + '"}}';
 }
 async function loadDB(viewer) {
   const [cy, users, ok, kr, rp, cm] = await Promise.all([
@@ -239,6 +246,8 @@ async function tx(fn) {
 const one = async (q, sql, args) => (await q.query(sql, args)).rows[0];
 /* Module quản lý công việc (workspace → phòng ban → dự án → công việc): src/work.js */
 const W = require('./work')({ pool, AppError, deny, str, num, one, canManage, todayISO, ctxFor });
+/* Thông báo email (v12): hành động ghi vào c.notes, gửi ở nền sau khi giao dịch thành công. Xem src/mail.js. */
+const M = makeMail({ pool });
 
 async function login(p, ip) {
   const username = str(p.username).trim();
@@ -313,7 +322,7 @@ const A = {
     const newer = await c.q.query('SELECT kr_updates FROM reports WHERE okr_id=$1 AND seq > $2', [old.okr_id, old.seq]);
     const newerKr = new Set(); newer.rows.forEach(row => (row.kr_updates || []).forEach(ku => newerKr.add(ku.krId)));
     for (const ku of kus) if (!newerKr.has(ku.krId)) await c.q.query('UPDATE krs SET current=$1 WHERE id=$2 AND okr_id=$3', [num(ku.value), ku.krId, old.okr_id]);
-    // Đồng bộ công việc sinh ra từ giải pháp: giữ trạng thái việc cũ, thêm việc mới, bỏ việc 'Cần làm' của giải pháp đã xoá
+    // Đồng bộ công việc sinh ra từ giải pháp: giữ trạng thái việc cũ, thêm việc mới, bỏ việc 'Chưa thực hiện' của giải pháp đã xoá
     const ex = (await c.q.query('SELECT id, solution_id, status FROM tasks WHERE report_id=$1', [old.id])).rows;
     const keepSol = new Set(solutions.map(s => s.id));
     for (const t of ex) if (t.solution_id && !keepSol.has(t.solution_id) && t.status === 'todo') { await c.q.query('DELETE FROM tasks WHERE id=$1', [t.id]); W.removeTaskFiles([t.id]); }
@@ -335,6 +344,11 @@ const A = {
     const r = await one(c.q, 'SELECT user_id FROM reports WHERE id=$1', [cm.reportId]); if (!r) throw new AppError('Báo cáo không còn tồn tại.');
     if (r.user_id !== c.me.id && !canManage(c, r.user_id)) deny('Chỉ cấp trên của người viết hoặc Giám đốc được phản hồi báo cáo này.');
     await c.q.query('INSERT INTO comments(id,report_id,author_id,text,created_at,acknowledged) VALUES($1,$2,$3,$4,$5,false)', [cm.id, cm.reportId, c.me.id, text, str(cm.createdAt) || new Date().toISOString()]);
+    // Email: cấp trên phản hồi / chỉ đạo → báo cho người viết báo cáo (người viết tự trả lời thì không gửi).
+    if (c.notes && r.user_id !== c.me.id) {
+      const rep = await one(c.q, 'SELECT r.week, r.year, o.title FROM reports r LEFT JOIN okrs o ON o.id = r.okr_id WHERE r.id=$1', [cm.reportId]);
+      c.notes.push({ kind: 'reportFeedback', to: [r.user_id], actorId: c.me.id, report: { week: rep ? rep.week : '', year: rep ? rep.year : '', okrTitle: rep ? rep.title || '' : '' }, text: W.plainOf(text).trim().slice(0, 600) });
+    }
   },
   async ackComment(c, p) {
     const row = await one(c.q, 'SELECT r.user_id FROM comments cm JOIN reports r ON r.id = cm.report_id WHERE cm.id=$1', [p.id]);
@@ -422,12 +436,18 @@ const A = {
       if (wrong.length) throw new AppError('Còn ' + wrong.length + ' người trực thuộc không hợp với vai trò mới. Hãy chuyển họ sang cấp trên khác trước.');
     }
     const color = str(u.color) || (old && old.color) || '#2f6fed';
+    // Email nhận thông báo: để trống được (người đó sẽ không nhận mail); không gửi trường này = giữ nguyên.
+    let email = old ? (old.email || '') : '';
+    if (u.email !== undefined) {
+      email = str(u.email).trim().toLowerCase();
+      if (email && (email.length > 120 || !makeMail.EMAIL_RE.test(email))) throw new AppError('Email "' + str(u.email).trim().slice(0, 60) + '" không hợp lệ.');
+    }
     if (old) {
-      await c.q.query('UPDATE users SET username=$2, name=$3, role=$4, dept=$5, title=$6, color=$7, manager_id=$8 WHERE id=$1', [id, username, name, role, str(u.dept), str(u.title), color, mgrId]);
+      await c.q.query('UPDATE users SET username=$2, name=$3, role=$4, dept=$5, title=$6, color=$7, manager_id=$8, email=$9 WHERE id=$1', [id, username, name, role, str(u.dept), str(u.title), color, mgrId, email]);
       if (u.password) await c.q.query('UPDATE users SET pass_hash=$2 WHERE id=$1', [id, hashPassword(u.password)]);
     } else {
-      await c.q.query('INSERT INTO users(id,username,pass_hash,name,role,dept,title,color,manager_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-        [id, username, hashPassword(u.password), name, role, str(u.dept), str(u.title), color, mgrId]);
+      await c.q.query('INSERT INTO users(id,username,pass_hash,name,role,dept,title,color,manager_id,email) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [id, username, hashPassword(u.password), name, role, str(u.dept), str(u.title), color, mgrId, email]);
     }
   },
   /* Khoá / mở khoá (chỉ Giám đốc). Người bị khoá không đăng nhập được, phiên đang mở bị đăng xuất; dữ liệu cũ giữ nguyên. */
@@ -481,9 +501,11 @@ async function solutionKrMap(q, okrId, krUpdates) {
 }
 /** Việc sinh từ báo cáo tuần / nhập dữ liệu: thuộc dự án mặc định, người làm là người phụ trách. */
 async function insertTask(q, t) {
-  await q.query(`INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at,project_id,created_by,kr_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-    [t.id, str(t.title), t.assigneeId, t.reportId || null, t.solutionId || null, t.okrId || null, num(t.week), num(t.year), str(t.due),
-     W.STATUSES.includes(t.status) ? t.status : 'todo', str(t.createdAt) || new Date().toISOString(), t.projectId || W.DEFAULT_PROJECT, str(t.createdBy) || t.assigneeId, str(t.krId)]);
+  // Việc sinh từ báo cáo tuần bắt đầu từ ngày gửi báo cáo (không sau hạn); việc nhập từ dữ liệu cũ giữ ngày bắt đầu nếu có.
+  const today = todayISO(), due = str(t.due), start = /^\d{4}-\d{2}-\d{2}$/.test(str(t.startDate)) ? str(t.startDate) : (due && due < today ? due : today);
+  await q.query(`INSERT INTO tasks(id,title,assignee_id,report_id,solution_id,okr_id,week,year,due,status,created_at,project_id,created_by,kr_id,start_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    [t.id, str(t.title), t.assigneeId, t.reportId || null, t.solutionId || null, t.okrId || null, num(t.week), num(t.year), due,
+     W.STATUSES.includes(t.status) ? t.status : 'todo', str(t.createdAt) || new Date().toISOString(), t.projectId || W.DEFAULT_PROJECT, str(t.createdBy) || t.assigneeId, str(t.krId), start]);
   await q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [t.id, t.assigneeId]);
 }
 
@@ -561,8 +583,10 @@ async function handle(req, res) {
     }
     if (!Object.prototype.hasOwnProperty.call(A, action)) throw new AppError('Hành động không hợp lệ: ' + action);
     let viewer = await verifyToken(body.token);
-    const result = await tx(async client => { const c = await ctx(viewer, client); return await A[action](c, p); });
+    const notes = [];
+    const result = await tx(async client => { const c = await ctx(viewer, client); c.notes = notes; return await A[action](c, p); });
     bumpVersion();
+    M.queue(notes);                                                                                    // chỉ gửi khi giao dịch đã thành công
     if (body.lite) return send(res, { ok: true, version: dataVersion, result });     // app tự cập nhật tại chỗ, sẽ tải lại sau
     viewer = (await getUsers()).find(u => u.id === viewer.id) || viewer;
     return send(res, await dbResponse(viewer, { result }), 200, req);
