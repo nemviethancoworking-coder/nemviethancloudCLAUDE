@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/nemviethancoworking-coder/nemvietha
 ## Quản lý công việc (v8)
 Giao diện: màn **Công việc** (`docs/okr/work.js`): Kanban kéo thả, Danh sách, Tổng quan thống kê.
 - **Cấp bậc**: Workspace → Phòng ban → Dự án → Công việc. Bản nâng cấp tự tạo Workspace "Công ty", phòng ban "Chung", dự án "Công việc chung"; công việc cũ (kể cả việc sinh từ báo cáo tuần) được gom vào dự án này, không mất dữ liệu.
-- **Phân quyền** (ánh xạ từ 4 cấp sẵn có): Giám đốc = Admin/Owner; Trưởng phòng / Quản lý = quản lý dự án (tạo dự án, thấy toàn bộ việc dự án mình quản lý hoặc thuộc phòng mình đứng đầu); Nhân viên = thành viên. Mặc định nhân viên chỉ thấy việc của mình, cấp trên thấy việc của cấp dưới; bật "Mọi thành viên xem được tất cả" ở dự án để cả nhóm xem hết. Mọi quyền được máy chủ kiểm tra lại.
+- **Phân quyền** (ánh xạ từ 4 cấp sẵn có): Giám đốc = Admin/Owner; Trưởng phòng / Quản lý tạo dự án, giao việc. Quyền **xem / sửa / xoá việc** theo quy tắc v11 bên dưới; mọi quyền được máy chủ kiểm tra lại.
 - **Công việc**: tên, mô tả, trạng thái (Cần làm / Đang làm / Chờ duyệt / Hoàn thành), ưu tiên (Thấp → Khẩn cấp), nhiều người thực hiện (một trạng thái chung), hạn, nhãn, việc con.
 - **Lặp lại** (hằng ngày mỗi N ngày / hằng tuần theo thứ chọn / hằng tháng theo ngày cố định, kèm ngày kết thúc tuỳ chọn): khi chuyển sang **Hoàn thành**, máy chủ tự tạo đúng 1 việc kế tiếp, hạn tính từ hạn cũ (trễ thì nhảy tới lần gần nhất trong tương lai), nội dung lấy theo **mẫu** hiện tại, bỏ tích việc con. Từ v9 lịch lặp chỉ tạo/sửa ở mục **Việc lặp lại** (bảng `recurring_tasks`).
 - **Bình luận** có `@nhắc tên` và giờ; **tệp đính kèm** (ảnh, PDF, Office, txt/csv, zip…) tối đa 20 MB/tệp, 30 tệp/việc, lưu ở `/opt/okr/uploads` (volume Docker `./uploads`), chỉ người xem được việc mới tải được.
@@ -42,9 +42,17 @@ Giao diện: màn **Công việc** (`docs/okr/work.js`): Kanban kéo thả, Danh
 - **Việc đã tạo bị khoá nội dung**: trên Kanban / Danh sách, bấm vào việc chỉ xem tên, mô tả, ưu tiên, hạn, nhãn. Chỉ đổi được trạng thái, tick việc con (`toggleSubtask`), giao lại (`reassignTask`), bình luận, đính kèm tệp.
 - **Sửa tên / mô tả / nội dung**: chỉ **người tạo**, ở mục **Việc tôi tạo** (`saveTask` từ chối mọi người khác, kể cả Giám đốc; việc sinh từ lịch lặp thì sửa ở mẫu).
 - **Giao việc không giới hạn cấp bậc**: ai cũng giao cho bất kỳ người đang hoạt động; người nhận mới tự được thêm vào dự án đóng. Người nhận, người tạo hoặc cấp trên **giao lại** được cho người khác (ghi vào bình luận).
-- **Xem việc**: quy tắc cũ + người tạo + người nhận. **Xoá việc**: người tạo, cấp trên của người tạo, Giám đốc.
+- **Xem / xoá việc**: xem bản v11 bên dưới (quy tắc xem của v8–v10 đã được thay thế).
 - **Việc lặp lại** (`saveRecurring`, `deleteRecurring`): ai cũng tạo được và giao cho người khác; tạo xong sinh ngay việc đầu tiên. Sửa/xoá: người tạo, cấp trên của họ, Giám đốc. Sửa mẫu chỉ ảnh hưởng việc sinh sau; việc đã sinh giữ nguyên. Xoá mẫu: việc đã sinh còn nguyên, không sinh thêm.
 - **Nâng cấp từ v8**: khi khởi động, mỗi việc lặp lại cũ còn mở được chuyển thành 1 mẫu (id `r_<mã việc>`), chạy lại an toàn. Chạy lại `install.sh` rồi mới hợp nhất giao diện.
+
+## Người theo dõi, quyền xem mới, rich text (v11)
+- **Quyền XEM việc** (thay hẳn quy tắc cũ; tuỳ chọn dự án `share_all` và "quản lý dự án thấy hết việc trong dự án" không còn hiệu lực, cột vẫn giữ trong DB): **Giám đốc & Trưởng phòng** thấy mọi việc toàn công ty; **Quản lý** thấy việc mình tạo/nhận/theo dõi + việc có người tạo hoặc người nhận là cấp dưới trong chuỗi quản lý; **Nhân viên** chỉ thấy việc mình tạo/nhận/theo dõi. Việc cũ không rõ người tạo coi như theo người nhận. Áp dụng cho màn Công việc, `db.tasks` (đường cũ của màn báo cáo tuần), chi tiết, bình luận, tệp.
+- **Quyền SỬA** (đổi trạng thái, tick việc con, giao lại, kéo thả, tải lên/xoá tệp của người khác): Giám đốc, Trưởng phòng, người tạo, người nhận, hoặc Quản lý có chuỗi quản lý trên một người nhận/người tạo. **Quyền XOÁ**: Giám đốc, người tạo, cấp trên (chuỗi quản lý) của người tạo — Trưởng phòng ngoài chuỗi chỉ xem, không xoá; việc không rõ người tạo: cấp trên của người nhận.
+- **Người theo dõi** (bảng `task_followers`, cột `recurring_tasks.followers`): chỉ xem việc, đọc + viết bình luận, xem/tải tệp; không đổi trạng thái, không tick việc con, không giao lại, không tải lên/xoá tệp, không sửa nội dung. Người tạo, người nhận và Giám đốc thêm/bớt qua `setFollowers { id, followerIds }` (ghi bình luận hệ thống, nhắc tên người mới, người mới tự vào dự án đóng); `saveTask` và `saveRecurring` nhận thêm `followerIds`. Người thực hiện tự bị loại khỏi danh sách theo dõi. JSON việc có thêm `followerIds`; chi tiết việc (`?workTask=`) có thêm `followerIds`, `canFollow`.
+- **Rich text**: chuỗi bắt đầu bằng `<!--rt-->` được máy chủ làm sạch lại (chỉ giữ `<b>`, `<i>`, `<br>`, `<span class="c-red|c-orange|c-blue">`; bỏ mọi thẻ/thuộc tính khác, escape lại chữ). Áp dụng cho nội dung báo cáo (work/issues/causes, kể cả trong từng KR), phản hồi báo cáo, mô tả việc (≤ 20000), mô tả mẫu lặp lại, bình luận việc (≤ 12000). Chuỗi không có tiền tố là văn bản thuần cũ, giữ nguyên.
+- **Nâng cấp từ v9/v10**: chạy lại `install.sh` (migrate tự chạy, an toàn khi chạy lại). Cập nhật máy chủ **trước**, rồi mới hợp nhất giao diện.
+- **Kiểm thử**: `PGHOST=… npm test` (cần PostgreSQL); `node --test test/rich.test.js` (làm sạch rich text, không cần DB).
 
 ## Tài khoản (v6)
 - Giám đốc thêm/sửa/đặt lại mật khẩu ở màn **Nhân sự & phân quyền**.

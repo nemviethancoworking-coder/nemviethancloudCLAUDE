@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Client } = require('pg');
-const { recurrence } = require('../src/work.js');
+const { recurrence } = require('../src/work.js');       // làm sạch rich text (hàm thuần) có bài test riêng không cần DB: test/rich.test.js
 
 const PGENV = { PGHOST: process.env.PGHOST || '127.0.0.1', PGPORT: process.env.PGPORT || '5432', PGUSER: process.env.PGUSER || 'okr', PGPASSWORD: process.env.PGPASSWORD || '' };
 const DBNAME = 'okr_test_' + Date.now().toString(36);
@@ -254,14 +254,16 @@ describe('API công việc', () => {
     const t3 = T({ assigneeIds: [a] }); await call(ptok.mgr, 'saveTask', { task: t3 });
     await call(ptok.mgr, 'deleteTask', { id: t3.id });
   });
-  test('Giám đốc thấy tất cả; cờ "mọi thành viên xem hết việc" mở rộng phạm vi', async () => {
+  test('v11: Giám đốc & Trưởng phòng thấy tất cả; cờ share_all của dự án không còn hiệu lực', async () => {
     const t = T({ assigneeIds: [b] }); await call(ptok.mgr, 'saveTask', { task: t });
     assert.ok(!(await work(ptok.a, w1)).tasks.some(x => x.id === t.id));
     await call(ptok.mgr, 'saveProject', { project: { id: p1, workspaceId: w1, departmentId: d1, name: 'Website', memberIds: [a, b], shareAll: true } });
-    const wa = await work(ptok.a, w1); assert.ok(wa.tasks.some(x => x.id === t.id), 'bật shareAll → a thấy');
-    await denied(ptok.a, 'moveTask', { id: t.id, status: 'done' });                    // nhưng chỉ đọc
-    await call(ptok.mgr, 'saveProject', { project: { id: p1, workspaceId: w1, departmentId: d1, name: 'Website', memberIds: [a, b], shareAll: false } });
-    assert.ok((await work(dir, w1)).tasks.some(x => x.id === t.id));
+    assert.ok(!(await work(ptok.a, w1)).tasks.some(x => x.id === t.id), 'v11: bật shareAll cũng KHÔNG làm a thấy việc của b');
+    assert.equal((await work(ptok.a, w1)).projects.find(p => p.id === p1).shareAll, undefined);
+    await denied(ptok.a, 'moveTask', { id: t.id, status: 'done' });
+    assert.ok((await work(dir, w1)).tasks.some(x => x.id === t.id), 'Giám đốc thấy');
+    assert.ok((await work(ptok.head, w1)).tasks.some(x => x.id === t.id), 'Trưởng phòng thấy');
+    assert.ok((await work(ptok.mgr, w1)).tasks.some(x => x.id === t.id), 'người tạo thấy');
   });
   test('Kanban: đổi cột + sắp xếp vị trí', async () => {
     const ids = []; for (let i = 0; i < 3; i++) { const t = T({ title: 'K' + i, assigneeIds: [a], status: 'todo' }); ids.push(t.id); await call(ptok.mgr, 'saveTask', { task: t }); }
@@ -445,6 +447,306 @@ describe('API công việc', () => {
     await call(dir, 'setUserActive', { id: b, active: false });
     await denied(ptok.mgr, 'saveTask', { task: T({ assigneeIds: [b] }) }, /khoá/);
     await call(dir, 'setUserActive', { id: b, active: true });
+  });
+});
+
+describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', () => {
+  const tk = {}, id = {};
+  const WS = 'wsV11', PRJ = 'prjV11';
+  const sorted = a => [...a].sort();
+  const taskIn = async (who, tid, ws = WS) => (await work(tk[who], ws)).tasks.find(x => x.id === tid);
+  const vis = async (who, tid) => !!(await taskIn(who, tid));
+  const legacy = async who => (await (await fetch(BASE + '?token=' + encodeURIComponent(tk[who]))).json()).db;
+  const TT = extra => ({ id: nid('t'), projectId: PRJ, title: 'Việc v11 ' + seqId, ...extra });
+  const up = (who, taskId, name, body) => fetch(BASE + 'upload?taskId=' + taskId + '&name=' + encodeURIComponent(name), { method: 'POST', headers: { 'x-okr-token': tk[who] }, body }).then(r => r.json());
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const RT = '<!--rt-->';
+  let pg;
+  before(async () => {
+    try { cli('create-director', 'admin', 'secret1', 'Giám đốc'); } catch (e) { /* đã có */ }
+    await startServer();
+    tk.admin = await login('admin'); id.admin = (await work(tk.admin)).viewerId;
+    const mk = async (key, role, managerId) => {
+      id[key] = 'v11_' + key;
+      await call(tk.admin, 'saveUser', { user: { id: id[key], username: 'v11' + key, password: 'secret1', name: 'V11 ' + key, role, managerId: managerId || '' } });
+      tk[key] = await login('v11' + key);
+    };
+    await mk('head1', 'head', id.admin); await mk('head2', 'head', id.admin);
+    await mk('mgrA', 'manager', id.head1); await mk('mgrB', 'manager', id.head2);
+    await mk('ea1', 'employee', id.mgrA); await mk('ea2', 'employee', id.mgrA);
+    await mk('eb1', 'employee', id.mgrB); await mk('es', 'employee', id.mgrB);
+    await call(tk.admin, 'saveWorkspace', { workspace: { id: WS, name: 'V11', open: false, memberIds: [id.mgrA] } });
+    await call(tk.mgrA, 'saveProject', { project: { id: PRJ, workspaceId: WS, name: 'Dự án đóng V11', memberIds: [] } });
+    pg = new Client({ ...PGENV, host: PGENV.PGHOST, port: Number(PGENV.PGPORT), user: PGENV.PGUSER, password: PGENV.PGPASSWORD, database: DBNAME });
+    await pg.connect();
+  });
+  after(async () => { await pg.end(); await stopServer(); });
+
+  test('ma trận XEM: Giám đốc, Trưởng phòng (kể cả phòng khác), Quản lý trong/ngoài chuỗi, Nhân viên tạo/nhận/theo dõi/người lạ', async () => {
+    const ALL = ['admin', 'head1', 'head2', 'mgrA', 'mgrB', 'ea1', 'ea2', 'eb1', 'es'];
+    const check = async (tid, yes) => {
+      for (const w of ALL) {
+        const should = yes.includes(w);
+        assert.equal(await vis(w, tid), should, w + (should ? ' phải thấy ' : ' KHÔNG được thấy ') + tid);
+        assert.equal((await detail(tk[w], tid)).ok, should, 'chi tiết của ' + w);
+      }
+    };
+    // tA: mgrA tạo, ea1 làm, eb1 theo dõi → mgrB (cấp trên của người theo dõi) KHÔNG thấy
+    const tA = TT({ assigneeIds: [id.ea1], followerIds: [id.eb1] }); await call(tk.mgrA, 'saveTask', { task: tA });
+    await check(tA.id, ['admin', 'head1', 'head2', 'mgrA', 'ea1', 'eb1']);
+    // tC: nhân viên ea1 tạo, giao ea2 → cấp trên trực tiếp (mgrA) thấy; mgrB và nhân viên ngoài thì không
+    const tC = TT({ assigneeIds: [id.ea2] }); await call(tk.ea1, 'saveTask', { task: tC });
+    await check(tC.id, ['admin', 'head1', 'head2', 'mgrA', 'ea1', 'ea2']);
+    // tD: Trưởng phòng head1 tạo, giao mgrB → mgrA (không ở trên head1 hay mgrB) không thấy; head2 thấy dù khác phòng
+    const tD = TT({ assigneeIds: [id.mgrB] }); await call(tk.head1, 'saveTask', { task: tD });
+    await check(tD.id, ['admin', 'head1', 'head2', 'mgrB']);
+    // tE: Giám đốc tạo, giao head1 → quản lý / nhân viên không thấy
+    const tE = TT({ assigneeIds: [id.head1] }); await call(tk.admin, 'saveTask', { task: tE });
+    await check(tE.id, ['admin', 'head1', 'head2']);
+    // tF: head1 giao nhân viên ea1 → mgrA (cấp trên của người nhận) thấy
+    const tF = TT({ assigneeIds: [id.ea1] }); await call(tk.head1, 'saveTask', { task: tF });
+    await check(tF.id, ['admin', 'head1', 'head2', 'mgrA', 'ea1']);
+    // Trưởng phòng thấy cả dự án đóng mà mình không là thành viên
+    const wh = await work(tk.head2, WS); assert.equal(wh.currentId, WS); assert.equal(wh.projects.find(p => p.id === PRJ).access, 'pm');
+    assert.ok((await work(tk.head2)).workspaces.some(w => w.id === WS), 'danh sách workspace có đủ cho Trưởng phòng');
+    assert.equal((await work(tk.admin, WS)).projects.find(p => p.id === PRJ).access, 'admin');
+    // người lạ không bình luận được
+    await denied(tk.es, 'addTaskComment', { comment: { id: nid('c'), taskId: tA.id, text: 'chen ngang' } });
+    // ensureMember: người theo dõi / người nhận thuộc phòng khác tự thấy dự án đóng
+    assert.ok((await work(tk.eb1, WS)).projects.some(p => p.id === PRJ), 'người theo dõi thấy dự án đóng');
+    assert.ok((await work(tk.mgrB, WS)).projects.some(p => p.id === PRJ), 'Quản lý được giao việc thấy dự án đóng');
+  });
+
+  test('đường cũ db.tasks (màn báo cáo tuần) lọc cùng quy tắc xem và có followerIds', async () => {
+    const mkL = async (who, extra) => { const t = { id: nid('tl'), projectId: 'p_general', title: 'L ' + seqId, ...extra }; await call(tk[who], 'saveTask', { task: t }); return t.id; };
+    const l1 = await mkL('mgrA', { assigneeIds: [id.ea1], followerIds: [id.eb1] });
+    const l2 = await mkL('mgrB', { assigneeIds: [id.eb1] });
+    const l3 = await mkL('ea2', { assigneeIds: [id.ea2] });
+    const mine = [l1, l2, l3];
+    const want = { admin: [l1, l2, l3], head1: [l1, l2, l3], head2: [l1, l2, l3], mgrA: [l1, l3], mgrB: [l2], ea1: [l1], ea2: [l3], eb1: [l1, l2], es: [] };
+    for (const [who, ids] of Object.entries(want)) {
+      const got = (await legacy(who)).tasks.filter(x => mine.includes(x.id)).map(x => x.id);
+      assert.deepEqual(sorted(got), sorted(ids), 'db.tasks của ' + who);
+    }
+    const row = (await legacy('ea1')).tasks.find(x => x.id === l1);
+    assert.deepEqual(row.followerIds, [id.eb1]); assert.equal(row.assigneeId, id.ea1);
+    assert.deepEqual(sorted((await work(tk.mgrA, 'w_default')).tasks.filter(x => mine.includes(x.id)).map(x => x.id)), sorted([l1, l3]), 'màn Công việc cùng kết quả');
+  });
+
+  test('người theo dõi: xem + bình luận + tải tệp; KHÔNG sửa / đổi trạng thái / tick / giao lại / tải lên / xoá / đổi người theo dõi', async () => {
+    const t = TT({ assigneeIds: [id.ea1], followerIds: [id.eb1], subtasks: [{ id: 'vs1', text: 'Bước' }] });
+    await call(tk.mgrA, 'saveTask', { task: t });
+    const f = await up('ea1', t.id, 'anh.png', png); assert.equal(f.ok, true, f.error);
+    const dF = await detail(tk.eb1, t.id);
+    assert.equal(dF.canEdit, false); assert.equal(dF.canDelete, false); assert.equal(dF.canFollow, false); assert.equal(dF.canEditContent, false);
+    assert.deepEqual(dF.followerIds, [id.eb1]); assert.equal(dF.attachments.length, 1);
+    const flags = async w => { const d = await detail(tk[w], t.id); return [d.canEdit, d.canDelete, d.canFollow]; };
+    assert.deepEqual(await flags('ea1'), [true, false, true]);       // người nhận: sửa + giao lại + theo dõi, không xoá
+    assert.deepEqual(await flags('mgrA'), [true, true, true]);       // người tạo
+    assert.deepEqual(await flags('admin'), [true, true, true]);
+    assert.deepEqual(await flags('head2'), [true, false, false]);    // Trưởng phòng: sửa được, KHÔNG xoá / không đổi người theo dõi
+    assert.deepEqual(await flags('head1'), [true, true, false]);     // head1 là cấp trên của người tạo → xoá được
+    // bình luận
+    const cm = nid('c');
+    await call(tk.eb1, 'addTaskComment', { comment: { id: cm, taskId: t.id, text: 'Mình theo dõi nhé', mentions: [id.ea1] } });
+    assert.ok((await detail(tk.ea1, t.id)).comments.some(x => x.id === cm && x.authorId === id.eb1));
+    assert.equal((await taskIn('eb1', t.id)).commentCount, 1);
+    await denied(tk.ea1, 'deleteTaskComment', { id: cm }, /người viết/);
+    await call(tk.eb1, 'deleteTaskComment', { id: cm });
+    // tải tệp
+    const dl = await fetch(BASE + 'file/' + f.attachment.id + '?token=' + encodeURIComponent(tk.eb1)); assert.equal(dl.status, 200);
+    assert.deepEqual(Buffer.from(await dl.arrayBuffer()), png);
+    assert.equal((await (await fetch(BASE + 'file/' + f.attachment.id + '?token=' + encodeURIComponent(tk.es))).json()).ok, false);
+    // bị từ chối
+    await denied(tk.eb1, 'moveTask', { id: t.id, status: 'doing' }, /theo dõi/);
+    await denied(tk.eb1, 'updateTask', { id: t.id, patch: { status: 'done' } }, /theo dõi/);
+    await denied(tk.eb1, 'toggleSubtask', { id: t.id, subId: 'vs1', done: true }, /theo dõi/);
+    await denied(tk.eb1, 'reassignTask', { id: t.id, assigneeIds: [id.eb1] }, /theo dõi/);
+    await denied(tk.eb1, 'saveTask', { task: { ...t, title: 'Đổi tên' } }, /người tạo/);
+    await denied(tk.eb1, 'deleteTask', { id: t.id });
+    await denied(tk.eb1, 'setFollowers', { id: t.id, followerIds: [] }, /Chỉ người tạo/);
+    await denied(tk.eb1, 'deleteAttachment', { id: f.attachment.id });
+    const u2 = await up('eb1', t.id, 'them.png', png); assert.equal(u2.ok, false); assert.match(u2.error, /theo dõi/);
+    const after = await taskIn('mgrA', t.id);
+    assert.equal(after.status, 'todo'); assert.equal(after.title, t.title); assert.equal(after.subtasks[0].done, false); assert.deepEqual(after.assigneeIds, [id.ea1]); assert.equal(after.attachCount, 1);
+    // quyền SỬA: Trưởng phòng (kể cả phòng khác), người nhận, người tạo được; Quản lý ngoài chuỗi và người lạ thì không
+    await call(tk.head2, 'moveTask', { id: t.id, status: 'doing' });
+    await denied(tk.mgrB, 'moveTask', { id: t.id, status: 'done' }); await denied(tk.es, 'moveTask', { id: t.id, status: 'done' });
+    await call(tk.mgrA, 'moveTask', { id: t.id, status: 'review' }); await call(tk.ea1, 'toggleSubtask', { id: t.id, subId: 'vs1', done: true });
+    await call(tk.ea1, 'moveTask', { id: t.id, status: 'todo' });
+  });
+
+  test('setFollowers: ai được / không được, loại người nhận, nhắc tên, dự án đóng, khoá tài khoản', async () => {
+    const t = TT({ assigneeIds: [id.ea1] }); await call(tk.mgrA, 'saveTask', { task: t });
+    assert.ok(!(await vis('es', t.id)));
+    await denied(tk.es, 'setFollowers', { id: t.id, followerIds: [id.es] }, /Không tìm thấy/);          // người lạ
+    await denied(tk.mgrB, 'setFollowers', { id: t.id, followerIds: [id.es] }, /Không tìm thấy/);
+    await denied(tk.head1, 'setFollowers', { id: t.id, followerIds: [id.es] }, /Chỉ người tạo/);          // thấy nhưng không phải người tạo/nhận/Giám đốc
+    await denied(tk.ea1, 'setFollowers', { id: t.id, followerIds: ['khong-co'] }, /không tồn tại/);
+    // người nhận đặt: chính mình (người nhận) bị lọc, trùng bị bỏ
+    await call(tk.ea1, 'setFollowers', { id: t.id, followerIds: [id.eb1, id.ea2, id.ea1, id.eb1] });
+    let d = await detail(tk.ea1, t.id); assert.deepEqual(sorted(d.followerIds), sorted([id.eb1, id.ea2]));
+    const last = d.comments[d.comments.length - 1];
+    assert.match(last.text, /^Đã cập nhật người theo dõi: \(không có\) → /); assert.equal(last.authorId, id.ea1);
+    assert.match(last.text, /V11 eb1/); assert.deepEqual(sorted(last.mentions), sorted([id.eb1, id.ea2]));
+    assert.ok(await vis('eb1', t.id), 'người theo dõi mới thuộc phòng khác thấy việc'); assert.ok(await vis('ea2', t.id));
+    // không đổi gì → không thêm bình luận
+    const n = d.comments.length;
+    await call(tk.ea1, 'setFollowers', { id: t.id, followerIds: [id.ea2, id.eb1] });
+    assert.equal((await detail(tk.ea1, t.id)).comments.length, n);
+    // người tạo + Giám đốc đặt được; thêm es (dự án đóng → tự vào dự án)
+    await call(tk.mgrA, 'setFollowers', { id: t.id, followerIds: [id.eb1, id.es] });
+    assert.deepEqual(sorted((await detail(tk.mgrA, t.id)).followerIds), sorted([id.eb1, id.es]));
+    assert.ok(await vis('es', t.id)); assert.ok((await work(tk.es, WS)).projects.some(p => p.id === PRJ));
+    assert.ok(!(await vis('ea2', t.id)), 'ea2 bị gỡ khỏi người theo dõi thì không thấy nữa');
+    await call(tk.admin, 'setFollowers', { id: t.id, followerIds: [] });
+    d = await detail(tk.mgrA, t.id); assert.deepEqual(d.followerIds, []); assert.match(d.comments[d.comments.length - 1].text, /→ \(không có\)$/);
+    assert.ok(!(await vis('es', t.id)));
+    // tài khoản đã khoá không thêm mới được
+    await call(tk.admin, 'setUserActive', { id: id.es, active: false });
+    await denied(tk.mgrA, 'setFollowers', { id: t.id, followerIds: [id.es] }, /khoá/);
+    await call(tk.admin, 'setUserActive', { id: id.es, active: true });
+    // giao lại cho người đang theo dõi → họ thành người thực hiện và tự rời danh sách theo dõi
+    await call(tk.mgrA, 'setFollowers', { id: t.id, followerIds: [id.eb1, id.ea2] });
+    await call(tk.ea1, 'reassignTask', { id: t.id, assigneeIds: [id.ea1, id.ea2] });
+    assert.deepEqual((await detail(tk.ea1, t.id)).followerIds, [id.eb1]);
+    assert.deepEqual((await taskIn('ea1', t.id)).followerIds, [id.eb1]);
+  });
+
+  test('followers qua saveTask (tạo / sửa / không gửi thì giữ) và việc cũ không người tạo', async () => {
+    const t = TT({ assigneeIds: [id.ea1], followerIds: [id.eb1, id.ea1, id.eb1] });
+    await call(tk.mgrA, 'saveTask', { task: t });
+    assert.deepEqual((await taskIn('mgrA', t.id)).followerIds, [id.eb1], 'người nhận & trùng bị loại');
+    await call(tk.mgrA, 'saveTask', { task: { ...t, title: 'Sửa lần 1', followerIds: [id.ea2] } });
+    assert.deepEqual((await taskIn('mgrA', t.id)).followerIds, [id.ea2]);
+    const { followerIds: _f, ...base } = t;
+    await call(tk.mgrA, 'saveTask', { task: { ...base, title: 'Sửa lần 2' } });                    // không gửi followerIds → giữ nguyên
+    assert.deepEqual((await taskIn('mgrA', t.id)).followerIds, [id.ea2]);
+    await call(tk.mgrA, 'saveTask', { task: { ...t, title: 'Sửa lần 3', assigneeIds: [id.ea2], followerIds: [id.ea2, id.eb1] } });   // người nhận mới không thể đồng thời là người theo dõi
+    assert.deepEqual((await taskIn('mgrA', t.id)).followerIds, [id.eb1]);
+    await denied(tk.ea2, 'saveTask', { task: { ...t, followerIds: [] } }, /người tạo/);              // chỉ người tạo sửa qua saveTask; người nhận dùng setFollowers
+    await call(tk.admin, 'setUserActive', { id: id.es, active: false });
+    await denied(tk.mgrA, 'saveTask', { task: TT({ assigneeIds: [id.ea1], followerIds: [id.es] }) }, /khoá/);
+    await call(tk.admin, 'setUserActive', { id: id.es, active: true });
+  });
+
+  test('quyền XOÁ: Giám đốc, người tạo, cấp trên của người tạo; Trưởng phòng ngoài chuỗi chỉ xem; việc cũ theo cấp trên của người nhận', async () => {
+    const mkD = async (who, assignee, followers) => { const t = TT({ assigneeIds: [assignee], followerIds: followers || [] }); await call(tk[who], 'saveTask', { task: t }); return t.id; };
+    const exists = async tid => (await detail(tk.admin, tid)).ok;
+    let d = await mkD('mgrA', id.ea1, [id.eb1]);
+    for (const w of ['head2', 'mgrB', 'ea1', 'eb1', 'es', 'ea2']) await denied(tk[w], 'deleteTask', { id: d }, w === 'head2' ? /không được xoá/ : undefined);
+    assert.ok(await exists(d));
+    await call(tk.head1, 'deleteTask', { id: d });                                                    // cấp trên (chuỗi) của người tạo
+    assert.ok(!(await exists(d)));
+    d = await mkD('mgrA', id.ea1); await call(tk.admin, 'deleteTask', { id: d }); assert.ok(!(await exists(d)));
+    d = await mkD('mgrA', id.ea1); await call(tk.mgrA, 'deleteTask', { id: d }); assert.ok(!(await exists(d)));
+    d = await mkD('ea1', id.ea2);                                                                      // nhân viên tạo, giao đồng nghiệp
+    await denied(tk.ea2, 'deleteTask', { id: d }); await denied(tk.head2, 'deleteTask', { id: d });
+    await call(tk.mgrA, 'deleteTask', { id: d }); assert.ok(!(await exists(d)));
+    d = await mkD('ea1', id.ea2); await call(tk.ea1, 'deleteTask', { id: d }); assert.ok(!(await exists(d)));
+    // việc cũ không rõ người tạo: coi như theo người nhận; cấp trên của người nhận xoá được
+    d = await mkD('mgrA', id.ea1, [id.eb1]); await pg.query("UPDATE tasks SET created_by='' WHERE id=$1", [d]);
+    assert.ok(await vis('ea1', d) && await vis('eb1', d) && await vis('mgrA', d) && await vis('head2', d) && !(await vis('mgrB', d)) && !(await vis('ea2', d)));
+    for (const w of ['ea1', 'eb1', 'head2']) await denied(tk[w], 'deleteTask', { id: d });
+    await denied(tk.ea1, 'saveTask', { task: { id: d, projectId: PRJ, title: 'x' } }, /người tạo/);
+    await call(tk.mgrA, 'deleteTask', { id: d }); assert.ok(!(await exists(d)));
+  });
+
+  test('việc lặp lại: followerIds lưu trên mẫu, người theo dõi thấy mẫu, việc sinh ra copy followers', async () => {
+    const R = { id: nid('r'), projectId: PRJ, title: 'Lặp v11', description: '', assigneeIds: [id.ea1], followerIds: [id.eb1, id.ea1], priority: 'medium', tags: [], subtasks: [], firstDue: todayISO(), rule: { type: 'daily' } };
+    const cr = await call(tk.mgrA, 'saveRecurring', { recurring: R });
+    const first = await taskIn('mgrA', cr.result.spawned.id); assert.deepEqual(first.followerIds, [id.eb1]);
+    const get = async w => (await work(tk[w], WS)).recurring.find(x => x.id === R.id);
+    assert.deepEqual((await get('mgrA')).followerIds, [id.eb1]);
+    const rb = await get('eb1'); assert.ok(rb, 'người theo dõi thấy mẫu'); assert.equal(rb.canEdit, false);
+    assert.equal(await get('es'), undefined); assert.equal(await get('mgrB'), undefined);
+    await denied(tk.eb1, 'saveRecurring', { recurring: { ...R, followerIds: [] } }, /người tạo/);
+    const r2 = await call(tk.ea1, 'moveTask', { id: first.id, status: 'done' });
+    assert.deepEqual((await taskIn('mgrA', r2.result.spawned.id)).followerIds, [id.eb1], 'việc kế tiếp copy người theo dõi');
+    const { followerIds: _omit, ...noFollow } = R;
+    await call(tk.mgrA, 'saveRecurring', { recurring: { ...noFollow, title: 'Lặp v11 (sửa)' } });     // không gửi followerIds → giữ
+    assert.deepEqual((await get('mgrA')).followerIds, [id.eb1]);
+    await call(tk.mgrA, 'saveRecurring', { recurring: { ...R, followerIds: [id.ea2] } });
+    assert.deepEqual((await get('mgrA')).followerIds, [id.ea2]);
+    const r3 = await call(tk.ea1, 'moveTask', { id: r2.result.spawned.id, status: 'done' });
+    assert.deepEqual((await taskIn('mgrA', r3.result.spawned.id)).followerIds, [id.ea2]);
+    assert.equal(await get('eb1'), undefined, 'bỏ khỏi mẫu thì không thấy mẫu nữa');
+    await call(tk.mgrA, 'deleteRecurring', { id: R.id });
+  });
+
+  test('updateReport không làm mất người theo dõi; việc từ báo cáo tuần có followers rỗng lúc đầu', async () => {
+    const cyc = (await (await fetch(BASE + '?token=' + encodeURIComponent(tk.admin))).json()).db.cycles[0].id;
+    await call(tk.admin, 'saveOKR', { okr: { id: 'okrV11', title: 'OKR v11', ownerId: id.admin, cycleId: cyc, krs: [{ id: 'krV11', title: 'KR', baseline: 0, target: 10, unit: 'x' }] } });
+    const sol = (sid, text) => ({ id: sid, krId: 'krV11', text, due: plusDays(5) });
+    const ku = sols => ({ krId: 'krV11', value: 2, work: 'làm', issues: '', causes: '', solutions: sols });
+    await call(tk.admin, 'addReport', { report: { id: 'rpV11', okrId: 'okrV11', week: 45, year: 2026, createdAt: new Date().toISOString(), work: 'x', krUpdates: [ku([sol('sv1', 'Giải pháp 1'), sol('sv2', 'Giải pháp 2')])], solutions: [sol('sv1', 'Giải pháp 1'), sol('sv2', 'Giải pháp 2')] },
+      tasks: [{ id: 'tv1', title: 'Giải pháp 1', due: plusDays(5), status: 'todo', solutionId: 'sv1', okrId: 'okrV11', week: 45, year: 2026 }, { id: 'tv2', title: 'Giải pháp 2', due: plusDays(5), status: 'todo', solutionId: 'sv2', okrId: 'okrV11', week: 45, year: 2026 }] });
+    const w0 = await work(tk.admin, 'w_default');
+    assert.deepEqual(w0.tasks.find(x => x.id === 'tv1').followerIds, []);
+    assert.ok(!(await legacy('eb1')).tasks.some(x => x.id === 'tv1'));
+    await call(tk.admin, 'setFollowers', { id: 'tv1', followerIds: [id.eb1] });                       // chủ báo cáo (người nhận) tự thêm
+    await call(tk.admin, 'setFollowers', { id: 'tv2', followerIds: [id.eb1] });
+    assert.ok((await legacy('eb1')).tasks.some(x => x.id === 'tv1'), 'người theo dõi thấy việc ở đường cũ');
+    await call(tk.admin, 'moveTask', { id: 'tv1', status: 'doing' });
+    await call(tk.admin, 'updateReport', { report: { id: 'rpV11', okrId: 'okrV11', krUpdates: [ku([sol('sv1', 'Giải pháp 1 (sửa)'), sol('sv3', 'Giải pháp 3')])] }, tasks: [] });
+    const w1 = await work(tk.admin, 'w_default');
+    const t1 = w1.tasks.find(x => x.id === 'tv1');
+    assert.equal(t1.title, 'Giải pháp 1 (sửa)'); assert.equal(t1.status, 'doing'); assert.deepEqual(t1.followerIds, [id.eb1], 'followers còn nguyên sau khi đồng bộ');
+    assert.ok(!w1.tasks.some(x => x.id === 'tv2'), 'giải pháp bị xoá → việc "Cần làm" bị xoá (followers theo ON DELETE CASCADE)');
+    assert.equal((await pg.query("SELECT count(*)::int AS n FROM task_followers WHERE task_id='tv2'")).rows[0].n, 0);
+    assert.deepEqual(w1.tasks.find(x => x.title === 'Giải pháp 3').followerIds, []);
+  });
+
+  test('rich text qua API: làm sạch ở máy chủ cho mô tả việc, bình luận, mẫu lặp, báo cáo & phản hồi; chuỗi thuần giữ nguyên', async () => {
+    const dirty = RT + '<b onclick="x()">đậm</b><script>alert(1)</script><img src=x onerror=alert(1)><span style="color:red" class="c-red">đỏ</span><a href="javascript:1">l</a> &amp; &lt;b&gt;';
+    const cleaned = RT + '<b>đậm</b>alert(1)<span class="c-red">đỏ</span>l &amp; &lt;b&gt;';
+    // mô tả việc
+    const t = TT({ assigneeIds: [id.ea1], description: dirty }); await call(tk.mgrA, 'saveTask', { task: t });
+    assert.equal((await taskIn('mgrA', t.id)).description, cleaned);
+    await call(tk.mgrA, 'saveTask', { task: { ...t, description: '<b>thuần</b> & <script>x</script>  ' } });
+    assert.equal((await taskIn('mgrA', t.id)).description, '<b>thuần</b> & <script>x</script>  ', 'chuỗi không tiền tố giữ nguyên');
+    await call(tk.mgrA, 'saveTask', { task: { ...t, description: RT + '<br> <b></b>' } });
+    assert.equal((await taskIn('mgrA', t.id)).description, '', 'rich không còn chữ → rỗng');
+    await denied(tk.mgrA, 'saveTask', { task: { ...t, description: RT + 'x'.repeat(20001) } }, /quá dài/);
+    // bình luận
+    const c1 = nid('c'); await call(tk.ea1, 'addTaskComment', { comment: { id: c1, taskId: t.id, text: dirty } });
+    assert.equal((await detail(tk.ea1, t.id)).comments.find(x => x.id === c1).text, cleaned);
+    const c2 = nid('c'); await call(tk.ea1, 'addTaskComment', { comment: { id: c2, taskId: t.id, text: '  chữ thuần <i>x</i>  ' } });
+    assert.equal((await detail(tk.ea1, t.id)).comments.find(x => x.id === c2).text, 'chữ thuần <i>x</i>', 'chuỗi thuần: cắt khoảng trắng hai đầu như trước');
+    await denied(tk.ea1, 'addTaskComment', { comment: { id: nid('c'), taskId: t.id, text: RT + '<b> </b><br>' } }, /Thiếu nội dung/);
+    await denied(tk.ea1, 'addTaskComment', { comment: { id: nid('c'), taskId: t.id, text: RT + 'y'.repeat(12001) } }, /quá dài/);
+    // mẫu lặp lại
+    const R = { id: nid('r'), projectId: PRJ, title: 'Lặp rich', description: dirty, assigneeIds: [id.ea1], rule: { type: 'daily' }, firstDue: todayISO() };
+    await call(tk.mgrA, 'saveRecurring', { recurring: R });
+    assert.equal((await work(tk.mgrA, WS)).recurring.find(x => x.id === R.id).description, cleaned);
+    assert.equal((await taskIn('mgrA', (await work(tk.mgrA, WS)).tasks.find(x => x.seriesId === R.id).id)).description, cleaned);
+    await call(tk.mgrA, 'deleteRecurring', { id: R.id });
+    // báo cáo: work / issues / causes (cả trong krUpdates) + phản hồi của báo cáo
+    const sol = (sid) => ({ id: sid, krId: 'krV11', text: '<b>giữ nguyên tên</b>', due: plusDays(5) });
+    const ku = { krId: 'krV11', value: 3, work: dirty, issues: RT + '<p>a</p><p>b</p>', causes: 'thuần <script>', solutions: [sol('sv9')] };
+    await call(tk.admin, 'addReport', { report: { id: 'rpV11b', okrId: 'okrV11', week: 46, year: 2026, createdAt: new Date().toISOString(), work: dirty, issues: RT + '<b>i</b>', causes: 'c <b>', krUpdates: [ku], solutions: [sol('sv9')] },
+      tasks: [] });
+    const rep = () => legacy('admin').then(db => db.reports.find(x => x.id === 'rpV11b'));
+    let r = await rep();
+    assert.equal(r.work, cleaned); assert.equal(r.issues, RT + '<b>i</b>'); assert.equal(r.causes, 'c <b>');
+    assert.equal(r.krUpdates[0].work, cleaned); assert.equal(r.krUpdates[0].issues, RT + 'a<br>b'); assert.equal(r.krUpdates[0].causes, 'thuần <script>');
+    assert.equal(r.krUpdates[0].solutions[0].text, '<b>giữ nguyên tên</b>', 'tên giải pháp không bị làm sạch');
+    await call(tk.admin, 'updateReport', { report: { id: 'rpV11b', okrId: 'okrV11', work: dirty, krUpdates: [{ ...ku, work: dirty + '<script>2</script>', issues: '', causes: '' }] }, tasks: [] });
+    r = await rep(); assert.equal(r.krUpdates[0].work, cleaned + '2'); assert.equal(r.work, cleaned);
+    const cc = nid('c'); await call(tk.admin, 'addComment', { comment: { id: cc, reportId: 'rpV11b', text: dirty } });
+    assert.equal((await rep()).comments.find(x => x.id === cc).text, cleaned);
+    await denied(tk.admin, 'addComment', { comment: { id: nid('c'), reportId: 'rpV11b', text: RT + '<br>' } }, /Thiếu nội dung/);
+  });
+
+  test('migrate chạy lại nhiều lần an toàn (bảng task_followers, cột followers) và giữ dữ liệu', async () => {
+    const count = async () => (await pg.query('SELECT count(*)::int AS n FROM task_followers')).rows[0].n;
+    const before = await count(); assert.ok(before > 0);
+    cli('count-users'); cli('count-users');                                                            // mỗi lần chạy lệnh đều gọi migrate()
+    assert.equal(await count(), before);
+    const col = await pg.query("SELECT data_type FROM information_schema.columns WHERE table_name='recurring_tasks' AND column_name='followers'");
+    assert.equal(col.rows[0].data_type, 'jsonb');
+    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 11);
+    assert.equal((await (await fetch(BASE + 'health')).json()).version, 11);
   });
 });
 

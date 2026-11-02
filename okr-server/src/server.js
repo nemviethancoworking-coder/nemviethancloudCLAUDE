@@ -1,5 +1,6 @@
 /**
  * OKR Weekly — API máy chủ (Node.js + PostgreSQL), thay cho Apps Script (Code.gs v4).
+ * v11: người theo dõi (chỉ xem + bình luận), quy tắc xem/sửa/xoá việc theo người tạo/người nhận/chuỗi quản lý (bỏ share_all), rich text được làm sạch ở máy chủ.
  * v9: tách nơi tạo/sửa công việc (người tạo) khỏi bảng làm việc (khoá tên, mô tả), giao việc không giới hạn cấp bậc, mục Việc lặp lại riêng.
  * v8: thêm module quản lý công việc kiểu Base WeWork (src/work.js): Workspace → Phòng ban → Dự án → Công việc,
  *     Kanban/Danh sách, việc lặp lại, bình luận @nhắc tên, tệp đính kèm. Xem README.
@@ -28,7 +29,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 9;
+const VERSION = 11;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -145,7 +146,6 @@ function canManage(c, targetId) {
   }
   return false;
 }
-const canSeeTaskOf = (c, assigneeId) => assigneeId === c.me.id || canManage(c, assigneeId);
 const requireDirector = c => { if (c.me.role !== 'director') deny('Chỉ Giám đốc được thực hiện thao tác này.'); };
 
 /* ---------------- Đọc dữ liệu (cùng định dạng với Code.gs) ----------------
@@ -166,21 +166,26 @@ async function buildPublic() {
   const db = await loadDB(null);
   return { users: db.users, json: JSON.stringify({ cycles: db.cycles, users: db.users, okrs: db.okrs, reports: db.reports }).slice(1, -1) };
 }
+/* Công việc cho đường cũ (db.tasks của màn báo cáo tuần): chỉ việc sinh từ báo cáo tuần + việc ở dự án mặc định, và CHỈ việc người xem được thấy
+ * theo cùng quy tắc với màn Công việc (W.filterVisibleTasks). Kèm bình luận/ghi chú của từng việc. */
 async function viewerTasks(viewer, users) {
-  const c = { me: users.find(u => u.id === viewer.id) || viewer, byId: Object.fromEntries(users.map(u => [u.id, u])) };
-  const ids = users.filter(u => canSeeTaskOf(c, u.id)).map(u => u.id);
-  return tasksWithComments(ids);
-}
-/* Công việc của các người làm trong danh sách + bình luận/ghi chú của từng việc (chỉ người xem được việc mới nhận được bình luận). */
-async function tasksWithComments(assigneeIds) {
-  // Chỉ việc sinh từ báo cáo tuần + việc ở dự án mặc định (bản giao diện cũ); việc của các dự án khác do màn Công việc tự tải (?work=1).
-  const tr = await pool.query(`SELECT * FROM tasks WHERE assignee_id = ANY($1) AND (report_id IS NOT NULL OR project_id = '${W.DEFAULT_PROJECT}') ORDER BY seq`, [assigneeIds]);
-  const ids = tr.rows.map(t => t.id), by = {};
-  if (ids.length) {
-    const cr = await pool.query('SELECT * FROM task_comments WHERE task_id = ANY($1) ORDER BY seq', [ids]);
+  const c = ctxFor(viewer, users);
+  let sql = `SELECT t.* FROM tasks t WHERE (t.report_id IS NOT NULL OR t.project_id = '${W.DEFAULT_PROJECT}')`, args = [];
+  if (!W.isTopRole(c)) {            // thu hẹp ứng viên bằng SQL (mình + cấp dưới trong chuỗi), rồi lọc chính xác bằng hàm dùng chung
+    const ids = [c.me.id, ...users.filter(u => canManage(c, u.id)).map(u => u.id)];
+    sql += ` AND (t.created_by = ANY($1) OR t.assignee_id = ANY($1) OR EXISTS (SELECT 1 FROM task_assignees a WHERE a.task_id = t.id AND a.user_id = ANY($1))
+      OR EXISTS (SELECT 1 FROM task_followers f WHERE f.task_id = t.id AND f.user_id = $2))`;
+    args = [ids, c.me.id];
+  }
+  const tr = await pool.query(sql + ' ORDER BY t.seq', args);
+  const { asg, fol } = await W.loadPeople(pool, tr.rows);
+  const vis = W.filterVisibleTasks(c, tr.rows, asg, fol);
+  const by = {};
+  if (vis.length) {
+    const cr = await pool.query('SELECT * FROM task_comments WHERE task_id = ANY($1) ORDER BY seq', [vis.map(v => v.t.id)]);
     cr.rows.forEach(c => { (by[c.task_id] = by[c.task_id] || []).push({ id: c.id, authorId: c.author_id, text: c.text, createdAt: c.created_at }); });
   }
-  return tr.rows.map(t => ({ id: t.id, title: t.title, assigneeId: t.assignee_id, reportId: t.report_id || null, solutionId: t.solution_id || null, okrId: t.okr_id || null, krId: t.kr_id || '',
+  return vis.map(({ t, followers }) => ({ id: t.id, title: t.title, assigneeId: t.assignee_id, followerIds: followers, reportId: t.report_id || null, solutionId: t.solution_id || null, okrId: t.okr_id || null, krId: t.kr_id || '',
     week: t.week, year: t.year, due: t.due, status: t.status, createdAt: t.created_at, comments: by[t.id] || [] }));
 }
 /* Chuỗi JSON đầy đủ { ok, version, db, ...extra } — ghép từ phần chung đã dựng sẵn. */
@@ -214,9 +219,7 @@ async function loadDB(viewer) {
     krUpdates: r.kr_updates || [], solutions: r.solutions || [], comments: cmBy[r.id] || [] }));
   let tasks = [];
   if (viewer) {
-    const c = await ctx(viewer);
-    const ids = c.users.filter(u => canSeeTaskOf(c, u.id)).map(u => u.id);
-    tasks = await tasksWithComments(ids);
+    tasks = await viewerTasks(viewer, (await ctx(viewer)).users);
   }
   return { cycles, users, okrs, reports, tasks, viewerId: viewer ? viewer.id : null, loadedAt: new Date().toISOString() };
 }
@@ -249,6 +252,16 @@ async function login(p, ip) {
   return u;
 }
 
+const REPORT_MAX = 50000;
+/** Làm sạch rich text trong từng khối KR của báo cáo (work / issues / causes); chỉ đụng tới trường có gửi lên (báo cáo cũ không có 'work' vẫn là cũ). */
+function cleanKrUpdates(v) {
+  return (Array.isArray(v) ? v : []).map(ku => {
+    const out = { ...ku };
+    for (const k of ['work', 'issues', 'causes']) if (k in out) out[k] = W.cleanRich(out[k], REPORT_MAX);
+    return out;
+  });
+}
+
 const A = {
   async addReport(c, p) {
     const r = p.report, tasks = p.tasks || [];
@@ -261,11 +274,12 @@ const A = {
     for (const row of prev.rows) for (const ku of row.kr_updates || []) sent.add(ku.krId);
     if (!(r.krUpdates || []).length && prev.rows.length) throw new AppError('Đã có báo cáo tuần này cho OKR này.');
     if ((r.krUpdates || []).some(ku => sent.has(ku.krId))) throw new AppError('Có KR đã được báo cáo trong tuần này rồi.');
+    const kus = cleanKrUpdates(r.krUpdates);
     await c.q.query(`INSERT INTO reports(id,user_id,week,year,okr_id,created_at,work,issues,causes,kr_updates,solutions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [r.id, c.me.id, num(r.week), num(r.year), r.okrId, str(r.createdAt) || new Date().toISOString(), str(r.work), str(r.issues), str(r.causes),
-       JSON.stringify(r.krUpdates || []), JSON.stringify(r.solutions || [])]);
-    for (const ku of r.krUpdates || []) await c.q.query('UPDATE krs SET current = $1 WHERE id = $2 AND okr_id = $3', [num(ku.value), ku.krId, okr.id]);
-    const krOf = await solutionKrMap(c.q, okr.id, r.krUpdates);
+      [r.id, c.me.id, num(r.week), num(r.year), r.okrId, str(r.createdAt) || new Date().toISOString(), W.cleanRich(r.work, REPORT_MAX), W.cleanRich(r.issues, REPORT_MAX), W.cleanRich(r.causes, REPORT_MAX),
+       JSON.stringify(kus), JSON.stringify(r.solutions || [])]);
+    for (const ku of kus) await c.q.query('UPDATE krs SET current = $1 WHERE id = $2 AND okr_id = $3', [num(ku.value), ku.krId, okr.id]);
+    const krOf = await solutionKrMap(c.q, okr.id, kus);
     for (const t of tasks) await insertTask(c.q, { ...t, assigneeId: c.me.id, reportId: r.id, krId: krOf.get(t.solutionId) || '' });
   },
   async deleteReport(c, p) {
@@ -284,7 +298,7 @@ const A = {
     if (!(old.kr_updates || []).some(ku => 'work' in ku)) throw new AppError('Báo cáo cũ (theo nguyên bộ OKR) không sửa được.');
     if (await one(c.q, 'SELECT 1 FROM comments WHERE report_id=$1 AND author_id <> $2 LIMIT 1', [old.id, old.user_id]))
       throw new AppError('Cấp trên đã đánh giá báo cáo này nên không sửa được nữa.');
-    const kus = r.krUpdates || [];
+    const kus = cleanKrUpdates(r.krUpdates);
     if (!kus.length) throw new AppError('Cần chọn ít nhất 1 KR để báo cáo.');
     const okrKrs = (await c.q.query('SELECT id FROM krs WHERE okr_id=$1', [old.okr_id])).rows.map(x => x.id);
     if (kus.some(ku => !okrKrs.includes(ku.krId)) || new Set(kus.map(ku => ku.krId)).size !== kus.length) throw new AppError('KR không hợp lệ.');
@@ -294,7 +308,7 @@ const A = {
     if (kus.some(ku => sent.has(ku.krId))) throw new AppError('Có KR đã được báo cáo ở một báo cáo khác trong tuần này.');
     const solutions = kus.flatMap(ku => ku.solutions || []);
     await c.q.query('UPDATE reports SET work=$2, issues=$3, causes=$4, kr_updates=$5, solutions=$6 WHERE id=$1',
-      [old.id, str(r.work), str(r.issues), str(r.causes), JSON.stringify(kus), JSON.stringify(solutions)]);
+      [old.id, W.cleanRich(r.work, REPORT_MAX), W.cleanRich(r.issues, REPORT_MAX), W.cleanRich(r.causes, REPORT_MAX), JSON.stringify(kus), JSON.stringify(solutions)]);
     // Giá trị KR chỉ cập nhật khi chưa có báo cáo nào mới hơn chứa KR đó (tránh ghi đè số liệu mới)
     const newer = await c.q.query('SELECT kr_updates FROM reports WHERE okr_id=$1 AND seq > $2', [old.okr_id, old.seq]);
     const newerKr = new Set(); newer.rows.forEach(row => (row.kr_updates || []).forEach(ku => newerKr.add(ku.krId)));
@@ -313,53 +327,20 @@ const A = {
       }
     }
   },
-  /* Bình luận / ghi chú trên công việc: ai xem được công việc thì được bình luận. */
-  async addTaskComment(c, p) {
-    const cm = p.comment;
-    if (!cm || !cm.id || !cm.taskId || !str(cm.text).trim()) throw new AppError('Thiếu nội dung ghi chú.');
-    const t = await one(c.q, 'SELECT assignee_id FROM tasks WHERE id=$1', [cm.taskId]); if (!t) throw new AppError('Công việc không còn tồn tại.');
-    if (!canSeeTaskOf(c, t.assignee_id)) deny();
-    await c.q.query('INSERT INTO task_comments(id,task_id,author_id,text,created_at) VALUES($1,$2,$3,$4,$5)', [cm.id, cm.taskId, c.me.id, str(cm.text).trim().slice(0, 4000), str(cm.createdAt) || new Date().toISOString()]);
-  },
-  async deleteTaskComment(c, p) {
-    const row = await one(c.q, 'SELECT cm.author_id, t.assignee_id FROM task_comments cm JOIN tasks t ON t.id = cm.task_id WHERE cm.id=$1', [p.id]); if (!row) return;
-    if (!canSeeTaskOf(c, row.assignee_id)) deny();
-    if (row.author_id !== c.me.id && c.me.role !== 'director') deny('Chỉ người viết hoặc Giám đốc được xoá ghi chú này.');
-    await c.q.query('DELETE FROM task_comments WHERE id=$1', [p.id]);
-  },
+  /* Bình luận / ghi chú trên công việc, addTask/updateTask/deleteTask: do src/work.js định nghĩa (W.actions) theo quy tắc xem/sửa/xoá v11. */
   async addComment(c, p) {
     const cm = p.comment;
-    if (!cm || !cm.id || !cm.reportId || !str(cm.text).trim()) throw new AppError('Thiếu nội dung phản hồi.');
+    const text = cm && W.cleanRich(cm.text, 12000);
+    if (!cm || !cm.id || !cm.reportId || !W.plainOf(text).trim()) throw new AppError('Thiếu nội dung phản hồi.');
     const r = await one(c.q, 'SELECT user_id FROM reports WHERE id=$1', [cm.reportId]); if (!r) throw new AppError('Báo cáo không còn tồn tại.');
     if (r.user_id !== c.me.id && !canManage(c, r.user_id)) deny('Chỉ cấp trên của người viết hoặc Giám đốc được phản hồi báo cáo này.');
-    await c.q.query('INSERT INTO comments(id,report_id,author_id,text,created_at,acknowledged) VALUES($1,$2,$3,$4,$5,false)', [cm.id, cm.reportId, c.me.id, str(cm.text), str(cm.createdAt) || new Date().toISOString()]);
+    await c.q.query('INSERT INTO comments(id,report_id,author_id,text,created_at,acknowledged) VALUES($1,$2,$3,$4,$5,false)', [cm.id, cm.reportId, c.me.id, text, str(cm.createdAt) || new Date().toISOString()]);
   },
   async ackComment(c, p) {
     const row = await one(c.q, 'SELECT r.user_id FROM comments cm JOIN reports r ON r.id = cm.report_id WHERE cm.id=$1', [p.id]);
     if (!row) throw new AppError('Không tìm thấy phản hồi.');
     if (row.user_id !== c.me.id) deny('Chỉ người viết báo cáo được xác nhận chỉ đạo.');
     await c.q.query('UPDATE comments SET acknowledged=true, ack_at=$2 WHERE id=$1', [p.id, str(p.ackAt) || new Date().toISOString()]);
-  },
-  async addTask(c, p) {
-    const t = p.task;
-    if (!t || !t.id || !str(t.title).trim()) throw new AppError('Thiếu dữ liệu công việc.');
-    t.assigneeId = t.assigneeId || c.me.id;
-    if (!canSeeTaskOf(c, t.assigneeId)) deny('Bạn chỉ giao được việc cho chính mình hoặc cấp dưới.');
-    if (c.byId[t.assigneeId] && !c.byId[t.assigneeId].active) throw new AppError(c.byId[t.assigneeId].name + ' đã bị khoá tài khoản, không giao việc mới được.');
-    await insertTask(c.q, t);
-  },
-  async updateTask(c, p) {
-    const t = await one(c.q, 'SELECT assignee_id FROM tasks WHERE id=$1', [p.id]); if (!t) throw new AppError('Không tìm thấy công việc.');
-    if (!canSeeTaskOf(c, t.assignee_id)) deny();
-    const src = p.patch || {};
-    if (src.status !== undefined && !['todo', 'doing', 'done'].includes(src.status)) throw new AppError('Trạng thái không hợp lệ.');
-    await c.q.query(`UPDATE tasks SET status = COALESCE($2, status), title = COALESCE($3, title), due = COALESCE($4, due) WHERE id=$1`,
-      [p.id, src.status ?? null, src.title !== undefined ? str(src.title) : null, src.due !== undefined ? str(src.due) : null]);
-  },
-  async deleteTask(c, p) {
-    const t = await one(c.q, 'SELECT assignee_id FROM tasks WHERE id=$1', [p.id]); if (!t) return;
-    if (!canSeeTaskOf(c, t.assignee_id)) deny();
-    await c.q.query('DELETE FROM tasks WHERE id=$1', [p.id]);
   },
   async saveOKR(c, p) {
     const o = p.okr;
@@ -471,7 +452,7 @@ const A = {
     if (c.users.some(x => x.managerId === u.id)) throw new AppError(u.name + ' còn người trực thuộc, không thể xoá.');
     const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
       + (SELECT count(*) FROM tasks WHERE assignee_id=$1 OR created_by=$1) + (SELECT count(*) FROM task_assignees WHERE user_id=$1)
-      + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+      + (SELECT count(*) FROM task_followers WHERE user_id=$1) + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
     if (Number(used.n)) throw new AppError(u.name + ' đã có OKR, báo cáo, công việc hoặc phản hồi trong hệ thống nên không xoá được. Hãy dùng "Khoá tài khoản" để giữ lại lịch sử.');
     await c.q.query('DELETE FROM workspace_members WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM project_members WHERE user_id=$1', [u.id]);
