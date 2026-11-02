@@ -53,6 +53,7 @@ const S = {
   data: null, loading: false, error: null, version: null, wsLoaded: null,
   ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, mineView: lsGet('okr_work_mine_view') === 'list' ? 'list' : 'kanban', project: 'all', showArch: false,
   f: { q: '', who: 'all', pri: 'all', st: 'all', fol: false },
+  tm: { p: 'all', by: 'span', from: '', to: '' },          // khung thời gian: mốc có sẵn (p), tính theo gì (by), khoảng tuỳ chỉnh
   sort: { k: 'status', d: 1 }, doneLimit: DONE_SHOW, listLimit: 200,
   drag: null, over: null, draft: null, detail: null, mention: new Set(), uploading: 0,
 };
@@ -158,10 +159,59 @@ setInterval(() => {                       // tự làm mới mỗi 60 giây khi 
 }, 60000);
 
 /* ---------- Lọc & sắp xếp ---------- */
-function scopeTasks(){                    // theo dự án đang chọn (chưa áp bộ lọc tìm kiếm)
+/* Khung thời gian: Hôm nay · Tuần này (T2–CN) · Tháng này/trước · Quý này/trước (quý dương lịch) · Năm này · Tuỳ chỉnh.
+   Việc thuộc khung khi mốc đã chọn rơi vào khoảng đó:
+   - span (mặc định): khoảng [Ngày bắt đầu, Hạn chót] giao với khung; thiếu một đầu thì lấy đầu còn lại; không có ngày nào thì lấy ngày tạo.
+   - due / start: đúng Hạn chót / Ngày bắt đầu (việc không có ngày đó bị loại).
+   - done: ngày bấm Hoàn thành (chỉ việc đã hoàn thành). */
+const TM_PRESETS = [['all', 'Tất cả'], ['today', 'Hôm nay'], ['week', 'Tuần này'], ['month', 'Tháng này'], ['lmonth', 'Tháng trước'], ['quarter', 'Quý này'], ['lquarter', 'Quý trước'], ['year', 'Năm này'], ['custom', 'Tùy chỉnh']];
+const TM_BY = [['span', 'Thời gian thực hiện'], ['due', 'Hạn chót'], ['start', 'Ngày bắt đầu'], ['done', 'Ngày hoàn thành']];
+/** Khoảng [từ, đến] (yyyy-mm-dd, gồm cả hai đầu) của khung đang chọn; null = không lọc. */
+function tmRange(now = new Date(), tm = S.tm){
+  const p = tm.p; if(p === 'all') return null;
+  const y = now.getFullYear(), m = now.getMonth(), d = now.getDate(), q = Math.floor(m / 3) * 3;
+  const iso = (yy, mm, dd) => toISO(new Date(yy, mm, dd));
+  switch(p){
+    case 'today':    return [iso(y, m, d), iso(y, m, d)];
+    case 'week':     { const wd = now.getDay() || 7; return [iso(y, m, d - wd + 1), iso(y, m, d - wd + 7)]; }
+    case 'month':    return [iso(y, m, 1), iso(y, m + 1, 0)];
+    case 'lmonth':   return [iso(y, m - 1, 1), iso(y, m, 0)];
+    case 'quarter':  return [iso(y, q, 1), iso(y, q + 3, 0)];
+    case 'lquarter': return [iso(y, q - 3, 1), iso(y, q, 0)];
+    case 'year':     return [iso(y, 0, 1), iso(y, 11, 31)];
+    case 'custom':   { let a = tm.from, b = tm.to; if(!a && !b) return null; if(a && b && a > b) [a, b] = [b, a]; return [a || '0000-01-01', b || '9999-12-31']; }
+  }
+  return null;
+}
+const localDay = s => { if(!s) return ''; const d = new Date(s); return isNaN(d) ? '' : toISO(d); };
+function inRange(t, r, by = S.tm.by){
+  const [a, b] = r, s = t.startDate || '', e = t.due || '';
+  if(by === 'done'){ const c = t.status === 'done' ? localDay(t.completedAt) : ''; return !!c && c >= a && c <= b; }
+  let from, to;
+  if(by === 'due'){ if(!e) return false; from = to = e; }
+  else if(by === 'start'){ if(!s) return false; from = to = s; }
+  else { from = s || e; to = e || s; if(!from) from = to = localDay(t.createdAt); if(!from) return false; if(from > to) [from, to] = [to, from]; }
+  return from <= b && to >= a;
+}
+function scopeTasks(opts = {}){           // theo dự án đang chọn + khung thời gian (chưa áp bộ lọc tìm kiếm). opts.time === false: bỏ qua khung thời gian
   if(!S.data) return [];
   const ps = new Set(S.data.projects.filter(p => !p.archived || S.project === p.id).map(p => p.id));
-  return S.data.tasks.filter(t => S.project === 'all' ? ps.has(t.projectId) : t.projectId === S.project);
+  const r = opts.time === false ? null : tmRange();
+  return S.data.tasks.filter(t => (S.project === 'all' ? ps.has(t.projectId) : t.projectId === S.project) && (!r || inRange(t, r)));
+}
+function timebar(){
+  if(S.mode === 'rec') return '';
+  const t = S.tm, r = tmRange();
+  const chip = ([k, l]) => `<span class="chip ${t.p === k ? 'active' : ''}" onclick="W.setTm('${k}')">${l}</span>`;
+  const edge = (s, none) => s === none ? '…' : fmt(s);
+  const rangeTxt = r ? (r[0] === r[1] ? fmt(r[0]) : `${edge(r[0], '0000-01-01')} – ${edge(r[1], '9999-12-31')}`) : '';
+  return `<div class="flex items-center gap-2 mb-3 flex-wrap">
+    <span class="text-[12.5px] text-gray-500 inline-flex items-center gap-1">${WI.cal} Thời gian:</span>
+    ${TM_PRESETS.map(chip).join('')}
+    ${t.p === 'custom' ? `<input type="date" class="input !w-auto !py-1" title="Từ ngày" value="${esc(t.from)}" ${t.to ? 'max="' + esc(t.to) + '"' : ''} onchange="W.setTmDate('from',this.value)"><span class="text-gray-400">→</span><input type="date" class="input !w-auto !py-1" title="Đến ngày" value="${esc(t.to)}" ${t.from ? 'min="' + esc(t.from) + '"' : ''} onchange="W.setTmDate('to',this.value)">` : ''}
+    ${r ? `<span class="w-px h-5 bg-gray-200 mx-1"></span><span class="text-[12.5px] text-gray-500">Tính theo</span><select class="input !w-auto !py-1 text-[13px]" onchange="W.setTmBy(this.value)">${TM_BY.map(([k, l]) => `<option value="${k}" ${t.by === k ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="text-[12.5px] font-medium text-slate-700">${rangeTxt}</span>`
+      : t.p === 'custom' ? '<span class="text-[12.5px] text-gray-400">Chọn ngày bắt đầu và/hoặc kết thúc để lọc.</span>' : ''}
+  </div>`;
 }
 function filtered(opts = {}){
   const q = S.f.q.trim().toLowerCase();
@@ -249,6 +299,7 @@ function view(){
   return `
   ${toolbar(ws)}
   <div class="text-[12px] text-gray-400 mb-3 -mt-1 flex items-center gap-1.5">${WI.eye} ${esc(scopeNote())}</div>
+  ${timebar()}
   <div class="flex gap-4 items-start">
     ${tree()}
     <div class="flex-1 min-w-0" id="work-body">${S.error ? `<div class="card px-4 py-2 mb-3 text-[13px] text-red-600">${esc(S.error)}</div>` : ''}${body}</div>
@@ -288,7 +339,7 @@ function toolbar(ws){
 }
 /** Người có thể lọc theo: những ai xuất hiện trong các việc đang xem được. */
 function scopeUsersForFilter(){
-  const ids = new Set(); scopeTasks().forEach(t => t.assigneeIds.forEach(a => ids.add(a)));
+  const ids = new Set(); scopeTasks({ time: false }).forEach(t => t.assigneeIds.forEach(a => ids.add(a)));
   return [...ids].map(user).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 }
 
@@ -1004,9 +1055,9 @@ const TAB_LABEL = {
   created: { open: 'Đang mở', done: 'Đã hoàn thành', all: 'Tất cả' },
 };
 /** Việc của tôi: tôi là người thực hiện. */
-const mineTasks = () => scopeTasks().filter(t => t.assigneeIds.includes(meId()));
+const mineTasks = o => scopeTasks(o).filter(t => t.assigneeIds.includes(meId()));
 /** Việc tôi tạo (không tính việc sinh từ lịch lặp lại). */
-const createdTasks = () => scopeTasks().filter(t => t.createdBy === meId() && !t.seriesId);
+const createdTasks = o => scopeTasks(o).filter(t => t.createdBy === meId() && !t.seriesId);
 /** Việc đang mở xếp theo hạn (không hạn xuống cuối) rồi ưu tiên; việc đã xong xếp theo thời điểm hoàn thành mới nhất. */
 function byUrgency(a, b){
   const ao = isOpen(a), bo = isOpen(b);
@@ -1022,7 +1073,7 @@ function mineBoard(){
   if(v === 'list') return sw + personalView('mine');
   const q = S.f.q.trim().toLowerCase();
   const ts = mineTasks().filter(t => !q || t.title.toLowerCase().includes(q) || richPlain(t.description).toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q)));
-  const note = mineTasks().length ? '' : '<div class="card p-4 mb-3 text-[13px] text-gray-500">Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.</div>';
+  const note = mineTasks({ time: false }).length ? '' : '<div class="card p-4 mb-3 text-[13px] text-gray-500">Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.</div>';
   return sw + note + kanban(ts);
 }
 function setMineView(v){ S.mineView = v === 'list' ? 'list' : 'kanban'; lsSet('okr_work_mine_view', S.mineView); repaint(); }
@@ -1041,7 +1092,8 @@ function personalView(kind){
   const head = mine
     ? `<b class="text-slate-800">Việc của tôi.</b> Mọi công việc bạn là người thực hiện, ở mọi dự án — gồm việc người khác giao và việc bạn tự tạo cho mình. Việc bạn chỉ tạo cho người khác nằm ở <a class="text-base-600 underline cursor-pointer" onclick="W.setMode('created')">Việc tôi tạo</a>; việc bạn theo dõi xem bằng bộ lọc <b>Tôi theo dõi</b> ở Kanban / Danh sách.`
     : `<b class="text-slate-800">Nơi tạo và sửa công việc.</b> Chỉ bạn — người tạo — sửa được <b>tên, mô tả</b>, ưu tiên, hạn, nhãn và việc con của các việc dưới đây. Trên bảng Kanban / Danh sách các trường này đã bị khoá; ở đó chỉ đổi trạng thái, giao lại, bình luận và đính kèm tệp.`;
-  const empty = all.length ? 'Không có việc nào trong mục này.' : mine ? 'Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.' : 'Bạn chưa tạo công việc nào ở đây. Bấm "Thêm công việc" để giao việc cho mọi người.';
+  const hasAny = (mine ? mineTasks({ time: false }) : createdTasks({ time: false })).length > 0;
+  const empty = all.length ? 'Không có việc nào trong mục này.' : hasAny ? 'Không có việc nào trong khung thời gian đã chọn.' : mine ? 'Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.' : 'Bạn chưa tạo công việc nào ở đây. Bấm "Thêm công việc" để giao việc cho mọi người.';
   return `
   <div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
     <div class="text-[13px] text-slate-600 max-w-3xl">${head}</div>
@@ -1290,6 +1342,9 @@ function setQ(v){
   qTimer = setTimeout(() => { repaint(); const el = $('wk-q'); if(el){ el.focus(); el.setSelectionRange(v.length, v.length); } }, 250);
 }
 function toggleFol(){ S.f.fol = !S.f.fol; repaint(); }
+function setTm(p){ if(!TM_PRESETS.some(x => x[0] === p)) return; S.tm.p = p; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
+function setTmBy(v){ if(!TM_BY.some(x => x[0] === v)) return; S.tm.by = v; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
+function setTmDate(k, v){ if(k !== 'from' && k !== 'to') return; S.tm[k] = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
 function toggleArch(){ S.showArch = !S.showArch; repaint(); }
 function sortBy(k){ S.sort = S.sort.k === k ? { k, d: -S.sort.d } : { k, d: 1 }; repaint(); }
 function moreDone(){ S.doneLimit += DONE_SHOW; repaint(); }
@@ -1298,12 +1353,12 @@ function reload(){ S.version = null; load(); }
 function retry(){ S.error = null; S.data = null; repaint(); }
 
 window.W = {
-  view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, toggleArch, sortBy, moreDone, moreList, retry,
+  view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
   pickFiles, delAttachment, cmInput, cmPick, cmKey, postComment, delComment,
   openWorkspace, saveWorkspace, deleteWorkspace, openDepartments, saveDept, delDept, openProject, saveProject, deleteProject, filterPick,
-  _test: { nextDueOf, recText, S, canEdit, canDelete, filtered, mineTasks, createdTasks, personalView, scopeNote, fmtComment },
+  _test: { tmRange, inRange, scopeTasks, nextDueOf, recText, S, canEdit, canDelete, filtered, mineTasks, createdTasks, personalView, scopeNote, fmtComment },
 };
 })();
