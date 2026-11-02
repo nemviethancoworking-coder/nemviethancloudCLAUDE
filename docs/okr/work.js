@@ -54,7 +54,7 @@ const S = {
   ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, mineView: lsGet('okr_work_mine_view') === 'list' ? 'list' : 'kanban', project: 'all', showArch: false,
   f: { q: '', who: 'all', pri: 'all', st: 'all', fol: false },
   tm: { p: 'all', by: 'span', from: '', to: '' },          // khung thời gian: mốc có sẵn (p), tính theo gì (by), khoảng tuỳ chỉnh
-  sort: { k: 'status', d: 1 }, doneLimit: DONE_SHOW, listLimit: 200,
+  sort: { k: 'due', d: 1 }, doneLimit: DONE_SHOW, listLimit: 200,
   drag: null, over: null, draft: null, detail: null, mention: new Set(), uploading: 0,
 };
 function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
@@ -381,7 +381,8 @@ function emptyWorkspace(){
    ============================================================ */
 function kanban(list){
   const ts = list || filtered({ kanban: true }), multi = S.project === 'all';
-  const cols = STATUS_KEYS.map(k => ({ k, items: ts.filter(t => t.status === k) }));
+  // Thẻ tự xếp theo thời gian: cột chưa xong → hạn gần nhất ở trên (không hạn xuống cuối); cột Hoàn thành → mới hoàn thành ở trên. Bằng nhau giữ thứ tự cũ.
+  const cols = STATUS_KEYS.map(k => ({ k, items: ts.filter(t => t.status === k).sort(k === 'done' ? (a, b) => (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || '') : (a, b) => (a.due || '9999').localeCompare(b.due || '9999')) }));
   return `
   <div id="kb-board" class="grid gap-3 items-start overflow-x-auto pb-2" style="grid-template-columns:repeat(4,minmax(250px,1fr))">
     ${cols.map(c => {
@@ -399,7 +400,7 @@ function kanban(list){
       </div>`;
     }).join('')}
   </div>
-  <div class="text-[12px] text-gray-400 mt-2">Kéo thả thẻ để đổi trạng thái hoặc thứ tự. Tên và mô tả của việc đã tạo bị khoá — người tạo sửa ở mục <b>Việc tôi tạo</b>; việc lặp lại được tạo ở mục <b>Việc lặp lại</b>.</div>`;
+  <div class="text-[12px] text-gray-400 mt-2">Kéo thả thẻ để đổi trạng thái; trong mỗi cột thẻ tự xếp theo hạn gần nhất ở trên. Tên và mô tả của việc đã tạo bị khoá — người tạo sửa ở mục <b>Việc tôi tạo</b>; việc lặp lại được tạo ở mục <b>Việc lặp lại</b>.</div>`;
 }
 function card(t, multi){
   const p = projById(t.projectId), od = overdue(t), ed = canEdit(t);
@@ -492,7 +493,7 @@ function listView(){
   const tab = (k, label) => `<span class="chip ${S.f.st === k ? 'active' : ''}" onclick="W.setF('st','${k}')">${label} <span class="opacity-70">${cnt(k)}</span></span>`;
   const so = { status: t => STATUS_KEYS.indexOf(t.status), start: t => t.startDate || '9999', due: t => t.due || '9999', title: t => t.title.toLowerCase(), pri: t => -PRIO[t.priority].w, proj: t => (projById(t.projectId) || { name: '' }).name.toLowerCase() };
   const fn = so[S.sort.k] || so.status;
-  ts = [...ts].sort((a, b) => { const x = fn(a), y = fn(b); return (x < y ? -1 : x > y ? 1 : 0) * S.sort.d || (a.due || '9').localeCompare(b.due || '9'); });
+  ts = [...ts].sort((a, b) => { if(S.sort.k === 'due' && isOpen(a) !== isOpen(b)) return isOpen(a) ? -1 : 1; const x = fn(a), y = fn(b); return (x < y ? -1 : x > y ? 1 : 0) * S.sort.d || (a.due || '9').localeCompare(b.due || '9'); });
   const th = (k, label, cls = '') => `<th class="text-left font-medium py-2.5 px-2 cursor-pointer select-none hover:text-slate-800 ${cls}" onclick="W.sortBy('${k}')">${label}${S.sort.k === k ? (S.sort.d > 0 ? ' ▲' : ' ▼') : ''}</th>`;
   return `
   <div class="flex items-center gap-2 mb-3 flex-wrap">${tab('all', 'Tất cả')}${STATUS_KEYS.map(k => tab(k, STATUS[k].t)).join('')}${tab('overdue', 'Quá hạn')}</div>
@@ -1083,7 +1084,7 @@ function personalView(kind){
   const inTab = (t, k) => k === 'all' ? true : k === 'open' ? isOpen(t) : !isOpen(t);
   const cnt = k => all.filter(t => inTab(t, k)).length;
   const ts = all.filter(t => inTab(t, tab) && (!q || t.title.toLowerCase().includes(q) || richPlain(t.description).toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q))))
-    .sort(mine ? byUrgency : (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    .sort(byUrgency);
   const tabBtn = k => `<span class="chip ${tab === k ? 'active' : ''}" onclick="W.setTab('${kind}','${k}')">${lb[k]} <span class="opacity-70">${cnt(k)}</span></span>`;
   const multi = S.project === 'all', th = (label, cls = 'px-2') => `<th class="text-left font-medium py-2.5 ${cls}">${label}</th>`;
   const giver = t => !t.createdBy ? '<span class="text-gray-400">—</span>'
