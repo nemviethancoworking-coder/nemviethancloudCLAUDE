@@ -45,6 +45,24 @@
   .report-item.active { background:#eef4ff; border-left-color:#2f6fed; }
   textarea.input { min-height:84px; resize:vertical; }
   .checkbox { width:18px; height:18px; accent-color:#2f6fed; cursor:pointer; }
+  /* Trình soạn thảo định dạng (in đậm / nghiêng / màu chữ) — xem khối RT bên dưới */
+  .rt-wrap { border:1px solid #d1d5db; border-radius:8px; background:#fff; transition:border .15s, box-shadow .15s; }
+  .rt-wrap:focus-within { border-color:#2f6fed; box-shadow:0 0 0 3px rgba(47,111,237,.15); }
+  .rt-wrap.rt-off { background:#f9fafb; }
+  .rt-bar { position:relative; display:flex; align-items:center; gap:2px; padding:3px 6px; border-bottom:1px solid #eef0f3; background:#f9fafb; border-radius:8px 8px 0 0; }
+  .rt-btn { width:28px; height:26px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; border:0; background:transparent; color:#374151; font-size:14px; line-height:1; cursor:pointer; }
+  .rt-btn:hover { background:#e5e7eb; }
+  .rt-btn .rt-A { display:inline-block; font-weight:700; border-bottom:3px solid #dc2626; line-height:1; padding:0 1px; }
+  .rt-pop { display:none; position:absolute; left:64px; top:100%; z-index:20; margin-top:4px; padding:6px; gap:6px; align-items:center; background:#fff; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 6px 18px rgba(15,23,42,.15); }
+  .rt-pop.open { display:flex; }
+  .rt-sw { width:22px; height:22px; border-radius:999px; border:2px solid #fff; box-shadow:0 0 0 1px #d1d5db; cursor:pointer; padding:0; }
+  .rt-sw:hover { box-shadow:0 0 0 2px #6b7280; }
+  .rt-nocolor { font-size:12px; padding:3px 8px; border-radius:6px; border:1px solid #d1d5db; background:#fff; color:#374151; cursor:pointer; white-space:nowrap; }
+  .rt-nocolor:hover { background:#f3f4f6; }
+  .rt-area { padding:8px 10px; font-size:14px; line-height:1.5; color:#1e293b; outline:none; white-space:pre-wrap; overflow-wrap:anywhere; overflow:auto; resize:vertical; max-height:70vh; }
+  .rt-area[contenteditable=false] { cursor:default; }
+  .rt-area:empty::before { content:attr(data-ph); color:#9ca3af; pointer-events:none; white-space:pre-line; }
+  .rt-red { color:#dc2626; } .rt-orange { color:#ea580c; } .rt-blue { color:#2563eb; }
 </style>
 </head>
 <body class="bg-[#f4f5f7] text-slate-800 text-sm">
@@ -52,13 +70,201 @@
 <div id="modal"></div>
 <div id="toast" class="fixed bottom-5 right-5 z-[100] flex flex-col gap-2"></div>
 
+<script>
+/* ============================================================
+   TRÌNH SOẠN THẢO ĐỊNH DẠNG DÙNG CHUNG (index.html + work.js): in đậm / in nghiêng / màu chữ
+   Quy ước dữ liệu: chuỗi THUẦN (không dấu hiệu, như dữ liệu cũ) hoặc '<!--rt-->' + HTML chỉ gồm
+   <b>, <i>, <br>, <span class="c-red|c-orange|c-blue"> (chữ bên trong đã escape & < >).
+   - richEditor(id, {value, placeholder, minHeight, onInput, onKeyDown, disabled, cls, nodirty}) → HTML vùng soạn
+   - richGet(idHoặcPhầnTử)  → chuỗi để gửi (thuần nếu không có định dạng, ngược lại có dấu hiệu)
+   - richSet(idHoặcPhầnTử, giáTrị) → nạp giá trị cũ/mới vào vùng soạn
+   - richHtml(giáTrị, textFn?) → HTML AN TOÀN để hiển thị (dựng lại từ danh sách thẻ cho phép, KHÔNG dùng lại HTML thô)
+   - richPlain(giáTrị) → văn bản thuần (tìm kiếm, xem trước, kiểm tra rỗng)
+   - richJoin([{head, body}]) → ghép nhiều phần (mỗi phần có tiêu đề) thành 1 giá trị
+   ============================================================ */
+(function(){
+'use strict';
+const MARK = '<!-' + '-rt-->';
+const PAL = { red:[220,38,38], orange:[234,88,12], blue:[37,99,235] };
+const HEX = { red:'#dc2626', orange:'#ea580c', blue:'#2563eb' };
+const BASE = '#1e293b';                                   // màu chữ gốc của vùng soạn (dùng cho "Bỏ màu")
+const escS = s => String(s == null ? '' : s).replace(/[&<>]/g, c => c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;');
+const escD = s => escS(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const isRich = v => typeof v === 'string' && v.startsWith(MARK);
+const elOf = x => typeof x === 'string' ? document.getElementById(x) : x;
+
+/* ----- Tên màu từ giá trị CSS/hex/rgb (chỉ nhận đúng 3 màu cho phép, còn lại = không màu) ----- */
+function colorName(v){
+  v = String(v || '').trim().toLowerCase(); if(!v) return null;
+  if(v === 'red' || v === 'orange' || v === 'blue') return v;
+  let m, rgb = null;
+  if((m = /^#([0-9a-f]{6})$/.exec(v))) rgb = [0, 2, 4].map(i => parseInt(m[1].substr(i, 2), 16));
+  else if((m = /^#([0-9a-f]{3})$/.exec(v))) rgb = [0, 1, 2].map(i => parseInt(m[1][i] + m[1][i], 16));
+  else if((m = /^rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})/.exec(v))) rgb = [+m[1], +m[2], +m[3]];
+  if(!rgb) return null;
+  let best = null, bd = 1e9;
+  for(const k in PAL){ const d = Math.hypot(rgb[0] - PAL[k][0], rgb[1] - PAL[k][1], rgb[2] - PAL[k][2]); if(d < bd){ bd = d; best = k; } }
+  return bd <= 30 ? best : null;
+}
+function classColor(cls){
+  for(const t of String(cls || '').split(/\s+/)){ const m = /^(?:c|rt)-(red|orange|blue)$/.exec(t); if(m) return m[1]; }
+  return null;
+}
+
+/* ----- Duyệt cây DOM → dãy "đoạn" {s,b,i,c} / {br}. Chỉ giữ chữ + đậm + nghiêng + 3 màu; thẻ lạ bị bỏ vỏ, thẻ nguy hiểm bị bỏ cả nội dung ----- */
+const SKIP = new Set(['SCRIPT','STYLE','TEMPLATE','NOSCRIPT','IFRAME','OBJECT','EMBED','HEAD','TITLE','META','LINK','SVG','MATH','TEXTAREA','SELECT','BUTTON','INPUT','CANVAS','AUDIO','VIDEO']);
+const BLOCK = new Set(['DIV','P','LI','UL','OL','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','TABLE','TR','SECTION','ARTICLE','HEADER','FOOTER']);
+function runsOf(root){
+  const out = []; let pend = false;
+  const last = () => out[out.length - 1];
+  const lead = () => { if(pend){ if(out.length && !last().br) out.push({ br:true }); pend = false; } };
+  const text = (s, st) => {
+    s = s.replace(/\r/g, '').replace(/ /g, ' ').replace(/[​﻿]/g, '');
+    s.split('\n').forEach((p, i) => {
+      if(i){ lead(); out.push({ br:true }); }
+      if(p){ lead(); out.push({ s:p, b:st.b, i:st.i, c:st.c }); }
+    });
+  };
+  const walk = (node, st) => {
+    node.childNodes.forEach(ch => {
+      if(ch.nodeType === 3){ text(ch.data, st); return; }
+      if(ch.nodeType !== 1) return;
+      const tag = String(ch.tagName).toUpperCase();
+      if(SKIP.has(tag)) return;
+      if(tag === 'BR'){ lead(); out.push({ br:true }); return; }
+      let b = st.b, i = st.i, c = st.c;
+      const sty = ch.style || {}, fw = String(sty.fontWeight || '').toLowerCase(), fs = String(sty.fontStyle || '').toLowerCase();
+      if(tag === 'B' || tag === 'STRONG') b = !(fw === 'normal' || fw === 'lighter' || (fw !== '' && +fw < 600));
+      else if(fw){ if(fw === 'bold' || fw === 'bolder' || +fw >= 600) b = true; else if(fw === 'normal' || fw === 'lighter' || +fw < 600) b = false; }
+      if(tag === 'I' || tag === 'EM') i = fs !== 'normal';
+      else if(fs){ if(fs === 'italic' || fs === 'oblique') i = true; else if(fs === 'normal') i = false; }
+      const cc = classColor(ch.getAttribute && ch.getAttribute('class'));
+      if(cc) c = cc;
+      else { const raw = sty.color || (tag === 'FONT' ? ch.getAttribute('color') : ''); if(raw) c = colorName(raw); }
+      const nst = { b, i, c };
+      if(BLOCK.has(tag)){ if(out.length && !last().br) out.push({ br:true }); pend = false; walk(ch, nst); pend = true; }
+      else walk(ch, nst);
+    });
+  };
+  walk(root, { b:false, i:false, c:null });
+  return out;
+}
+/* Gộp đoạn liền kề cùng kiểu, bỏ định dạng của đoạn chỉ có khoảng trắng, cắt khoảng trắng/xuống dòng ở hai đầu */
+function norm(runs){
+  const o = [];
+  for(const r of runs){
+    if(r.br){ o.push({ br:true }); continue; }
+    const x = /\S/.test(r.s) ? r : { s:r.s, b:false, i:false, c:null }, p = o[o.length - 1];
+    if(p && !p.br && p.b === !!x.b && p.i === !!x.i && p.c === (x.c || null)) p.s += x.s;
+    else o.push({ s:x.s, b:!!x.b, i:!!x.i, c:x.c || null });
+  }
+  while(o.length && (o[0].br || !o[0].s.trim())) o.shift();
+  while(o.length && (o[o.length - 1].br || !o[o.length - 1].s.trim())) o.pop();
+  if(o.length){ if(!o[0].br) o[0].s = o[0].s.replace(/^\s+/, ''); const l = o[o.length - 1]; if(!l.br) l.s = l.s.replace(/\s+$/, ''); }
+  return o;
+}
+const toPlain = runs => runs.map(r => r.br ? '\n' : r.s).join('');
+const hasFmt = runs => runs.some(r => !r.br && (r.b || r.i || r.c));
+function toHtml(runs, pre, tf){
+  return runs.map(r => {
+    if(r.br) return '<br>';
+    let h = tf(r.s);
+    if(r.i) h = '<i>' + h + '</i>';
+    if(r.b) h = '<b>' + h + '</b>';
+    if(r.c) h = '<span class="' + pre + '-' + r.c + '">' + h + '</span>';
+    return h;
+  }).join('');
+}
+const parseBody = html => new DOMParser().parseFromString('<!DOCTYPE html><html><body>' + html + '</body></html>', 'text/html').body;   // tài liệu "chết": không chạy script, không tải ảnh
+const richRuns = v => norm(runsOf(parseBody(String(v).slice(MARK.length))));
+
+function richGet(x){
+  const el = elOf(x); if(!el) return '';
+  const runs = norm(runsOf(el));
+  if(!runs.length) return '';
+  return hasFmt(runs) ? MARK + toHtml(runs, 'c', escS) : toPlain(runs);
+}
+function richPlain(v){ return isRich(v) ? toPlain(richRuns(v)) : String(v == null ? '' : v); }
+function richHtml(v, tf){
+  tf = tf || (s => s);
+  if(!isRich(v)) return tf(escD(v)).replace(/\r?\n/g, '<br>');
+  return toHtml(richRuns(v), 'rt', s => tf(escD(s)));
+}
+const richInner = v => !v ? '' : isRich(v) ? toHtml(richRuns(v), 'rt', escD) : escD(v).replace(/\r?\n/g, '<br>');
+function richSet(x, v){ const el = elOf(x); if(el) el.innerHTML = richInner(v); }
+/** Ghép các phần có tiêu đề: không có phần nào định dạng → giữ dạng thuần như cũ; có → chuỗi định dạng, <br> giữa các phần. */
+function richJoin(items){
+  items = items.filter(x => richPlain(x.body).trim());
+  if(!items.some(x => isRich(x.body))) return items.map(x => '[' + x.head + ']\n' + x.body).join('\n\n');
+  const store = b => isRich(b) ? b.slice(MARK.length) : escS(b).replace(/\r?\n/g, '<br>');
+  return MARK + items.map(x => escS('[' + x.head + ']') + '<br>' + store(x.body)).join('<br><br>');
+}
+
+/* ----- Vùng soạn ----- */
+function richEditor(id, o){
+  o = o || {}; id = String(id).replace(/[^\w-]/g, '');
+  const dis = !!o.disabled, btn = (t, ttl, js, inner) => `<button type="button" class="rt-btn" title="${ttl}" onmousedown="event.preventDefault()" onclick="${js}">${inner || t}</button>`;
+  return `<div class="rt-wrap${dis ? ' rt-off' : ''}">
+    ${dis ? '' : `<div class="rt-bar">
+      ${btn('', 'In đậm (Ctrl+B)', `RT.cmd('${id}','bold')`, '<b>B</b>')}${btn('', 'In nghiêng (Ctrl+I)', `RT.cmd('${id}','italic')`, '<i style="font-family:serif">I</i>')}
+      ${btn('', 'Màu chữ', `RT.pop(this)`, '<span class="rt-A">A</span>')}
+      <div class="rt-pop" onmousedown="event.preventDefault()">
+        ${['red', 'orange', 'blue'].map(k => `<button type="button" class="rt-sw" style="background:${HEX[k]}" title="${{ red:'Đỏ', orange:'Cam', blue:'Xanh dương' }[k]}" onclick="RT.color('${id}','${k}')"></button>`).join('')}
+        <button type="button" class="rt-nocolor" onclick="RT.color('${id}','')">Bỏ màu</button>
+      </div>
+    </div>`}
+    <div id="${id}" class="rt-area${o.cls ? ' ' + escD(o.cls) : ''}" contenteditable="${dis ? 'false' : 'true'}" role="textbox" aria-multiline="true" data-ph="${escD(o.placeholder || '')}"${o.nodirty ? ' data-nodirty="1"' : ''} style="min-height:${+o.minHeight || 84}px"${dis ? '' : ` oninput="RT.input(this);${escD(o.onInput || '')}" onkeydown="RT.key(event,this);${escD(o.onKeyDown || '')}" onpaste="RT.paste(event)" ondrop="RT.drop(event)"`}>${richInner(o.value)}</div>
+  </div>`;
+}
+const inside = el => { const s = window.getSelection && getSelection(); return !!(s && s.rangeCount && el.contains(s.anchorNode) && el.contains(s.focusNode)); };
+function insertText(t){
+  t = String(t || '').replace(/\r\n?/g, '\n'); if(!t) return;
+  let ok = false; try { ok = document.execCommand('insertText', false, t); } catch(e){}
+  if(ok) return;
+  const sel = getSelection(); if(!sel || !sel.rangeCount) return;
+  const r = sel.getRangeAt(0); r.deleteContents();
+  const frag = document.createDocumentFragment(); let last = null;
+  t.split('\n').forEach((p, i) => { if(i){ last = document.createElement('br'); frag.appendChild(last); } if(p){ last = document.createTextNode(p); frag.appendChild(last); } });
+  r.insertNode(frag); if(last){ r.setStartAfter(last); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); }
+}
+function touch(el){ if(typeof modalDirty !== 'undefined' && el.closest('#modal') && el.dataset.nodirty !== '1') modalDirty = true; }
+function focusEd(el){
+  if(inside(el)) return; el.focus();
+  const s = getSelection(), r = document.createRange(); r.selectNodeContents(el); r.collapse(false); s.removeAllRanges(); s.addRange(r);
+}
+const RT = {
+  input(el){ if(el.innerHTML === '<br>') el.innerHTML = ''; },        // để placeholder (:empty) hiện lại khi xoá hết
+  cmd(id, name){
+    const el = elOf(id); if(!el || el.getAttribute('contenteditable') !== 'true') return;
+    focusEd(el); document.execCommand(name, false, null); touch(el);
+  },
+  color(id, k){
+    const el = elOf(id); if(!el || el.getAttribute('contenteditable') !== 'true') return;
+    focusEd(el);
+    try { document.execCommand('styleWithCSS', false, true); document.execCommand('foreColor', false, k ? HEX[k] : BASE); } finally { document.execCommand('styleWithCSS', false, false); }
+    touch(el); const pop = document.querySelector('.rt-pop.open'); if(pop) pop.classList.remove('open');
+  },
+  pop(btn){ const p = btn.parentElement.querySelector('.rt-pop'); document.querySelectorAll('.rt-pop.open').forEach(x => { if(x !== p) x.classList.remove('open'); }); if(p) p.classList.toggle('open'); },
+  key(e, el){
+    if((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey){
+      const k = String(e.key).toLowerCase();
+      if(k === 'b'){ e.preventDefault(); RT.cmd(el, 'bold'); } else if(k === 'i'){ e.preventDefault(); RT.cmd(el, 'italic'); }
+    }
+  },
+  paste(e){ e.preventDefault(); insertText((e.clipboardData || window.clipboardData).getData('text/plain')); },   // luôn dán văn bản thuần
+  drop(e){ e.preventDefault(); },
+};
+document.addEventListener('mousedown', e => { document.querySelectorAll('.rt-pop.open').forEach(p => { if(!p.parentElement.contains(e.target)) p.classList.remove('open'); }); });
+Object.assign(window, { RT, richEditor, richGet, richSet, richHtml, richPlain, richJoin });
+})();
+</script>
 <script src="work.js"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
    Sơ đồ tổ chức: Giám đốc → Trưởng phòng → Quản lý → Nhân viên (cột managerId = cấp trên trực tiếp).
    - OKR & báo cáo tuần: cả đội xem được của nhau.
-   - Công việc: mỗi người xem việc của mình + toàn bộ cấp dưới (Trưởng phòng: cả phòng); Giám đốc xem tất cả.
+   - Công việc (v11): Giám đốc + Trưởng phòng xem tất cả; Quản lý xem việc của mình và việc có cấp dưới tạo/nhận; Nhân viên chỉ xem việc mình tạo / được giao / theo dõi.
    Dữ liệu lưu trên máy chủ riêng (API Node.js + PostgreSQL). Tailwind CDN + Vanilla JS.
    ============================================================ */
 const STORE_KEY = 'okr_weekly_v1';
@@ -878,7 +1084,7 @@ function reportDetail(r){
   const canEdit = own && !reviewed && r.krUpdates.some(ku => 'work' in ku);
   const m = u.managerId ? user(u.managerId) : null;
   const perKr = r.krUpdates.some(ku => 'work' in ku);      // báo cáo theo từng KR (mới); báo cáo cũ theo nguyên bộ OKR
-  const sec = (title, body, extra='') => `<div><div class="section-title mb-1.5">${title}</div><div class="text-slate-700 whitespace-pre-line leading-relaxed">${body ? esc(body) : '<span class="text-gray-400 italic">Không có</span>'}</div>${extra}</div>`;
+  const sec = (title, body, extra='') => `<div><div class="section-title mb-1.5">${title}</div><div class="text-slate-700 whitespace-pre-line leading-relaxed break-words">${richPlain(body).trim() ? richHtml(body) : '<span class="text-gray-400 italic">Không có</span>'}</div>${extra}</div>`;
   return `
   <div class="card" id="report-detail" data-report="${r.id}">
     <div class="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
@@ -929,7 +1135,7 @@ function reportDetail(r){
             <div class="flex-1">
               <div class="rounded-lg px-3.5 py-2.5 ${dir ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50 border border-gray-200'}">
                 <div class="flex items-center gap-2 text-[12px]"><span class="font-semibold text-slate-900">${esc(a.name)}</span>${dir ? roleBadge(a) : ''}<span class="text-gray-400">${fmtDT(c.createdAt)}</span></div>
-                <div class="text-slate-700 mt-1 whitespace-pre-line leading-relaxed">${esc(c.text)}</div>
+                <div class="text-slate-700 mt-1 whitespace-pre-line leading-relaxed break-words">${richHtml(c.text)}</div>
               </div>
               ${dir ? (c.acknowledged
                 ? `<div class="mt-1.5 text-[12px] text-green-700 flex items-center gap-1">${I.check} ${esc(u.name)} đã đọc và hiểu chỉ đạo · ${fmtDT(c.ackAt)}</div>`
@@ -941,7 +1147,7 @@ function reportDetail(r){
         <div class="mt-4 flex gap-3" id="comment-box">
           ${avatar(me(), 'w-8 h-8 text-[11px]')}
           <div class="flex-1">
-            <textarea id="cm-${r.id}" class="input" placeholder="${manages ? 'Viết nhận xét / chỉ đạo cho nhân viên...' : 'Phản hồi lại quản lý (nếu cần)...'}" style="min-height:70px"></textarea>
+            ${richEditor('cm-' + r.id, { placeholder: manages ? 'Viết nhận xét / chỉ đạo cho nhân viên...' : 'Phản hồi lại quản lý (nếu cần)...', minHeight: 70 })}
             <div class="flex justify-end mt-2"><button class="btn btn-primary btn-sm" onclick="A.addComment('${r.id}')">${I.chat} Gửi ${manages ? 'phản hồi' : 'trả lời'}</button></div>
           </div>
         </div>` : `<div class="mt-4 text-[12.5px] text-gray-400 flex items-center gap-1.5" id="comment-locked">${I.lock} Chỉ cấp trên của ${esc(u.name)}${m ? ' (' + esc(m.name) + '…)' : ''} hoặc Giám đốc được phản hồi báo cáo này.</div>`}
@@ -1289,10 +1495,10 @@ const A = {
         </label>
         <div class="kr-body hidden border-t border-gray-100 p-4 space-y-4 bg-gray-50/50">
           <div class="flex items-center gap-3"><label class="label !mb-0 w-40">Giá trị hiện tại</label><input type="number" min="0" step="any" class="input !w-36 kr-input text-right" value="${k.current}"><span class="text-gray-500 text-[12.5px]">${esc(k.unit)}</span></div>
-          <div><label class="label">Đánh giá / Công việc đã thực hiện cho KR này <span class="text-red-500">*</span></label><textarea class="input kr-work" placeholder="- Việc 1...&#10;- Việc 2..."></textarea></div>
+          <div><label class="label">Đánh giá / Công việc đã thực hiện cho KR này <span class="text-red-500">*</span></label>${richEditor('rf-w-' + k.id, { cls: 'kr-work', placeholder: '- Việc 1...\n- Việc 2...', minHeight: 84 })}</div>
           <div class="grid md:grid-cols-2 gap-4">
-            <div><label class="label">Vấn đề / Rào cản</label><textarea class="input kr-issues" placeholder="Khó khăn, điểm nghẽn..."></textarea></div>
-            <div><label class="label">Nguyên nhân</label><textarea class="input kr-causes" placeholder="Vì sao xảy ra vấn đề..."></textarea></div>
+            <div><label class="label">Vấn đề / Rào cản</label>${richEditor('rf-i-' + k.id, { cls: 'kr-issues', placeholder: 'Khó khăn, điểm nghẽn...', minHeight: 84 })}</div>
+            <div><label class="label">Nguyên nhân</label>${richEditor('rf-c-' + k.id, { cls: 'kr-causes', placeholder: 'Vì sao xảy ra vấn đề...', minHeight: 84 })}</div>
           </div>
           <div>
             <div class="flex items-center justify-between mb-1.5"><label class="label !mb-0">Kế hoạch / Hành động tuần tiếp theo</label><button type="button" class="btn btn-ghost btn-sm" onclick="A.addSolRow('${k.id}')">${I.plus} Thêm giải pháp</button></div>
@@ -1305,7 +1511,7 @@ const A = {
       card.querySelector('.kr-pick').checked = true;
       card.querySelector('.kr-body').classList.remove('hidden'); card.classList.add('border-base-500');
       card.querySelector('.kr-input').value = ku.value;
-      card.querySelector('.kr-work').value = ku.work || ''; card.querySelector('.kr-issues').value = ku.issues || ''; card.querySelector('.kr-causes').value = ku.causes || '';
+      richSet(card.querySelector('.kr-work'), ku.work || ''); richSet(card.querySelector('.kr-issues'), ku.issues || ''); richSet(card.querySelector('.kr-causes'), ku.causes || '');
       (ku.solutions || []).forEach(s => A.addSolRow(ku.krId, s));
     });
   },
@@ -1346,14 +1552,14 @@ const A = {
     const krUpdates = [];
     for(const c of picked){
       const k = o.krs.find(k => k.id === c.dataset.kr);
-      const work = c.querySelector('.kr-work').value.trim();
-      if(!work){ toast(`KR "${k.title}": vui lòng nhập đánh giá / công việc đã thực hiện.`, 'error'); return; }
-      krUpdates.push({ krId:k.id, value:Number(c.querySelector('.kr-input').value) || 0, work, issues:c.querySelector('.kr-issues').value.trim(), causes:c.querySelector('.kr-causes').value.trim(),
+      const work = richGet(c.querySelector('.kr-work'));
+      if(!richPlain(work).trim()){ toast(`KR "${k.title}": vui lòng nhập đánh giá / công việc đã thực hiện.`, 'error'); return; }
+      krUpdates.push({ krId:k.id, value:Number(c.querySelector('.kr-input').value) || 0, work, issues:richGet(c.querySelector('.kr-issues')), causes:richGet(c.querySelector('.kr-causes')),
         solutions:[...c.querySelectorAll('.sol-row')].map(row => ({ id:row.dataset.sid || uid(), krId:k.id, text:row.querySelector('.sol-text').value.trim(), due:row.querySelector('.sol-due').value })).filter(s => s.text) });
     }
     const solutions = krUpdates.flatMap(ku => ku.solutions);
     // Các trường tổng hợp (work/issues/causes) giữ để tương thích với bản cũ & bot/báo cáo đọc dữ liệu thô
-    const joinKr = f => krUpdates.filter(ku => ku[f]).map(ku => `[${o.krs.find(k => k.id === ku.krId).title}]\n${ku[f]}`).join('\n\n');
+    const joinKr = f => richJoin(krUpdates.map(ku => ({ head:o.krs.find(k => k.id === ku.krId).title, body:ku[f] })));   // chỉ ghép dạng thuần; có định dạng thì ghép thành chuỗi định dạng
     const now = new Date().toISOString();
     if(er){
       const oldSol = new Set(er.solutions.map(s => s.id));
@@ -1387,8 +1593,8 @@ const A = {
   addComment(rid){
     const r = DB.reports.find(r => r.id === rid);
     if(!r || !(r.userId === session() || canManage(r.userId))){ toast('Chỉ quản lý trực tiếp hoặc Giám đốc được phản hồi báo cáo này.', 'error'); return; }
-    const ta = document.getElementById('cm-' + rid), text = ta.value.trim();
-    if(!text){ toast('Vui lòng nhập nội dung phản hồi.', 'error'); return; }
+    const text = richGet('cm-' + rid);
+    if(!richPlain(text).trim()){ toast('Vui lòng nhập nội dung phản hồi.', 'error'); return; }
     const c = { id:uid(), reportId:rid, authorId:session(), text, createdAt:new Date().toISOString(), acknowledged:false };
     const directive = isDirective(c.authorId, r.userId);
     mutate('addComment', { comment:c }, () => { r.comments.push(c); }, directive ? 'Đã gửi chỉ đạo cho nhân viên.' : 'Đã gửi trả lời.');
