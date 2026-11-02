@@ -1181,8 +1181,7 @@ function openRecurring(id){
       <div class="md:col-span-2 space-y-4 min-w-0">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === r.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
         <div><label class="label">Ưu tiên</label><select class="input" ${v ? 'disabled' : ''} onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, x]) => `<option value="${k}" ${r.priority === k ? 'selected' : ''}>${x.t}</option>`).join('')}</select></div>
-        ${isNew ? `<div><label class="label">Hạn chót của việc đầu tiên</label><input type="date" class="input" value="${esc(r.due)}" onchange="W.d('due',this.value);W.paintRecurrence()"></div>`
-          : `<div class="text-[12.5px] text-gray-500">${r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : 'Hiện chưa có việc nào đang mở.'}</div>`}
+        ${isNew ? '' : `<div class="text-[12.5px] text-gray-500">${r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : 'Hiện chưa có việc nào đang mở.'}</div>`}
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
         <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
