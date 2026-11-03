@@ -1,5 +1,6 @@
 /**
  * OKR Weekly — API máy chủ (Node.js + PostgreSQL), thay cho Apps Script (Code.gs v4).
+ * v14: hộp thông báo trong app (chuông ở đầu trang): bảng notifications, GET ?notif=1 (kèm nv=<dấu phiên bản> để bỏ qua khi chưa có gì mới), hành động notifMark / notifRemove (không làm đổi phiên bản dữ liệu chung). Xem src/notify.js.
  * v12: ngày bắt đầu của công việc (bắt buộc, không sau hạn), tệp đính kèm khi tạo việc (tối đa 10MB/tệp), thông báo email (Gmail SMTP) khi giao việc / giao lại / phản hồi báo cáo tuần / bình luận; nhãn trạng thái "Cần làm" đổi thành "Chưa thực hiện".
  * v11: người theo dõi (chỉ xem + bình luận), quy tắc xem/sửa/xoá việc theo người tạo/người nhận/chuỗi quản lý (bỏ share_all), rich text được làm sạch ở máy chủ.
  * v9: tách nơi tạo/sửa công việc (người tạo) khỏi bảng làm việc (khoá tên, mô tả), giao việc không giới hạn cấp bậc, mục Việc lặp lại riêng.
@@ -26,12 +27,13 @@ const scryptAsync = promisify(crypto.scrypt);
 const gzipAsync = promisify(zlib.gzip);
 const { Pool } = require('pg');
 const makeMail = require('./mail');
+const N = require('./notify');
 
 const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 12;
+const VERSION = 14;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -66,6 +68,7 @@ CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 `;
 async function migrate() {
   await pool.query(SCHEMA);
+  await pool.query(N.SCHEMA);                                                                              // v14: hộp thông báo trong app
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true');   // v6: khoá tài khoản
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''");          // v12: email nhận thông báo
   await W.migrate();                                                                                       // v8: workspace, dự án, việc nhiều người làm, tệp đính kèm
@@ -347,7 +350,7 @@ const A = {
     // Email: cấp trên phản hồi / chỉ đạo → báo cho người viết báo cáo (người viết tự trả lời thì không gửi).
     if (c.notes && r.user_id !== c.me.id) {
       const rep = await one(c.q, 'SELECT r.week, r.year, o.title FROM reports r LEFT JOIN okrs o ON o.id = r.okr_id WHERE r.id=$1', [cm.reportId]);
-      c.notes.push({ kind: 'reportFeedback', to: [r.user_id], actorId: c.me.id, report: { week: rep ? rep.week : '', year: rep ? rep.year : '', okrTitle: rep ? rep.title || '' : '' }, text: W.plainOf(text).trim().slice(0, 600) });
+      c.notes.push({ kind: 'reportFeedback', to: [r.user_id], actorId: c.me.id, report: { id: cm.reportId, week: rep ? rep.week : '', year: rep ? rep.year : '', okrTitle: rep ? rep.title || '' : '' }, text: W.plainOf(text).trim().slice(0, 600) });
     }
   },
   async ackComment(c, p) {
@@ -382,12 +385,17 @@ const A = {
         [k.id, o.id, str(k.title), num(k.baseline), current, num(k.target), str(k.unit), i]);
     }
     await c.q.query('DELETE FROM krs WHERE okr_id=$1 AND NOT (id = ANY($2))', [o.id, keep]);
+    // Hộp thông báo: OKR đang chờ duyệt → báo cho cấp trên trực tiếp của người phụ trách.
+    const boss = c.byId[o.ownerId].managerId;
+    if (c.notes && !approved && boss && boss !== c.me.id) c.notes.push({ kind: 'okrPending', to: [boss], actorId: c.me.id, okr: { id: o.id, title: str(o.title) } });
   },
   async reviewOKR(c, p) {
     if (!p.id || !['approved', 'rejected'].includes(p.status)) throw new AppError('Thiếu dữ liệu duyệt.');
-    const o = await one(c.q, 'SELECT owner_id FROM okrs WHERE id=$1', [p.id]); if (!o) throw new AppError('Không tìm thấy OKR.');
+    const o = await one(c.q, 'SELECT owner_id, title FROM okrs WHERE id=$1', [p.id]); if (!o) throw new AppError('Không tìm thấy OKR.');
     if (!canManage(c, o.owner_id)) deny('Chỉ cấp trên của người phụ trách hoặc Giám đốc được duyệt OKR này.');
     await c.q.query('UPDATE okrs SET status=$2, review_note=$3, updated_at=$4 WHERE id=$1', [p.id, p.status, str(p.reviewNote), str(p.updatedAt) || new Date().toISOString()]);
+    // Hộp thông báo: kết quả duyệt → báo cho người phụ trách OKR.
+    if (c.notes && o.owner_id !== c.me.id) c.notes.push({ kind: p.status === 'approved' ? 'okrApproved' : 'okrRejected', to: [o.owner_id], actorId: c.me.id, okr: { id: p.id, title: o.title, note: str(p.reviewNote) } });
   },
   async deleteOKR(c, p) {
     const o = await one(c.q, 'SELECT owner_id, status FROM okrs WHERE id=$1', [p.id]); if (!o) return;
@@ -476,6 +484,7 @@ const A = {
     if (Number(used.n)) throw new AppError(u.name + ' đã có OKR, báo cáo, công việc hoặc phản hồi trong hệ thống nên không xoá được. Hãy dùng "Khoá tài khoản" để giữ lại lịch sử.');
     await c.q.query('DELETE FROM workspace_members WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM project_members WHERE user_id=$1', [u.id]);
+    await c.q.query('DELETE FROM notifications WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM users WHERE id=$1', [u.id]);
   },
   /* Mỗi người tự đổi mật khẩu của mình (cần mật khẩu hiện tại). */
@@ -491,6 +500,14 @@ const A = {
     await c.q.query('UPDATE users SET pass_hash=$2 WHERE id=$1', [c.me.id, hashPassword(pw)]);
   },
 };
+/* Hộp thông báo (v14): mỗi người chỉ đọc / đánh dấu / xoá thông báo của chính mình. Không làm đổi phiên bản dữ liệu chung (xem QUIET). */
+A.notifMark = async (c, p) => { await N.mark(c.q, c.me.id, p); return N.list(c.q, c.me.id); };
+A.notifRemove = async (c, p) => { await N.remove(c.q, c.me.id, p); return N.list(c.q, c.me.id); };
+const QUIET = new Set(['notifMark', 'notifRemove']);
+/* Dấu phiên bản thông báo của từng người: app gửi lại nv đang có, trùng thì máy chủ trả "unchanged". Đặt lại khi khởi động máy chủ (app sẽ tải lại 1 lần). */
+const BOOT = Date.now().toString(36); let notifSeq = 0; const notifStamps = new Map();
+const touchNotif = ids => { for (const id of ids) notifStamps.set(id, BOOT + '.' + (++notifSeq)); };
+const stampOf = id => notifStamps.get(id) || BOOT + '.0';
 Object.assign(A, W.actions);          // v8: thay thế addTask/updateTask/deleteTask/ghi chú bằng bản theo dự án + thêm các hành động mới
 /** Giải pháp trong báo cáo tuần → KR nguồn (giải pháp nằm trong khối của KR nào thì thuộc KR đó). Máy chủ tự suy ra, không tin mã KR client gửi kèm việc; KR phải thuộc đúng OKR của báo cáo. */
 async function solutionKrMap(q, okrId, krUpdates) {
@@ -553,6 +570,12 @@ async function handle(req, res) {
       const fileM = url.pathname.match(/\/file\/([A-Za-z0-9_-]+)$/);
       if (fileM) return await W.download(await ctx(await verifyToken(tok)), res, fileM[1]);            // tải / xem tệp đính kèm (token trên URL để dùng được với <img>, <a>)
       const viewer = tok ? await verifyToken(tok) : null;
+      if (url.searchParams.get('notif')) {                                                             // hộp thông báo của người xem (nv = dấu phiên bản app đang có)
+        if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
+        const nv = stampOf(viewer.id);
+        if (url.searchParams.get('nv') === nv) return send(res, { ok: true, unchanged: true, nv });
+        return send(res, { ok: true, nv, ...(await N.list(pool, viewer.id)) }, 200, req);
+      }
       if (url.searchParams.get('work')) {                                                              // màn Công việc: dữ liệu theo workspace đang chọn
         if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
         if (url.searchParams.get('v') && url.searchParams.get('v') === dataVersion) return send(res, { ok: true, unchanged: true, version: dataVersion });
@@ -584,8 +607,16 @@ async function handle(req, res) {
     if (!Object.prototype.hasOwnProperty.call(A, action)) throw new AppError('Hành động không hợp lệ: ' + action);
     let viewer = await verifyToken(body.token);
     const notes = [];
-    const result = await tx(async client => { const c = await ctx(viewer, client); c.notes = notes; return await A[action](c, p); });
-    bumpVersion();
+    let recipients = [];
+    const result = await tx(async client => {
+      const c = await ctx(viewer, client); c.notes = notes;
+      const out = await A[action](c, p);
+      recipients = await N.save(client, notes, c.byId);                                                 // lưu vào hộp thông báo trong cùng giao dịch
+      return out;
+    });
+    if (QUIET.has(action)) { touchNotif([viewer.id]); result.nv = stampOf(viewer.id); }                // đọc / xoá thông báo: không làm mọi người tải lại dữ liệu chung
+    else bumpVersion();
+    touchNotif(recipients);
     M.queue(notes);                                                                                    // chỉ gửi khi giao dịch đã thành công
     if (body.lite) return send(res, { ok: true, version: dataVersion, result });     // app tự cập nhật tại chỗ, sẽ tải lại sau
     viewer = (await getUsers()).find(u => u.id === viewer.id) || viewer;
@@ -599,7 +630,7 @@ async function importDB(db, opts = {}) {
   if (existing.n && !opts.force) throw new Error('Cơ sở dữ liệu đã có dữ liệu (' + existing.n + ' người dùng). Thêm --force để ghi đè.');
   const temp = [];
   await tx(async q => {
-    if (opts.force) await q.query('TRUNCATE comments, krs, reports, okrs, tasks, cycles, users CASCADE');
+    if (opts.force) await q.query('TRUNCATE comments, krs, reports, okrs, tasks, cycles, users, notifications CASCADE');
     for (const c of db.cycles || []) await q.query('INSERT INTO cycles(id,name,start_date,end_date,active) VALUES($1,$2,$3,$4,$5)', [c.id, str(c.name), str(c.start), str(c.end), !!c.active]);
     for (const u of db.users || []) {
       let pw = u.password || (opts.passwords || {})[u.username];

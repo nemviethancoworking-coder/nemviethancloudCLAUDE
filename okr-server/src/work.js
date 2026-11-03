@@ -664,6 +664,9 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       // Email: người MỚI được giao việc (tạo mới, hoặc người tạo thêm người thực hiện khi sửa). Gửi sau khi giao dịch thành công.
       const newcomers = assignees.filter(a => !prev.includes(a) && a !== c.me.id);
       if (c.notes && newcomers.length) c.notes.push({ kind: 'assigned', to: newcomers, actorId: c.me.id, task: { id: t.id, title, due, startDate, priority, project: pc.p.name } });
+      // Hộp thông báo: người MỚI được thêm làm người theo dõi.
+      const newFollowers = followers ? followers.filter(f => !(old ? old.followers : []).includes(f) && f !== c.me.id) : [];
+      if (c.notes && newFollowers.length) c.notes.push({ kind: 'follower', to: newFollowers, actorId: c.me.id, task: { id: t.id, title } });
       return {};
     },
     /** Giao lại công việc cho người khác: người đang thực hiện, người tạo hoặc cấp trên; không giới hạn theo cấp bậc. Ghi lại vào bình luận. */
@@ -747,6 +750,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const added = ids.filter(f => !tc.followers.includes(f));
       await c.q.query('INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)',
         [newId('c'), tc.t.id, c.me.id, 'Đã cập nhật người theo dõi: ' + list(tc.followers) + ' → ' + list(ids), new Date().toISOString(), JSON.stringify(added.filter(f => f !== c.me.id))]);
+      const toNote = added.filter(f => f !== c.me.id);
+      if (c.notes && toNote.length) c.notes.push({ kind: 'follower', to: toNote, actorId: c.me.id, task: { id: tc.t.id, title: tc.t.title } });
       return {};
     },
 

@@ -137,6 +137,16 @@ function repaint(){
   if(c2) c2.scrollTop = top; if(b2) b2.scrollLeft = left;
   document.querySelectorAll('[data-col]').forEach((e, i) => { if(colTops[i]) e.scrollTop = colTops[i]; });
 }
+/** Mở chi tiết 1 việc từ hộp thông báo: sang màn Công việc (đúng workspace), tải dữ liệu mới rồi mở chi tiết. */
+async function gotoTask(id, ws){
+  if(ws && S.ws !== ws){ S.ws = ws; lsSet('okr_work_ws', ws); S.project = 'all'; }
+  S.version = null;
+  state.view = 'tasks'; render();
+  for(let i = 0; i < 40 && S.loading; i++) await new Promise(r => setTimeout(r, 100));
+  await load(true);
+  if(S.data && S.data.tasks.some(x => x.id === id)) openDetail(id);
+  else toast('Không mở được công việc này. Có thể việc đã bị xoá hoặc bạn không còn quyền xem.', 'error');
+}
 /** Gửi 1 hành động ghi, rồi tải lại dữ liệu. Trả về kết quả máy chủ hoặc null nếu lỗi (đã báo lỗi). */
 async function act(action, payload, okMsg){
   try {
@@ -1355,7 +1365,7 @@ function retry(){ S.error = null; S.data = null; repaint(); }
 window.W = {
   view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
-  openTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
+  openTask, gotoTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
   pickFiles, delAttachment, cmInput, cmPick, cmKey, postComment, delComment,
   openWorkspace, saveWorkspace, deleteWorkspace, openDepartments, saveDept, delDept, openProject, saveProject, deleteProject, filterPick,
