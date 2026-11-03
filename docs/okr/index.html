@@ -62,12 +62,15 @@
   .rt-area { padding:8px 10px; font-size:14px; line-height:1.5; color:#1e293b; outline:none; white-space:pre-wrap; overflow-wrap:anywhere; overflow:auto; resize:vertical; max-height:70vh; }
   .rt-area[contenteditable=false] { cursor:default; }
   .rt-area:empty::before { content:attr(data-ph); color:#9ca3af; pointer-events:none; white-space:pre-line; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .nt-ic svg { width:11px; height:11px; }
   .rt-red { color:#dc2626; } .rt-orange { color:#ea580c; } .rt-blue { color:#2563eb; }
 </style>
 </head>
 <body class="bg-[#f4f5f7] text-slate-800 text-sm">
 <div id="app"></div>
 <div id="modal"></div>
+<div id="ntpanel"></div>
 <div id="toast" class="fixed bottom-5 right-5 z-[100] flex flex-col gap-2"></div>
 
 <script>
@@ -258,7 +261,7 @@ document.addEventListener('mousedown', e => { document.querySelectorAll('.rt-pop
 Object.assign(window, { RT, richEditor, richGet, richSet, richHtml, richPlain, richJoin });
 })();
 </script>
-<script src="work.js?v=13"></script>
+<script src="work.js?v=14"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
@@ -503,7 +506,7 @@ function scheduleRefresh(){ clearTimeout(refreshTimer); refreshTimer = setTimeou
 }
 /* Token hết hạn / không hợp lệ → đăng xuất, yêu cầu đăng nhập lại. */
 function forceLogout(msg){
-  localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset();
+  localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset(); ntReset();
   if(online() && DB){ DB.tasks = []; save(); }
   document.getElementById('modal').innerHTML = '';
   render(); toast(msg || 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.', 'error');
@@ -534,6 +537,129 @@ setInterval(() => {
   const a = document.activeElement; if(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return; // đang gõ
   refreshFromServer(true);
 }, 60000);
+
+/* ---------- Hộp thông báo (v14): chuông ở đầu trang ----------
+   Máy chủ lưu thông báo riêng cho từng người (giao việc, bình luận, phản hồi báo cáo, duyệt OKR...). App hỏi lại mỗi 30 giây bằng dấu phiên bản `nv`
+   (không có gì mới thì máy chủ chỉ trả "unchanged"). Bảng thông báo nằm ngoài #app nên không bị vẽ lại khi dữ liệu chính làm mới. */
+const NT = { items:[], unread:0, nv:null, open:false, tab:'all', pending:0, loaded:false, off:false };
+const NT_ICON = { assigned:'task', reassigned:'task', taskComment:'chat', follower:'task', reportFeedback:'report', okrPending:'flag', okrApproved:'check', okrRejected:'x' };
+const NT_TONE = { okrApproved:'bg-emerald-100 text-emerald-700', okrRejected:'bg-red-100 text-red-600', okrPending:'bg-amber-100 text-amber-700' };
+function ntReset(){ NT.items = []; NT.unread = 0; NT.nv = null; NT.open = false; NT.tab = 'all'; NT.loaded = false; NT.pending = 0; ntPaint(); }
+function ntSet(j){ NT.items = j.items || []; NT.unread = j.unread || 0; NT.nv = j.nv || null; NT.loaded = true; }
+async function ntFetch(){
+  if(!online() || !session() || !token() || NT.pending || NT.off) return;
+  try {
+    const u = apiUrl(), had = NT.loaded, before = NT.unread;
+    const j = await apiFetch(u + (u.includes('?') ? '&' : '?') + 'notif=1&t=' + Date.now() + '&token=' + encodeURIComponent(token()) + (NT.nv ? '&nv=' + encodeURIComponent(NT.nv) : ''));
+    if(j.unchanged) return;
+    if(!Array.isArray(j.items)){ NT.off = true; ntPaint(); const b = document.getElementById('nt-bell'); if(b) b.remove(); return; }       // máy chủ cũ chưa có hộp thông báo → ẩn chuông
+    ntSet(j); ntPaint();
+    if(had && NT.unread > before && !NT.open) toast(NT.unread - before === 1 ? 'Bạn có 1 thông báo mới.' : 'Bạn có ' + (NT.unread - before) + ' thông báo mới.', 'info');
+  } catch(e){ if(e.auth) forceLogout(e.message); }          // mất mạng thì im lặng, lần sau thử lại
+}
+/** Gửi 1 hành động lên máy chủ; `local` áp dụng ngay trên màn hình, kết quả máy chủ (danh sách mới) thay thế khi về tới. */
+async function ntAct(action, payload, local){
+  if(!online() || !token()) return;
+  NT.pending++; if(local) local(); ntPaint();
+  try {
+    const j = await apiFetch(apiUrl(), { method:'POST', body: JSON.stringify({ action, payload, token: token(), lite: true }) });
+    if(j.result && Array.isArray(j.result.items)) ntSet(j.result);
+  } catch(e){
+    if(e.auth){ NT.pending = 0; forceLogout(e.message); return; }
+    toast('Không cập nhật được thông báo: ' + e.message, 'error'); NT.nv = null;
+  }
+  NT.pending = Math.max(0, NT.pending - 1);
+  if(!NT.pending){ ntPaint(); if(!NT.nv) ntFetch(); }
+}
+const ntBellClass = () => 'relative p-2 rounded-lg hover:bg-gray-100 hover:text-slate-800 ' + (NT.open ? 'bg-gray-100 text-slate-800' : 'text-gray-500');
+const ntBadge = () => `<span id="nt-badge">${NT.unread ? `<span class="absolute top-0 right-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10.5px] font-semibold leading-[18px] text-center">${NT.unread > 99 ? '99+' : NT.unread}</span>` : ''}</span>`;
+const ntLabel = () => 'Thông báo' + (NT.unread ? ' (' + NT.unread + ' chưa đọc)' : '');
+function ntBell(){
+  if(NT.off || !online()) return '';
+  return `<button id="nt-bell" type="button" class="${ntBellClass()}" title="Thông báo" aria-label="${ntLabel()}" aria-haspopup="dialog" onclick="A.ntToggle(event)">${I.bell}${ntBadge()}</button>`;
+}
+function ntRel(iso){
+  const t = new Date(iso).getTime(); if(!t) return '';
+  const m = Math.max(0, Math.floor((Date.now() - t) / 60000));
+  if(m < 1) return 'Vừa xong'; if(m < 60) return m + ' phút trước';
+  const h = Math.floor(m / 60); if(h < 24) return h + ' giờ trước';
+  const d = Math.floor(h / 24); return d < 7 ? d + ' ngày trước' : fmtDT(iso);
+}
+function ntHead(n){
+  const a = n.actorId ? findUser(n.actorId) : null, who = '<b>' + esc(a ? a.name : 'Một đồng nghiệp') + '</b>';
+  switch(n.kind){
+    case 'assigned': return who + ' giao việc cho bạn';
+    case 'reassigned': return who + ' giao lại việc cho bạn';
+    case 'taskComment': return who + ' đã bình luận trong một công việc';
+    case 'follower': return who + ' thêm bạn làm người theo dõi công việc';
+    case 'reportFeedback': return who + ' đã phản hồi báo cáo tuần của bạn';
+    case 'okrPending': return who + ' gửi OKR chờ bạn duyệt';
+    case 'okrApproved': return who + ' đã duyệt OKR của bạn';
+    case 'okrRejected': return who + ' đã từ chối OKR của bạn';
+  }
+  return who + ' gửi cho bạn một thông báo';
+}
+function ntRow(n){
+  const a = n.actorId ? findUser(n.actorId) : null, tone = NT_TONE[n.kind] || 'bg-base-100 text-base-700';
+  return `
+  <div class="group flex gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 ${n.read ? '' : 'bg-base-50'}" role="button" tabindex="0" onclick="A.ntOpen('${n.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();A.ntOpen('${n.id}')}">
+    <div class="relative shrink-0">${avatar(a || { name:'?', color:'#9ca3af' }, 'w-9 h-9 text-xs')}<span class="nt-ic absolute -bottom-1 -right-1 w-[18px] h-[18px] rounded-full border-2 border-white flex items-center justify-center ${tone}">${I[NT_ICON[n.kind]] || I.chat}</span></div>
+    <div class="min-w-0 flex-1">
+      <div class="text-[13px] leading-snug ${n.read ? 'text-gray-600' : 'text-slate-900'}">${ntHead(n)}</div>
+      ${n.subject ? `<div class="text-[13px] font-medium ${n.read ? 'text-gray-500' : 'text-slate-800'} truncate mt-0.5">${esc(n.subject)}</div>` : ''}
+      ${n.detail ? `<div class="text-[12.5px] text-gray-500 mt-0.5 break-words" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(n.detail)}</div>` : ''}
+      <div class="text-[11.5px] mt-1 ${n.read ? 'text-gray-400' : 'text-base-600 font-medium'}">${ntRel(n.createdAt)}</div>
+    </div>
+    <div class="flex flex-col items-center justify-between shrink-0">
+      ${n.read ? '<span class="w-2 h-2"></span>' : '<span class="w-2 h-2 rounded-full bg-base-500 mt-1.5" title="Chưa đọc"></span>'}
+      <button class="sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 text-gray-400 hover:text-red-600 p-1" title="Xoá thông báo" aria-label="Xoá thông báo" onclick="event.stopPropagation();A.ntRemove('${n.id}')">${I.trash}</button>
+    </div>
+  </div>`;
+}
+function ntPanel(){
+  const shown = NT.tab === 'unread' ? NT.items.filter(n => !n.read) : NT.items, hasRead = NT.items.some(n => n.read);
+  const chip = (k, label) => `<span class="chip ${NT.tab === k ? 'active' : ''}" onclick="A.ntTab('${k}')">${label}</span>`;
+  return `
+  <div class="fixed top-14 right-3 sm:right-6 z-40 w-[420px] max-w-[calc(100vw-1.5rem)] card shadow-xl fade-in flex flex-col" style="max-height:min(600px, calc(100vh - 4.5rem))" role="dialog" aria-label="Thông báo">
+    <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-200">
+      <div class="flex items-center gap-2"><h3 class="font-semibold text-slate-900 text-[15px]">Thông báo</h3>${NT.unread ? `<span class="badge bg-red-50 text-red-600 border-red-200">${NT.unread} chưa đọc</span>` : ''}</div>
+      <div class="flex items-center gap-1">
+        <button class="btn btn-ghost btn-sm" ${NT.unread ? '' : 'disabled'} onclick="A.ntMarkAll()">${I.check} Đọc tất cả</button>
+        <button class="text-gray-400 hover:text-gray-700 p-1 rounded" aria-label="Đóng" onclick="A.ntClose()">${I.x}</button>
+      </div>
+    </div>
+    <div class="flex gap-2 px-4 py-2 border-b border-gray-100">${chip('all', 'Tất cả')}${chip('unread', 'Chưa đọc' + (NT.unread ? ' ' + NT.unread : ''))}</div>
+    <div id="nt-list" class="overflow-y-auto divide-y divide-gray-100 flex-1">${shown.length ? shown.map(ntRow).join('') : `
+      <div class="px-6 py-12 text-center text-gray-400 text-[13px]">${!NT.loaded ? 'Đang tải thông báo...' : NT.tab === 'unread' && NT.items.length ? 'Bạn đã đọc hết thông báo.' : 'Chưa có thông báo nào.<br>Khi có người giao việc, bình luận hay phản hồi cho bạn, thông báo sẽ hiện ở đây.'}</div>`}</div>
+    ${hasRead ? `<div class="px-4 py-2 border-t border-gray-100 text-right"><button class="text-[12.5px] text-gray-500 hover:text-red-600" onclick="A.ntClearRead()">Xoá thông báo đã đọc</button></div>` : ''}
+  </div>`;
+}
+function ntPaint(){
+  const b = document.getElementById('nt-badge'); if(b) b.outerHTML = ntBadge();
+  const bell = document.getElementById('nt-bell'); if(bell) bell.setAttribute('aria-label', ntLabel());
+  document.title = (NT.unread ? '(' + NT.unread + ') ' : '') + 'OKRs & Báo cáo tuần';
+  const host = document.getElementById('ntpanel'); if(!host) return;
+  if(!NT.open || !session()){ host.innerHTML = ''; return; }
+  const old = host.querySelector('#nt-list'), top = old ? old.scrollTop : 0;
+  host.innerHTML = ntPanel();
+  const cur = host.querySelector('#nt-list'); if(cur) cur.scrollTop = top;
+}
+async function ntGotoReport(id){
+  if(!DB.reports.find(r => r.id === id)) await refreshFromServer(true);
+  const r = DB.reports.find(r => r.id === id);
+  if(!r){ toast('Không tìm thấy báo cáo này, có thể báo cáo đã bị xoá.', 'error'); return; }
+  const o = okrById(r.okrId); if(o) state.cycleId = o.cycleId;
+  A.gotoReport(id);
+}
+async function ntGotoOkr(id){
+  if(!okrById(id)) await refreshFromServer(true);
+  const o = okrById(id);
+  if(!o){ toast('Không tìm thấy OKR này, có thể OKR đã bị xoá.', 'error'); return; }
+  state.cycleId = o.cycleId; state.view = 'okrs'; state.okrUser = 'all'; state.okrStatus = ['pending', 'approved', 'rejected'].includes(o.status) ? o.status : 'all'; render();
+}
+setInterval(() => { if(document.visibilityState === 'visible') ntFetch(); }, 30000);
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') ntFetch(); });
+document.addEventListener('click', e => { if(NT.open && !e.composedPath().some(el => el.id === 'ntpanel' || el.id === 'nt-bell')) A.ntClose(); });
 
 /* ---------- Người dùng & phân quyền ---------- */
 /* Chỉ mục tra cứu nhanh, dựng lại mỗi lần render (vài ms kể cả khi có hàng chục nghìn công việc). */
@@ -652,6 +778,7 @@ const progressBar = (pct, bar='bg-base-500', h='h-2') => `<div class="w-full ${h
 
 /* ---------- Icons ---------- */
 const I = {
+  bell:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>',
   dash:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
   report:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
   task:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
@@ -754,6 +881,7 @@ function render(){
       <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
         <div class="flex items-center gap-3"><h1 class="text-base font-semibold text-slate-900">${titles[state.view]}</h1><span class="text-gray-300">|</span><span class="text-gray-500 text-[13px]">${weekLabel(isoWeek(new Date()).week, isoWeek(new Date()).year)}</span></div>
         <div class="flex items-center gap-3">
+          ${ntBell()}
           ${mgr ? `<span class="text-[12px] text-gray-500 hidden md:inline">Quản lý trực tiếp: <b class="text-slate-700">${esc(mgr.name)}</b></span>` : ''}
           ${roleBadge(u)}
           ${avatar(u, 'w-8 h-8 text-[11px]')}
@@ -1354,11 +1482,26 @@ const A = {
       if(!isActive(u)) return fail('Tài khoản này đã bị khoá. Liên hệ Giám đốc nếu cần mở lại.');
     }
     setSession(u.id, tk); state = { ...state, view:'dashboard', reportId:null, dashUser:'all', ckUser:'all', ckWeek:'all', taskStatus:'all', taskUser:'all', okrUser:'all', okrStatus:'all' };
-    render(); toast(`Xin chào, ${u.name}!`, 'info');
+    render(); toast(`Xin chào, ${u.name}!`, 'info'); ntFetch();
   },
-  logout(){ localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset(); if(online()){ DB.tasks = []; save(); } render(); },
+  logout(){ localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset(); ntReset(); if(online()){ DB.tasks = []; save(); } render(); },
   refresh(){ refreshFromServer(false); if(state.view === 'tasks') W.reload(); },
   selectReport(id){ state.reportId = id; render(); },
+  /* Hộp thông báo (v14) */
+  ntToggle(e){ if(e) e.stopPropagation(); NT.open = !NT.open; if(NT.open) ntFetch(); ntPaint(); const b = document.getElementById('nt-bell'); if(b) b.className = ntBellClass(); },
+  ntClose(){ if(!NT.open) return; NT.open = false; ntPaint(); const b = document.getElementById('nt-bell'); if(b) b.className = ntBellClass(); },
+  ntTab(k){ NT.tab = k; ntPaint(); },
+  ntMarkAll(){ ntAct('notifMark', { all:true }, () => { NT.items.forEach(n => { n.read = true; }); NT.unread = 0; }); },
+  ntRemove(id){ const n = NT.items.find(x => x.id === id); ntAct('notifRemove', { id }, () => { NT.items = NT.items.filter(x => x.id !== id); if(n && !n.read) NT.unread = Math.max(0, NT.unread - 1); }); },
+  ntClearRead(){ ntAct('notifRemove', { clearRead:true }, () => { NT.items = NT.items.filter(x => !x.read); }); },
+  async ntOpen(id){
+    const n = NT.items.find(x => x.id === id); if(!n) return;
+    if(!n.read) ntAct('notifMark', { ids:[id] }, () => { n.read = true; NT.unread = Math.max(0, NT.unread - 1); });
+    A.ntClose();
+    if(n.refType === 'task') W.gotoTask(n.refId, n.refWs);
+    else if(n.refType === 'report') await ntGotoReport(n.refId);
+    else if(n.refType === 'okr') await ntGotoOkr(n.refId);
+  },
   gotoReport(id){ const r = DB.reports.find(r => r.id === id); if(!r) return; state.view = 'checkin'; state.ckWeek = 'all'; state.ckUser = 'all'; state.reportId = id; render(); },
   openReportForm, openOkrForm, openReview, openCycles, openUserForm, openPasswordForm,
   async changePassword(){
@@ -1639,7 +1782,7 @@ const A = {
 /* ---------- Khởi động ---------- */
 // Gắn solutionId cho task mẫu (để liên kết checkbox trong chi tiết báo cáo)
 function linkSeedTasks(){ let changed = false; DB.tasks.forEach(t => { if(t.reportId && !t.solutionId){ const r = DB.reports.find(r => r.id === t.reportId); const s = r && r.solutions.find(s => s.text === t.title); if(s){ t.solutionId = s.id; changed = true; } } }); if(changed) save(); }
-document.addEventListener('keydown', e => { if(e.key === 'Escape') A.cancelModal(); });
+document.addEventListener('keydown', e => { if(e.key === 'Escape'){ A.ntClose(); A.cancelModal(); } });
 ['input','change'].forEach(ev => document.getElementById('modal').addEventListener(ev, () => { modalDirty = true; }));
 async function init(){
   load(); linkSeedTasks();
@@ -1650,6 +1793,7 @@ async function init(){
     catch(e){ if(e.auth){ localStorage.removeItem(SESSION_KEY); DB.tasks = []; save(); toast(e.message, 'error'); } else toast('Không tải được dữ liệu mới, đang dùng dữ liệu đã lưu trên máy. ' + e.message, 'error'); }
   }
   render();
+  if(session()) ntFetch();
 }
 init();
 </script>

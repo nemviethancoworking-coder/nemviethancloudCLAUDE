@@ -19734,6 +19734,98 @@ ${extraHtml || ""}
   }
 });
 
+// src/notify.js
+var require_notify = __commonJS({
+  "src/notify.js"(exports2, module2) {
+    "use strict";
+    var crypto2 = require("crypto");
+    var KINDS = {
+      assigned: "task",
+      reassigned: "task",
+      taskComment: "task",
+      follower: "task",
+      reportFeedback: "report",
+      okrApproved: "okr",
+      okrRejected: "okr",
+      okrPending: "okr"
+    };
+    var KEEP = 200;
+    var LIST_LIMIT = 60;
+    var clip = (s, n) => String(s === null || s === void 0 ? "" : s).replace(/\s+/g, " ").trim().slice(0, n);
+    var newId = () => "n" + crypto2.randomBytes(8).toString("hex");
+    function subjectOf(note) {
+      if (KINDS[note.kind] === "task") return clip(note.task && note.task.title, 200);
+      if (note.kind === "reportFeedback") {
+        const r = note.report || {};
+        return clip("B\xE1o c\xE1o tu\u1EA7n " + r.week + "/" + r.year + (r.okrTitle ? " \xB7 " + r.okrTitle : ""), 200);
+      }
+      return clip(note.okr && note.okr.title, 200);
+    }
+    var refIdOf = (note) => KINDS[note.kind] === "task" ? note.task && note.task.id : note.kind === "reportFeedback" ? note.report && note.report.id : note.okr && note.okr.id;
+    async function save(q, notes, byId) {
+      const recipients = /* @__PURE__ */ new Set(), wsCache = /* @__PURE__ */ new Map();
+      const wsOf = async (taskId) => {
+        if (!wsCache.has(taskId)) {
+          const r = await q.query("SELECT p.workspace_id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1", [taskId]);
+          wsCache.set(taskId, r.rows[0] ? r.rows[0].workspace_id || "" : "");
+        }
+        return wsCache.get(taskId);
+      };
+      for (const note of notes || []) {
+        const refType = KINDS[note.kind];
+        if (!refType) continue;
+        const refId = refIdOf(note);
+        if (!refId) continue;
+        const refWs = refType === "task" ? await wsOf(refId) : "";
+        const detail = clip(note.text || note.okr && note.okr.note, 600);
+        const subject = subjectOf(note), when = (/* @__PURE__ */ new Date()).toISOString();
+        for (const to of [...new Set(note.to || [])]) {
+          const u = byId[to];
+          if (!u || u.active === false || to === note.actorId) continue;
+          await q.query(
+            "INSERT INTO notifications(id,user_id,kind,actor_id,ref_type,ref_id,ref_ws,subject,detail,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            [newId(), to, note.kind, note.actorId || "", refType, String(refId), refWs, subject, detail, when]
+          );
+          recipients.add(to);
+        }
+      }
+      for (const uid of recipients) {
+        await q.query("DELETE FROM notifications WHERE user_id = $1 AND seq < (SELECT seq FROM notifications WHERE user_id = $1 ORDER BY seq DESC OFFSET $2 LIMIT 1)", [uid, KEEP - 1]);
+      }
+      return [...recipients];
+    }
+    async function list(q, userId) {
+      const [rows, cnt] = await Promise.all([
+        q.query("SELECT id, kind, actor_id, ref_type, ref_id, ref_ws, subject, detail, created_at, is_read FROM notifications WHERE user_id = $1 ORDER BY seq DESC LIMIT $2", [userId, LIST_LIMIT]),
+        q.query("SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND NOT is_read", [userId])
+      ]);
+      return {
+        unread: cnt.rows[0].n,
+        items: rows.rows.map((r) => ({ id: r.id, kind: r.kind, actorId: r.actor_id, refType: r.ref_type, refId: r.ref_id, refWs: r.ref_ws, subject: r.subject, detail: r.detail, createdAt: r.created_at, read: r.is_read }))
+      };
+    }
+    async function mark(q, userId, p) {
+      const read = p.read !== false;
+      if (p.all) await q.query("UPDATE notifications SET is_read = $2 WHERE user_id = $1 AND is_read <> $2", [userId, read]);
+      else {
+        const ids = (Array.isArray(p.ids) ? p.ids : []).map(String).slice(0, 200);
+        if (ids.length) await q.query("UPDATE notifications SET is_read = $3 WHERE user_id = $1 AND id = ANY($2)", [userId, ids, read]);
+      }
+    }
+    async function remove(q, userId, p) {
+      if (p.clearRead) await q.query("DELETE FROM notifications WHERE user_id = $1 AND is_read", [userId]);
+      else if (p.id) await q.query("DELETE FROM notifications WHERE user_id = $1 AND id = $2", [userId, String(p.id)]);
+    }
+    var SCHEMA2 = `
+CREATE TABLE IF NOT EXISTS notifications (id text PRIMARY KEY, user_id text NOT NULL, kind text NOT NULL, actor_id text NOT NULL DEFAULT '', ref_type text NOT NULL DEFAULT '',
+  ref_id text NOT NULL DEFAULT '', ref_ws text NOT NULL DEFAULT '', subject text NOT NULL DEFAULT '', detail text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '',
+  is_read boolean NOT NULL DEFAULT false, seq bigserial);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, seq DESC);
+`;
+    module2.exports = { KINDS, SCHEMA: SCHEMA2, save, list, mark, remove };
+  }
+});
+
 // src/work.js
 var require_work = __commonJS({
   "src/work.js"(exports2, module2) {
@@ -20501,6 +20593,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           if (followers) await writeFollowers(c, t.id, followers, pc);
           const newcomers = assignees.filter((a) => !prev.includes(a) && a !== c.me.id);
           if (c.notes && newcomers.length) c.notes.push({ kind: "assigned", to: newcomers, actorId: c.me.id, task: { id: t.id, title, due, startDate, priority, project: pc.p.name } });
+          const newFollowers = followers ? followers.filter((f) => !(old ? old.followers : []).includes(f) && f !== c.me.id) : [];
+          if (c.notes && newFollowers.length) c.notes.push({ kind: "follower", to: newFollowers, actorId: c.me.id, task: { id: t.id, title } });
           return {};
         },
         /** Giao lại công việc cho người khác: người đang thực hiện, người tạo hoặc cấp trên; không giới hạn theo cấp bậc. Ghi lại vào bình luận. */
@@ -20601,6 +20695,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
             "INSERT INTO task_comments(id,task_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)",
             [newId("c"), tc.t.id, c.me.id, "\u0110\xE3 c\u1EADp nh\u1EADt ng\u01B0\u1EDDi theo d\xF5i: " + list(tc.followers) + " \u2192 " + list(ids), (/* @__PURE__ */ new Date()).toISOString(), JSON.stringify(added.filter((f) => f !== c.me.id))]
           );
+          const toNote = added.filter((f) => f !== c.me.id);
+          if (c.notes && toNote.length) c.notes.push({ kind: "follower", to: toNote, actorId: c.me.id, task: { id: tc.t.id, title: tc.t.title } });
           return {};
         },
         /* ----- Việc lặp lại: MỘT nơi duy nhất để tạo/sửa lịch lặp (mẫu). Việc đã sinh ra giữ nguyên khi sửa mẫu. ----- */
@@ -20793,11 +20889,12 @@ var scryptAsync = promisify(crypto.scrypt);
 var gzipAsync = promisify(zlib.gzip);
 var { Pool } = require_lib2();
 var makeMail = require_mail();
+var N = require_notify();
 var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 12;
+var VERSION = 14;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
@@ -20832,6 +20929,7 @@ CREATE INDEX IF NOT EXISTS reports_user ON reports(user_id);
 `;
 async function migrate() {
   await pool.query(SCHEMA);
+  await pool.query(N.SCHEMA);
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''");
   await W.migrate();
@@ -21207,7 +21305,7 @@ var A = {
     await c.q.query("INSERT INTO comments(id,report_id,author_id,text,created_at,acknowledged) VALUES($1,$2,$3,$4,$5,false)", [cm.id, cm.reportId, c.me.id, text, str(cm.createdAt) || (/* @__PURE__ */ new Date()).toISOString()]);
     if (c.notes && r.user_id !== c.me.id) {
       const rep = await one(c.q, "SELECT r.week, r.year, o.title FROM reports r LEFT JOIN okrs o ON o.id = r.okr_id WHERE r.id=$1", [cm.reportId]);
-      c.notes.push({ kind: "reportFeedback", to: [r.user_id], actorId: c.me.id, report: { week: rep ? rep.week : "", year: rep ? rep.year : "", okrTitle: rep ? rep.title || "" : "" }, text: W.plainOf(text).trim().slice(0, 600) });
+      c.notes.push({ kind: "reportFeedback", to: [r.user_id], actorId: c.me.id, report: { id: cm.reportId, week: rep ? rep.week : "", year: rep ? rep.year : "", okrTitle: rep ? rep.title || "" : "" }, text: W.plainOf(text).trim().slice(0, 600) });
     }
   },
   async ackComment(c, p) {
@@ -21252,13 +21350,16 @@ var A = {
       );
     }
     await c.q.query("DELETE FROM krs WHERE okr_id=$1 AND NOT (id = ANY($2))", [o.id, keep]);
+    const boss = c.byId[o.ownerId].managerId;
+    if (c.notes && !approved && boss && boss !== c.me.id) c.notes.push({ kind: "okrPending", to: [boss], actorId: c.me.id, okr: { id: o.id, title: str(o.title) } });
   },
   async reviewOKR(c, p) {
     if (!p.id || !["approved", "rejected"].includes(p.status)) throw new AppError("Thi\u1EBFu d\u1EEF li\u1EC7u duy\u1EC7t.");
-    const o = await one(c.q, "SELECT owner_id FROM okrs WHERE id=$1", [p.id]);
+    const o = await one(c.q, "SELECT owner_id, title FROM okrs WHERE id=$1", [p.id]);
     if (!o) throw new AppError("Kh\xF4ng t\xECm th\u1EA5y OKR.");
     if (!canManage(c, o.owner_id)) deny("Ch\u1EC9 c\u1EA5p tr\xEAn c\u1EE7a ng\u01B0\u1EDDi ph\u1EE5 tr\xE1ch ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c duy\u1EC7t OKR n\xE0y.");
     await c.q.query("UPDATE okrs SET status=$2, review_note=$3, updated_at=$4 WHERE id=$1", [p.id, p.status, str(p.reviewNote), str(p.updatedAt) || (/* @__PURE__ */ new Date()).toISOString()]);
+    if (c.notes && o.owner_id !== c.me.id) c.notes.push({ kind: p.status === "approved" ? "okrApproved" : "okrRejected", to: [o.owner_id], actorId: c.me.id, okr: { id: p.id, title: o.title, note: str(p.reviewNote) } });
   },
   async deleteOKR(c, p) {
     const o = await one(c.q, "SELECT owner_id, status FROM okrs WHERE id=$1", [p.id]);
@@ -21354,6 +21455,7 @@ var A = {
     if (Number(used.n)) throw new AppError(u.name + ' \u0111\xE3 c\xF3 OKR, b\xE1o c\xE1o, c\xF4ng vi\u1EC7c ho\u1EB7c ph\u1EA3n h\u1ED3i trong h\u1EC7 th\u1ED1ng n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y d\xF9ng "Kho\xE1 t\xE0i kho\u1EA3n" \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.');
     await c.q.query("DELETE FROM workspace_members WHERE user_id=$1", [u.id]);
     await c.q.query("DELETE FROM project_members WHERE user_id=$1", [u.id]);
+    await c.q.query("DELETE FROM notifications WHERE user_id=$1", [u.id]);
     await c.q.query("DELETE FROM users WHERE id=$1", [u.id]);
   },
   /* Mỗi người tự đổi mật khẩu của mình (cần mật khẩu hiện tại). */
@@ -21372,6 +21474,22 @@ var A = {
     await c.q.query("UPDATE users SET pass_hash=$2 WHERE id=$1", [c.me.id, hashPassword(pw)]);
   }
 };
+A.notifMark = async (c, p) => {
+  await N.mark(c.q, c.me.id, p);
+  return N.list(c.q, c.me.id);
+};
+A.notifRemove = async (c, p) => {
+  await N.remove(c.q, c.me.id, p);
+  return N.list(c.q, c.me.id);
+};
+var QUIET = /* @__PURE__ */ new Set(["notifMark", "notifRemove"]);
+var BOOT = Date.now().toString(36);
+var notifSeq = 0;
+var notifStamps = /* @__PURE__ */ new Map();
+var touchNotif = (ids) => {
+  for (const id of ids) notifStamps.set(id, BOOT + "." + ++notifSeq);
+};
+var stampOf = (id) => notifStamps.get(id) || BOOT + ".0";
 Object.assign(A, W.actions);
 async function solutionKrMap(q, okrId, krUpdates) {
   const valid = new Set((await q.query("SELECT id FROM krs WHERE okr_id=$1", [okrId])).rows.map((x) => x.id));
@@ -21464,6 +21582,12 @@ async function handle(req, res) {
       const fileM = url.pathname.match(/\/file\/([A-Za-z0-9_-]+)$/);
       if (fileM) return await W.download(await ctx(await verifyToken(tok)), res, fileM[1]);
       const viewer2 = tok ? await verifyToken(tok) : null;
+      if (url.searchParams.get("notif")) {
+        if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
+        const nv = stampOf(viewer2.id);
+        if (url.searchParams.get("nv") === nv) return send(res, { ok: true, unchanged: true, nv });
+        return send(res, { ok: true, nv, ...await N.list(pool, viewer2.id) }, 200, req);
+      }
       if (url.searchParams.get("work")) {
         if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
         if (url.searchParams.get("v") && url.searchParams.get("v") === dataVersion) return send(res, { ok: true, unchanged: true, version: dataVersion });
@@ -21499,12 +21623,19 @@ async function handle(req, res) {
     if (!Object.prototype.hasOwnProperty.call(A, action)) throw new AppError("H\xE0nh \u0111\u1ED9ng kh\xF4ng h\u1EE3p l\u1EC7: " + action);
     let viewer = await verifyToken(body.token);
     const notes = [];
+    let recipients = [];
     const result = await tx(async (client) => {
       const c = await ctx(viewer, client);
       c.notes = notes;
-      return await A[action](c, p);
+      const out = await A[action](c, p);
+      recipients = await N.save(client, notes, c.byId);
+      return out;
     });
-    bumpVersion();
+    if (QUIET.has(action)) {
+      touchNotif([viewer.id]);
+      result.nv = stampOf(viewer.id);
+    } else bumpVersion();
+    touchNotif(recipients);
     M.queue(notes);
     if (body.lite) return send(res, { ok: true, version: dataVersion, result });
     viewer = (await getUsers()).find((u) => u.id === viewer.id) || viewer;
@@ -21518,7 +21649,7 @@ async function importDB(db, opts = {}) {
   if (existing.n && !opts.force) throw new Error("C\u01A1 s\u1EDF d\u1EEF li\u1EC7u \u0111\xE3 c\xF3 d\u1EEF li\u1EC7u (" + existing.n + " ng\u01B0\u1EDDi d\xF9ng). Th\xEAm --force \u0111\u1EC3 ghi \u0111\xE8.");
   const temp = [];
   await tx(async (q) => {
-    if (opts.force) await q.query("TRUNCATE comments, krs, reports, okrs, tasks, cycles, users CASCADE");
+    if (opts.force) await q.query("TRUNCATE comments, krs, reports, okrs, tasks, cycles, users, notifications CASCADE");
     for (const c of db.cycles || []) await q.query("INSERT INTO cycles(id,name,start_date,end_date,active) VALUES($1,$2,$3,$4,$5)", [c.id, str(c.name), str(c.start), str(c.end), !!c.active]);
     for (const u of db.users || []) {
       let pw = u.password || (opts.passwords || {})[u.username];
