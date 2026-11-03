@@ -53,6 +53,7 @@ const S = {
   data: null, loading: false, error: null, version: null, wsLoaded: null,
   ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, mineView: lsGet('okr_work_mine_view') === 'list' ? 'list' : 'kanban', project: 'all', showArch: false,
   f: { q: '', who: 'all', pri: 'all', st: 'all', fol: false },
+  rf: { who: 'all', pri: 'all', type: 'all' },              // bộ lọc riêng của mục Việc lặp lại: người thực hiện, ưu tiên, kiểu lịch lặp
   tm: { p: 'all', by: 'span', from: '', to: '' },          // khung thời gian: mốc có sẵn (p), tính theo gì (by), khoảng tuỳ chỉnh
   sort: { k: 'due', d: 1 }, doneLimit: DONE_SHOW, listLimit: 200,
   drag: null, over: null, draft: null, detail: null, mention: new Set(), uploading: 0,
@@ -1136,16 +1137,30 @@ function setTab(kind, k){ if(S.tabs[kind]) S.tabs[kind] = k; repaint(); }
 /* ============================================================
    VIỆC LẶP LẠI — MỘT nơi duy nhất để tạo / sửa lịch lặp
    ============================================================ */
+const REC_TYPES = [['daily', 'Hằng ngày'], ['weekly', 'Hằng tuần'], ['monthly', 'Hằng tháng']];
 function recView(){
   const q = S.f.q.trim().toLowerCase();
-  const rs = (S.data.recurring || []).filter(r => (S.project === 'all' ? !(projById(r.projectId) || {}).archived : r.projectId === S.project)
-    && (!q || r.title.toLowerCase().includes(q) || richPlain(r.description).toLowerCase().includes(q) || r.tags.some(g => g.toLowerCase().includes(q))))
+  // Các mẫu trong phạm vi đang xem (dự án + ô tìm kiếm) — dùng để dựng danh sách người lọc và đếm "x / y"
+  const base = (S.data.recurring || []).filter(r => (S.project === 'all' ? !(projById(r.projectId) || {}).archived : r.projectId === S.project)
+    && (!q || r.title.toLowerCase().includes(q) || richPlain(r.description).toLowerCase().includes(q) || r.tags.some(g => g.toLowerCase().includes(q))));
+  const f = S.rf;
+  const people = [...new Set(base.flatMap(r => r.assigneeIds))].map(user).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+  const rs = base.filter(r => (f.who === 'all' || r.assigneeIds.includes(f.who)) && (f.pri === 'all' || r.priority === f.pri) && (f.type === 'all' || (r.rule && r.rule.type === f.type)))
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const filtering = f.who !== 'all' || f.pri !== 'all' || f.type !== 'all';
   const multi = S.project === 'all';
   return `
   <div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
     <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa việc lặp lại.</b> Ai cũng tạo được và giao cho bất kỳ ai. Khi một việc được đánh dấu <b>Hoàn thành</b>, hệ thống tự tạo việc kế tiếp theo lịch. Sửa lịch hay nội dung ở đây chỉ áp dụng cho các việc sinh <b>sau</b> — việc đã sinh ra giữ nguyên và bị khoá tên, mô tả như mọi việc khác. Người sửa/xoá: người tạo và cấp trên của họ.</div>
     <button class="btn btn-primary" onclick="W.openRecurring('')">${I.plus} Thêm việc lặp lại</button>
+  </div>
+  <div class="flex items-center gap-2 flex-wrap mb-3">
+    <span class="text-[12.5px] text-gray-500 font-medium">Lọc:</span>
+    <select class="input !w-auto" onchange="W.setRF('who',this.value)" title="Lọc theo người thực hiện"><option value="all">Mọi người thực hiện</option>${people.map(u => `<option value="${esc(u.id)}" ${f.who === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+    <select class="input !w-auto" onchange="W.setRF('pri',this.value)" title="Lọc theo mức độ ưu tiên"><option value="all">Mọi mức ưu tiên</option>${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${f.pri === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select>
+    <select class="input !w-auto" onchange="W.setRF('type',this.value)" title="Lọc theo lịch lặp"><option value="all">Mọi lịch lặp</option>${REC_TYPES.map(([k, t]) => `<option value="${k}" ${f.type === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    ${filtering ? `<span class="chip active" title="Bỏ các bộ lọc" onclick="W.clearRF()">Xoá lọc ✕</span>` : ''}
+    <span class="text-[12.5px] text-gray-400 ml-1">${filtering ? `Hiện ${rs.length} / ${base.length} việc lặp lại` : `${base.length} việc lặp lại`}</span>
   </div>
   <div class="card overflow-x-auto">
     <table class="w-full">
@@ -1162,7 +1177,7 @@ function recView(){
           <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
           <td class="py-3 px-2 text-[12.5px]">${r.openCount ? `<span class="text-slate-700">Hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</span>` : '<span class="text-amber-600">Chưa có (lịch đã kết thúc)</span>'}</td>
           <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
-        </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.</td></tr>`}
+        </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${filtering && base.length ? 'Không có việc lặp lại nào khớp bộ lọc. <a class="text-base-600 underline cursor-pointer" onclick="W.clearRF()">Xoá lọc</a>' : 'Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.'}</td></tr>`}
       </tbody>
     </table>
   </div>`;
@@ -1342,7 +1357,7 @@ async function deleteProject(id){
 /* ============================================================
    Điều khiển từ thanh công cụ
    ============================================================ */
-function setWs(id){ S.ws = id; lsSet('okr_work_ws', id); S.project = 'all'; S.version = null; S.wsLoaded = null; S.f = { q: '', who: 'all', pri: 'all', st: 'all', fol: false }; load(); }
+function setWs(id){ S.ws = id; lsSet('okr_work_ws', id); S.project = 'all'; S.version = null; S.wsLoaded = null; S.f = { q: '', who: 'all', pri: 'all', st: 'all', fol: false }; S.rf = { who: 'all', pri: 'all', type: 'all' }; load(); }
 function setMode(m){ S.mode = m; lsSet('okr_work_mode', m); repaint(); }
 function setProject(p){ S.project = p; S.doneLimit = DONE_SHOW; S.listLimit = 200; S.f.who = 'all'; repaint(); }
 function setF(k, v){ S.f[k] = v; S.listLimit = 200; repaint(); }
@@ -1352,6 +1367,8 @@ function setQ(v){
   qTimer = setTimeout(() => { repaint(); const el = $('wk-q'); if(el){ el.focus(); el.setSelectionRange(v.length, v.length); } }, 250);
 }
 function toggleFol(){ S.f.fol = !S.f.fol; repaint(); }
+function setRF(k, v){ if(!(k in S.rf)) return; S.rf[k] = v; repaint(); }
+function clearRF(){ S.rf = { who: 'all', pri: 'all', type: 'all' }; repaint(); }
 function setTm(p){ if(!TM_PRESETS.some(x => x[0] === p)) return; S.tm.p = p; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
 function setTmBy(v){ if(!TM_BY.some(x => x[0] === v)) return; S.tm.by = v; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
 function setTmDate(k, v){ if(k !== 'from' && k !== 'to') return; S.tm[k] = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
@@ -1363,12 +1380,12 @@ function reload(){ S.version = null; load(); }
 function retry(){ S.error = null; S.data = null; repaint(); }
 
 window.W = {
-  view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
+  view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, gotoTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
   pickFiles, delAttachment, cmInput, cmPick, cmKey, postComment, delComment,
   openWorkspace, saveWorkspace, deleteWorkspace, openDepartments, saveDept, delDept, openProject, saveProject, deleteProject, filterPick,
-  _test: { tmRange, inRange, scopeTasks, nextDueOf, recText, S, canEdit, canDelete, filtered, mineTasks, createdTasks, personalView, scopeNote, fmtComment },
+  _test: { tmRange, inRange, scopeTasks, nextDueOf, recText, recView, S, canEdit, canDelete, filtered, mineTasks, createdTasks, personalView, scopeNote, fmtComment },
 };
 })();
