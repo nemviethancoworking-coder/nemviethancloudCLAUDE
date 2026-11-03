@@ -136,6 +136,8 @@ a{color:var(--accent)}
       <svg id="trend" viewBox="0 0 560 220" role="img" aria-label="Số lead theo ngày" style="width:100%;height:auto"></svg>
       <h2>Theo page</h2>
       <div id="pages" class="pages"><p class="muted">Chưa có dữ liệu.</p></div>
+      <h2>Theo nhóm nhân viên</h2>
+      <div id="groups" class="pages"><p class="muted">Chưa có dữ liệu.</p></div>
     </section>
     <section class="panel">
       <h2>Lead dở rơi vào bộ lọc nào</h2>
@@ -152,14 +154,15 @@ a{color:var(--accent)}
       <h2 id="tbl-title">Chi tiết lead</h2>
       <div class="controls">
         <select id="page" aria-label="Lọc theo page"><option value="">Tất cả page</option></select>
+        <select id="group" aria-label="Lọc theo nhóm nhân viên"><option value="">Tất cả nhóm</option></select>
         <input id="q" type="search" placeholder="Tìm tên khách, lý do…" aria-label="Tìm trong bảng">
       </div>
     </div>
     <div class="chips" id="chips" role="group" aria-label="Lọc theo kết luận"></div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Khách hàng</th><th>Page</th><th>Kết luận</th><th>Lý do</th><th>Nhu cầu</th><th>Tin K/P</th><th></th></tr></thead>
-        <tbody id="rows"><tr><td colspan="7" class="muted">Chưa có dữ liệu.</td></tr></tbody>
+        <thead><tr><th>Khách hàng</th><th>Page</th><th>Nhóm</th><th>Kết luận</th><th>Lý do</th><th>Nhu cầu</th><th>Tin K/P</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="8" class="muted">Chưa có dữ liệu.</td></tr></tbody>
       </table>
     </div>
     <button id="more" class="more" type="button" hidden>Hiện thêm</button>
@@ -173,7 +176,10 @@ const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}`;
 const csvUrl = (tab) => `${SHEET_URL}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(tab)}`;
 const PAGE_SIZE = 100;
 const $ = (id) => document.getElementById(id);
-const state = { days: [], leads: [], day: null, filter: "Tất cả", page: "", q: "", limit: PAGE_SIZE, readAt: null };
+const state = { days: [], leads: [], day: null, filter: "Tất cả", page: "", group: "", q: "", limit: PAGE_SIZE, readAt: null };
+const NONE = "__none";
+const gOf = (l) => String(l["Nhóm"] || "").trim() || NONE;
+const gLabel = (g) => (g === NONE ? "(chưa ghi nhóm)" : g);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const num = (v) => Number(String(v ?? "").trim().replace(",", ".")) || 0;
 const fmtDay = (k) => { const [y, m, d] = k.split("-"); return d ? `${d}/${m}/${y}` : k; };
@@ -272,12 +278,27 @@ const splitList = (text) => String(text || "").split(";").map((s) => s.trim()).f
 
 function render() {
   const d = state.days.find((x) => x._k === state.day) || {};
+  const allDay = state.leads.filter((l) => l._k === state.day);
+  const gCount = {};
+  allDay.forEach((l) => { const g = gOf(l); gCount[g] = (gCount[g] || 0) + 1; });
+  const gNames = Object.keys(gCount).sort((a, b) => (a === NONE) - (b === NONE) || a.localeCompare(b, "vi"));
+  if (state.group && !gCount[state.group]) state.group = "";
   const total = num(d["Tổng lead"]);
-  $("k-total").textContent = total;
-  $("k-good").textContent = num(d["Lead ngon"]);
-  $("k-bad").textContent = num(d["Lead dở"]);
-  $("k-unk").textContent = num(d["Chưa rõ"]) + num(d["Lỗi AI"]);
-  $("k-rate").textContent = total ? `${num(d["Tỉ lệ ngon (%)"])}%` : "–";
+  if (state.group) {
+    const gl = allDay.filter((l) => gOf(l) === state.group);
+    const ngon = gl.filter((l) => l["Kết luận"] === "Ngon").length, dở = gl.filter((l) => l["Kết luận"] === "Dở").length;
+    $("k-total").textContent = gl.length;
+    $("k-good").textContent = ngon;
+    $("k-bad").textContent = dở;
+    $("k-unk").textContent = gl.length - ngon - dở;
+    $("k-rate").textContent = gl.length ? `${Math.round((ngon / gl.length) * 1000) / 10}%` : "–";
+  } else {
+    $("k-total").textContent = total;
+    $("k-good").textContent = num(d["Lead ngon"]);
+    $("k-bad").textContent = num(d["Lead dở"]);
+    $("k-unk").textContent = num(d["Chưa rõ"]) + num(d["Lỗi AI"]);
+    $("k-rate").textContent = total ? `${num(d["Tỉ lệ ngon (%)"])}%` : "–";
+  }
 
   const at = state.readAt ? state.readAt.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }) : "–";
   $("sub").textContent = `${state.days.length} ngày có báo cáo · n8n cập nhật ${d["Cập nhật lúc"] || "–"} · trang đọc lúc ${at}`;
@@ -295,6 +316,15 @@ function render() {
   $("pages").innerHTML = pages.length ? pages.map((p) => `<div class="bar"><span>${esc(p.name)}</span><span class="n">${p.good}/${p.total} ngon</span><div class="track"><div class="fill good" style="width:${p.total ? (p.good / p.total) * 100 : 0}%"></div></div></div>`).join("")
     : `<p class="muted">Chưa có dữ liệu.</p>`;
 
+  const gStat = gNames.map((g) => {
+    const arr = allDay.filter((l) => gOf(l) === g);
+    const ngon = arr.filter((l) => l["Kết luận"] === "Ngon").length;
+    return { g, n: arr.length, ngon };
+  }).sort((a, b) => b.n - a.n);
+  $("groups").innerHTML = gStat.length && !(gStat.length === 1 && gStat[0].g === NONE)
+    ? gStat.map((s) => `<div class="bar" style="cursor:pointer" data-g="${esc(s.g)}" title="Bấm để xem chi tiết nhóm này"><span>${esc(gLabel(s.g))}</span><span class="n">${s.ngon}/${s.n} ngon · ${s.n ? Math.round((s.ngon / s.n) * 1000) / 10 : 0}%</span><div class="track"><div class="fill good" style="width:${s.n ? (s.ngon / s.n) * 100 : 0}%"></div></div></div>`).join("")
+    : `<p class="muted">Ngày này chưa có dữ liệu nhóm (chỉ có từ báo cáo ngày 02/11/2026).</p>`;
+
   if (d["Ghi chú"]) showMsg(`<b>Ghi chú của lần chạy:</b> ${esc(d["Ghi chú"])}`); else $("msg").hidden = true;
 
   drawTrend();
@@ -308,9 +338,14 @@ function renderTable() {
   if (!pageNames.includes(state.page)) state.page = "";
   pageSel.innerHTML = `<option value="">Tất cả page · ${dayLeads.length}</option>` + pageNames.map((p) => `<option value="${esc(p)}">${esc(p)} · ${dayLeads.filter((l) => l["Page"] === p).length}</option>`).join("");
   pageSel.value = state.page;
+  const gNames = [...new Set(dayLeads.map(gOf))].sort((a, b) => (a === NONE) - (b === NONE) || a.localeCompare(b, "vi"));
+  if (state.group && !gNames.includes(state.group)) state.group = "";
+  const grpSel = $("group");
+  grpSel.innerHTML = `<option value="">Tất cả nhóm</option>` + gNames.map((g) => `<option value="${esc(g)}">${esc(gLabel(g))} · ${dayLeads.filter((l) => gOf(l) === g).length}</option>`).join("");
+  grpSel.value = state.group;
 
   const q = state.q.trim().toLowerCase();
-  const scoped = dayLeads.filter((l) => (!state.page || l["Page"] === state.page) &&
+  const scoped = dayLeads.filter((l) => (!state.page || l["Page"] === state.page) && (!state.group || gOf(l) === state.group) &&
     (!q || ["Khách hàng", "Nhóm lý do", "Lý do", "Nhu cầu", "Page"].some((k) => String(l[k] || "").toLowerCase().includes(q))));
   const kinds = ["Tất cả", "Ngon", "Dở", "Chưa rõ", "Lỗi AI"].filter((k) => k === "Tất cả" || scoped.some((l) => l["Kết luận"] === k));
   if (!kinds.includes(state.filter)) state.filter = "Tất cả";
@@ -326,6 +361,7 @@ function renderTable() {
     return `<tr>
       <td>${esc(l["Khách hàng"] || "(không tên)")}${l["Loại"] ? `<br><span class="tag">${esc(l["Loại"])}</span>` : ""}</td>
       <td>${esc(l["Page"])}</td>
+      <td>${esc(l["Nhóm"] || "—")}</td>
       <td><span class="pill ${k === "Ngon" || k === "Dở" ? k : "other"}">${esc(k || "–")}</span></td>
       <td class="why"><b>${esc(l["Nhóm lý do"])}</b><br>${esc(l["Lý do"])}
         ${l["Chi tiết bộ lọc"] ? `<details><summary>Từng bộ lọc</summary><pre>${esc(l["Chi tiết bộ lọc"])}</pre></details>` : ""}</td>
@@ -333,7 +369,7 @@ function renderTable() {
       <td class="num">${esc(l["Tin khách/page"])}</td>
       <td>${l["Link Pancake"] ? `<a href="${esc(l["Link Pancake"])}" target="_blank" rel="noopener">Mở</a>` : ""}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="7" class="muted">Không có lead nào trong nhóm này.</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="muted">Không có lead nào trong nhóm này.</td></tr>`;
   const more = $("more");
   more.hidden = shown.length <= state.limit;
   more.textContent = `Hiện thêm (${shown.length - state.limit} lead còn lại)`;
@@ -364,6 +400,8 @@ $("day").addEventListener("change", (e) => pickDay(e.target.value));
 $("trend").addEventListener("click", (e) => { const r = e.target.closest("rect[data-k]"); if (r) pickDay(r.dataset.k); });
 $("chips").addEventListener("click", (e) => { const b = e.target.closest("button[data-k]"); if (b) { state.filter = b.dataset.k; state.limit = PAGE_SIZE; renderTable(); } });
 $("page").addEventListener("change", (e) => { state.page = e.target.value; state.limit = PAGE_SIZE; renderTable(); });
+$("group").addEventListener("change", (e) => { state.group = e.target.value; state.limit = PAGE_SIZE; render(); });
+$("groups").addEventListener("click", (e) => { const b = e.target.closest("[data-g]"); if (b) { state.group = b.dataset.g; state.limit = PAGE_SIZE; render(); $("group").scrollIntoView({ behavior: "smooth", block: "center" }); } });
 $("q").addEventListener("input", (e) => { state.q = e.target.value; state.limit = PAGE_SIZE; renderTable(); });
 $("more").addEventListener("click", () => { state.limit += PAGE_SIZE; renderTable(); });
 $("reload").addEventListener("click", load);
