@@ -40,6 +40,7 @@ const WI = {
   chart:  svg('<path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 5v13"/>'),
   clip:   svg('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>', 14),
   repeat: svg('<path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>', 14),
+  clock:  svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', 13),
   cal:    svg('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>', 13),
   check:  svg('<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>', 13),
   folder: svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>', 14),
@@ -262,6 +263,9 @@ function krRef(t){
 }
 const krChip = t => { const r = krRef(t); return r ? `<span class="inline-flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 text-[11px] font-medium" title="Mục tiêu: ${esc(r.o.title)}"><span class="shrink-0">KR</span><span class="truncate">${esc(r.k.title)}</span></span>` : ''; };
 const tagChips = tags => tags.map(g => `<span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[11px] font-medium">${esc(g)}</span>`).join('');
+/** Số giờ hoàn thành dự kiến: 2 → "2 giờ", 1.5 → "1,5 giờ". */
+const hoursText = h => (Number(h) % 1 ? String(Number(h)).replace('.', ',') : String(Number(h))) + ' giờ';
+const hoursChip = t => t.estHours ? `<span class="inline-flex items-center gap-1 whitespace-nowrap" title="Thời gian hoàn thành dự kiến">${WI.clock}${hoursText(t.estHours)}</span>` : '';
 const projDot = p => p ? `<span class="inline-block w-2 h-2 rounded-full shrink-0" style="background:${esc(p.color)}"></span>` : '';
 function recText(r){
   if(!r) return '';
@@ -428,7 +432,7 @@ function card(t, multi){
         ${t.tags.length ? `<div class="flex flex-wrap gap-1 mt-1.5">${tagChips(t.tags.slice(0, 4))}</div>` : ''}
         <div class="flex items-center justify-between gap-2 mt-2.5">
           <div class="flex items-center gap-2.5 text-[12px] text-gray-500 flex-wrap">
-            ${t.startDate ? `<span class="inline-flex items-center gap-1 whitespace-nowrap" title="Ngày bắt đầu">Từ ${fmt(t.startDate)}</span>` : ''}${t.due ? dueHtml(t) : ''}${subProg(t)}
+            ${t.startDate ? `<span class="inline-flex items-center gap-1 whitespace-nowrap" title="Ngày bắt đầu">Từ ${fmt(t.startDate)}</span>` : ''}${t.due ? dueHtml(t) : ''}${hoursChip(t)}${subProg(t)}
             ${t.commentCount ? `<span class="inline-flex items-center gap-1">${I.chat}${t.commentCount}</span>` : ''}
             ${t.attachCount ? `<span class="inline-flex items-center gap-1">${WI.clip}${t.attachCount}</span>` : ''}
             ${folBadge(t)}
@@ -491,6 +495,7 @@ async function move(id, status, before){
 }
 function spawnNotice(j){
   if(j && j.result && j.result.spawned) toast('Đã tạo việc lặp lại kế tiếp (hạn ' + fmt(j.result.spawned.due) + ').', 'info');
+  else if(j && j.result && j.result.scheduled) toast('Việc lặp lại kế tiếp sẽ tự xuất hiện vào ngày ' + fmt(j.result.scheduled.due) + '.', 'info');
 }
 
 /* ============================================================
@@ -518,7 +523,7 @@ function listView(){
         <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
           <td class="text-center py-3" onclick="event.stopPropagation()"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} ${ed ? '' : 'disabled'} onchange="W.toggleDone('${t.id}')"></td>
           <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>
-            <div class="flex items-center gap-2 mt-0.5 flex-wrap">${krChip(t)}${tagChips(t.tags.slice(0, 5))}${subProg(t)}${t.recurrence ? `<span class="text-indigo-600 inline-flex items-center gap-1 text-[11.5px]">${WI.repeat}${esc(recText(t.recurrence))}</span>` : ''}${t.commentCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${I.chat}${t.commentCount}</span>` : ''}${t.attachCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${WI.clip}${t.attachCount}</span>` : ''}${folBadge(t)}</div></td>
+            <div class="flex items-center gap-2 mt-0.5 flex-wrap">${krChip(t)}${tagChips(t.tags.slice(0, 5))}${hoursChip(t) ? `<span class="text-[12px] text-gray-500">${hoursChip(t)}</span>` : ''}${subProg(t)}${t.recurrence ? `<span class="text-indigo-600 inline-flex items-center gap-1 text-[11.5px]">${WI.repeat}${esc(recText(t.recurrence))}</span>` : ''}${t.commentCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${I.chat}${t.commentCount}</span>` : ''}${t.attachCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${WI.clip}${t.attachCount}</span>` : ''}${folBadge(t)}</div></td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(t.assigneeIds, 4)}</td>
           <td class="py-3 px-2">${prioBadge(t.priority)}</td>
@@ -601,7 +606,7 @@ function openTaskForm(id, status){
     const ps = creatableProjects();
     if(!ps.length){ toast(canCreateProject() ? 'Hãy tạo dự án trước khi thêm công việc.' : 'Bạn chưa tham gia dự án nào để thêm công việc.', 'error'); return; }
     const pid = S.project !== 'all' && ps.some(p => p.id === S.project) ? S.project : ps[0].id;
-    t = { id: newId('t'), projectId: pid, title: '', description: '', status: status || 'todo', priority: 'medium', assigneeIds: [meId()], followerIds: [], startDate: today(), due: '', tags: [], subtasks: [], createdBy: meId() };
+    t = { id: newId('t'), projectId: pid, title: '', description: '', status: status || 'todo', priority: 'medium', assigneeIds: [meId()], followerIds: [], startDate: today(), due: '', estHours: null, tags: [], subtasks: [], createdBy: meId() };
   } else {
     t = S.data.tasks.find(x => x.id === id); if(!t) return;
     if(!canEditContent(t)){ toast('Chỉ người tạo công việc mới sửa được tên, mô tả và nội dung.', 'error'); return; }
@@ -614,7 +619,7 @@ function openTaskForm(id, status){
     <div class="p-6 grid md:grid-cols-5 gap-6">
       <div class="md:col-span-3 space-y-5 min-w-0">
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(S.draft.title)}" maxlength="300" placeholder="Nhập nội dung công việc..." oninput="W.d('title',this.value)"></div>
-        <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: S.draft.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết...', minHeight: 130 })}</div>
+        <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: S.draft.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết... (có thể dán ảnh bằng Ctrl+V)', minHeight: 130, images: true })}</div>
         <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
         <div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm <span class="font-normal text-gray-400">(tối đa ${MAX_MB}MB/tệp)</span></label><label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Chọn tệp<input type="file" multiple class="hidden" onchange="event.stopPropagation();W.pendFiles(this)" accept=".${OK_EXT.join(',.')}"></label></div><div id="tk-pfiles" class="space-y-1.5"></div></div>
       </div>
@@ -628,6 +633,7 @@ function openTaskForm(id, status){
           <div><label class="label">Ngày bắt đầu <span class="text-red-500">*</span></label><input id="tk-start" type="date" class="input" value="${esc(S.draft.startDate || '')}" ${S.draft.due ? 'max="' + esc(S.draft.due) + '"' : ''} onchange="W.d('startDate',this.value);W.checkDates()"></div>
           <div><label class="label">Hạn chót</label><input id="tk-due" type="date" class="input" value="${esc(S.draft.due)}" ${S.draft.startDate ? 'min="' + esc(S.draft.startDate) + '"' : ''} onchange="W.d('due',this.value);W.checkDates()"></div>
         </div>
+        <div><label class="label">Thời gian hoàn thành (giờ) <span class="font-normal text-gray-400">(tuỳ chọn)</span></label><input id="tk-hours" type="number" inputmode="decimal" min="0" max="1000" step="0.25" class="input" value="${S.draft.estHours == null ? '' : esc(S.draft.estHours)}" placeholder="VD: 2 hoặc 1.5" oninput="W.d('estHours',this.value)"></div>
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
         <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
@@ -641,6 +647,10 @@ function openTaskForm(id, status){
   setTimeout(() => { const el = $('tk-title'); if(el && isNew) el.focus(); }, 50);
 }
 function d(k, v){ if(S.draft) S.draft[k] = v; }
+/** Số giờ nhập trong form: '' / null → null (không đặt); số dương → số; còn lại không hợp lệ. */
+const hoursNum = v => (v === '' || v == null) ? null : Number(String(v).replace(',', '.'));
+const badHours = v => { const n = hoursNum(v); return n !== null && !(isFinite(n) && n > 0); };
+const hoursVal = v => { const n = hoursNum(v); return n !== null && isFinite(n) && n > 0 ? Math.min(1000, Math.round(n * 100) / 100) : null; };
 /** Ngày bắt đầu không được sau hạn chót: cập nhật giới hạn của 2 ô ngày và báo ngay khi nhập sai. */
 function checkDates(){
   const t = S.draft; if(!t) return;
@@ -762,6 +772,7 @@ function paintSide(){
       <div><label class="label">Ngày bắt đầu</label><div class="py-1.5 text-[14px] ${t.startDate ? 'text-slate-700' : 'text-gray-400'}">${t.startDate ? fmt(t.startDate) : '—'}</div></div>
       <div><label class="label">Hạn chót</label><div class="py-1.5 text-[14px]">${dueHtml(t)}</div></div>
     </div>
+    <div><label class="label">Thời gian hoàn thành</label><div class="py-1.5 text-[14px] ${t.estHours ? 'text-slate-700' : 'text-gray-400'}">${t.estHours ? hoursText(t.estHours) : '—'}</div></div>
     <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
     <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
     <div><label class="label">Nhãn</label><div class="flex flex-wrap gap-1.5">${t.tags.length ? tagChips(t.tags) : '<span class="text-[12.5px] text-gray-400">Không có</span>'}</div></div>
@@ -901,7 +912,7 @@ function paintRecurrence(){
     ${type === 'weekly' ? `<div class="flex gap-1 mt-2">${[1, 2, 3, 4, 5, 6, 7].map(n => `<button type="button" ${r ? 'disabled' : ''} class="w-9 h-8 rounded-md text-[12.5px] font-medium border ${rule.weekdays.includes(n) ? 'bg-base-500 text-white border-base-500' : 'bg-white text-slate-600 border-gray-300 hover:bg-gray-50'}" onclick="W.recWd(${n})">${WD[n]}</button>`).join('')}</div>` : ''}
     ${type === 'monthly' ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Vào ngày <input type="number" min="1" max="31" class="input !w-20 !py-1" value="${rule.monthDay}" ${r ? 'disabled' : ''} onchange="W.recSet('monthDay',Math.max(1,Math.min(31,Number(this.value)||1)))"> hằng tháng</div><div class="text-[11.5px] text-gray-400 mt-1">Tháng không có ngày này sẽ lấy ngày cuối tháng.</div>` : ''}
     ${rule ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Kết thúc <input type="date" class="input !w-40 !py-1" value="${esc(rule.end || '')}" ${r ? 'disabled' : ''} onchange="W.recSet('end',this.value)"><span class="text-[11.5px] text-gray-400">(tuỳ chọn)</span></div>
-      <div class="mt-2 text-[12.5px] ${nx ? 'text-indigo-700 bg-indigo-50' : 'text-amber-700 bg-amber-50'} rounded-lg px-2.5 py-2">${WI.repeat} ${nx ? `Khi bấm <b>Hoàn thành</b>, hệ thống tự tạo việc mới, hạn <b>${fmt(nx)}</b>.` : 'Chưa có lần lặp kế tiếp (kiểm tra thứ trong tuần / ngày kết thúc).'}</div>` : ''}`;
+      <div class="mt-2 text-[12.5px] ${nx ? 'text-indigo-700 bg-indigo-50' : 'text-amber-700 bg-amber-50'} rounded-lg px-2.5 py-2">${WI.repeat} ${nx ? `Khi bấm <b>Hoàn thành</b>, việc kế tiếp sẽ <b>tự xuất hiện vào ngày ${fmt(nx)}</b> (chưa đến ngày thì chưa hiện).` : 'Chưa có lần lặp kế tiếp (kiểm tra thứ trong tuần / ngày kết thúc).'}</div>` : ''}`;
 }
 function recType(v){
   if(!v) S.draft.recurrence = null;
@@ -924,9 +935,10 @@ async function saveTask(){
   const title = t.title.trim(); if(!title){ toast('Nhập tên công việc.', 'error'); const el = $('tk-title'); if(el) el.focus(); return; }
   if(!t.startDate){ toast('Chọn ngày bắt đầu của công việc.', 'error'); const el = $('tk-start'); if(el) el.focus(); return; }
   if(t.due && t.startDate > t.due){ toast('Ngày bắt đầu không được sau hạn chót.', 'error'); return; }
+  if(badHours(t.estHours)){ toast('Thời gian hoàn thành phải là số giờ lớn hơn 0 (VD: 2 hoặc 1.5).', 'error'); const el = $('tk-hours'); if(el) el.focus(); return; }
   const btn = $('tk-save'); if(btn){ btn.disabled = true; btn.textContent = 'Đang lưu...'; }
   const payload = { id: t.id, projectId: t.projectId, title, description: richGet('tk-desc'), priority: t.priority, assigneeIds: t.assigneeIds, followerIds: t.followerIds.filter(id => !t.assigneeIds.includes(id)), startDate: t.startDate, due: t.due,
-    tags: t.tags, subtasks: t.subtasks.filter(s => s.text.trim()), okrId: t.okrId || null };
+    estHours: hoursVal(t.estHours), tags: t.tags, subtasks: t.subtasks.filter(s => s.text.trim()), okrId: t.okrId || null };
   if(t.isNew) payload.status = t.status;
   const j = await act('saveTask', { task: payload });
   if(j){ const isNew = t.isNew, files = t.files || []; A.closeModal(); S.draft = null; toast(isNew ? 'Đã thêm công việc.' : 'Đã lưu nội dung công việc.'); spawnNotice(j); if(files.length) uploadQueued(t.id, files); }
@@ -1151,7 +1163,7 @@ function recView(){
   const multi = S.project === 'all';
   return `
   <div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
-    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa việc lặp lại.</b> Ai cũng tạo được và giao cho bất kỳ ai. Khi một việc được đánh dấu <b>Hoàn thành</b>, hệ thống tự tạo việc kế tiếp theo lịch. Sửa lịch hay nội dung ở đây chỉ áp dụng cho các việc sinh <b>sau</b> — việc đã sinh ra giữ nguyên và bị khoá tên, mô tả như mọi việc khác. Người sửa/xoá: người tạo và cấp trên của họ.</div>
+    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa việc lặp lại.</b> Ai cũng tạo được và giao cho bất kỳ ai. Khi một việc được đánh dấu <b>Hoàn thành</b>, việc kế tiếp chỉ <b>xuất hiện khi đến ngày</b> theo lịch (chưa đến ngày thì chưa hiện). Sửa lịch hay nội dung ở đây chỉ áp dụng cho các việc sinh <b>sau</b> — việc đã sinh ra giữ nguyên và bị khoá tên, mô tả như mọi việc khác. Người sửa/xoá: người tạo và cấp trên của họ.</div>
     <button class="btn btn-primary" onclick="W.openRecurring('')">${I.plus} Thêm việc lặp lại</button>
   </div>
   <div class="flex items-center gap-2 flex-wrap mb-3">
@@ -1175,7 +1187,7 @@ function recView(){
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(r.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(r.priority)}</td>
           <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
-          <td class="py-3 px-2 text-[12.5px]">${r.openCount ? `<span class="text-slate-700">Hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</span>` : '<span class="text-amber-600">Chưa có (lịch đã kết thúc)</span>'}</td>
+          <td class="py-3 px-2 text-[12.5px]">${r.openCount ? `<span class="text-slate-700">Hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</span>` : r.pendingDue ? `<span class="text-indigo-700">Sẽ xuất hiện ngày ${fmt(r.pendingDue)}</span>` : '<span class="text-amber-600">Chưa có (lịch đã kết thúc)</span>'}</td>
           <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
         </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${filtering && base.length ? 'Không có việc lặp lại nào khớp bộ lọc. <a class="text-base-600 underline cursor-pointer" onclick="W.clearRF()">Xoá lọc</a>' : 'Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.'}</td></tr>`}
       </tbody>
@@ -1188,26 +1200,27 @@ function openRecurring(id){
     const ps = creatableProjects();
     if(!ps.length){ toast(canCreateProject() ? 'Hãy tạo dự án trước khi thêm việc lặp lại.' : 'Bạn chưa tham gia dự án nào để thêm việc.', 'error'); return; }
     const pid = S.project !== 'all' && ps.some(p => p.id === S.project) ? S.project : ps[0].id;
-    r = { id: newId('r'), projectId: pid, title: '', description: '', priority: 'medium', assigneeIds: [meId()], followerIds: [], due: today(), tags: [], subtasks: [], recurrence: { type: 'weekly', weekdays: [new Date().getDay() || 7], end: '' }, createdBy: meId(), canEdit: true };
+    r = { id: newId('r'), projectId: pid, title: '', description: '', priority: 'medium', assigneeIds: [meId()], followerIds: [], due: today(), estHours: null, tags: [], subtasks: [], recurrence: { type: 'weekly', weekdays: [new Date().getDay() || 7], end: '' }, createdBy: meId(), canEdit: true };
   } else {
     const x = (S.data.recurring || []).find(y => y.id === id); if(!x) return;
     r = { id: x.id, projectId: x.projectId, title: x.title, description: x.description || '', priority: x.priority, assigneeIds: [...x.assigneeIds], followerIds: [...fids(x)].filter(id => !x.assigneeIds.includes(id)), due: x.nextDue || today(), tags: [...x.tags],
-      subtasks: JSON.parse(JSON.stringify(x.subtasks || [])), recurrence: JSON.parse(JSON.stringify(x.rule)), createdBy: x.createdBy, canEdit: x.canEdit, openDue: x.nextDue };
+      subtasks: JSON.parse(JSON.stringify(x.subtasks || [])), recurrence: JSON.parse(JSON.stringify(x.rule)), createdBy: x.createdBy, canEdit: x.canEdit, openDue: x.nextDue, pendingDue: x.pendingDue || '', estHours: x.estHours == null ? null : x.estHours };
   }
   S.draft = r; S.draft.isNew = isNew; S.draft.kind = 'recurring'; S.draft.readOnly = !isNew && !r.canEdit; S.detail = null; S.mention = new Set();
   const p = projById(r.projectId), v = ro();
   openModal(`
-    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; mỗi lần có người bấm Hoàn thành, hệ thống tự tạo việc kế tiếp theo lịch.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
+    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; mỗi lần có người bấm Hoàn thành, việc kế tiếp tự xuất hiện khi đến ngày theo lịch.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
     <div class="p-6 grid md:grid-cols-5 gap-6">
       <div class="md:col-span-3 space-y-5 min-w-0">
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(r.title)}" maxlength="300" placeholder="VD: Báo cáo doanh số cuối ngày" ${v ? 'disabled' : ''} oninput="W.d('title',this.value)"></div>
-        <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: r.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết...', minHeight: 110, disabled: v })}</div>
+        <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: r.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết... (có thể dán ảnh bằng Ctrl+V)', minHeight: 110, disabled: v, images: true })}</div>
         <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
       </div>
       <div class="md:col-span-2 space-y-4 min-w-0">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === r.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
         <div><label class="label">Ưu tiên</label><select class="input" ${v ? 'disabled' : ''} onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, x]) => `<option value="${k}" ${r.priority === k ? 'selected' : ''}>${x.t}</option>`).join('')}</select></div>
-        ${isNew ? '' : `<div class="text-[12.5px] text-gray-500">${r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : 'Hiện chưa có việc nào đang mở.'}</div>`}
+        ${isNew ? '' : `<div class="text-[12.5px] text-gray-500">${r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : r.pendingDue ? `Việc kế tiếp sẽ tự xuất hiện vào ngày <b>${fmt(r.pendingDue)}</b>.` : 'Hiện chưa có việc nào đang mở.'}</div>`}
+        <div><label class="label">Thời gian hoàn thành (giờ) <span class="font-normal text-gray-400">(tuỳ chọn)</span></label><input id="tk-hours" type="number" inputmode="decimal" min="0" max="1000" step="0.25" class="input" value="${S.draft.estHours == null ? '' : esc(S.draft.estHours)}" placeholder="VD: 2 hoặc 1.5" ${v ? 'disabled' : ''} oninput="W.d('estHours',this.value)"></div>
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
         <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
@@ -1226,12 +1239,13 @@ async function saveRecurring(){
   const title = t.title.trim(); if(!title){ toast('Nhập tên công việc.', 'error'); const el = $('tk-title'); if(el) el.focus(); return; }
   if(!t.recurrence){ toast('Chọn lịch lặp lại.', 'error'); return; }
   if(t.isNew && t.recurrence.end && t.due && t.recurrence.end < t.due){ toast('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.', 'error'); return; }
+  if(badHours(t.estHours)){ toast('Thời gian hoàn thành phải là số giờ lớn hơn 0 (VD: 2 hoặc 1.5).', 'error'); const el = $('tk-hours'); if(el) el.focus(); return; }
   const btn = $('tk-save'); if(btn){ btn.disabled = true; btn.textContent = 'Đang lưu...'; }
   const payload = { id: t.id, projectId: t.projectId, title, description: richGet('tk-desc'), priority: t.priority, assigneeIds: t.assigneeIds, followerIds: t.followerIds.filter(id => !t.assigneeIds.includes(id)), tags: t.tags,
-    subtasks: t.subtasks.filter(s => s.text.trim()), rule: t.recurrence };
+    estHours: hoursVal(t.estHours), subtasks: t.subtasks.filter(s => s.text.trim()), rule: t.recurrence };
   if(t.isNew) payload.firstDue = t.due;
   const j = await act('saveRecurring', { recurring: payload });
-  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã tạo việc lặp lại và việc đầu tiên.' : 'Đã lưu. Các việc đã sinh ra được giữ nguyên.'); }
+  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã tạo việc lặp lại và việc đầu tiên.' : 'Đã lưu. Các việc đã sinh ra được giữ nguyên.'); if(j.result && j.result.scheduled) spawnNotice(j); }
   else if(btn){ btn.disabled = false; btn.innerHTML = I.check + ' ' + (t.isNew ? 'Tạo việc lặp lại' : 'Lưu thay đổi'); }
 }
 async function deleteRecurring(id, fromModal){

@@ -128,3 +128,34 @@ describe('Rich text: khối, rỗng, giới hạn, văn bản thuần', () => {
     assert.equal(plainOf(null), '');
   });
 });
+
+describe('Rich text: ảnh dán (<img data-f="mã">)', () => {
+  test('giữ mã ảnh hợp lệ, bỏ mọi thuộc tính khác và đường dẫn do client gửi', () => {
+    assert.equal(body('a<img data-f="iabc123_-X">b'), 'a<img data-f="iabc123_-X">b');
+    assert.equal(body('x<img src="http://evil.example/a.png" data-f="i1" onerror="alert(1)" class="rt-img" style="width:9999px">'), 'x<img data-f="i1">');
+    assert.equal(body("x<IMG DATA-F='i2'/>y"), 'x<img data-f="i2">y');
+  });
+  test('ảnh không có mã hợp lệ bị bỏ (không nhận src/URL/data:)', () => {
+    assert.equal(body('x<img src="https://a/b.png">y'), 'xy');
+    assert.equal(body('x<img data-f="../../etc/passwd">y'), 'xy');
+    assert.equal(body('x<img data-f="a b">y'), 'xy');
+    assert.equal(body('x<img data-f="">y'), 'xy');
+    assert.equal(body('x<img src="data:image/png;base64,AAAA">y'), 'xy');
+  });
+  test('nội dung chỉ có ảnh vẫn được giữ; plainOf thay bằng [ảnh]', () => {
+    const r = clean('<img data-f="i9">');
+    assert.equal(r, rt('<img data-f="i9">'));
+    assert.equal(plainOf(r), '[ảnh]');
+    assert.equal(plainOf(rt('a<img data-f="i9">b')), 'a[ảnh]b');
+  });
+  test('idempotent; tối đa 20 ảnh', () => {
+    const once = clean('<b>a</b><img data-f="i1"><img data-f="i2">');
+    assert.equal(cleanRich(once, 20000), once);
+    const many = n => Array.from({ length: n }, (_, i) => '<img data-f="i' + i + '">').join('');
+    assert.ok(clean(many(20)));
+    assert.throws(() => clean(many(21)), /tối đa 20 ảnh/);
+  });
+  test('chữ "<img" gõ tay là chữ thường, không thành ảnh', () => {
+    assert.equal(body('&lt;img data-f="i1"&gt;'), '&lt;img data-f="i1"&gt;');
+  });
+});

@@ -24,6 +24,7 @@ const { pipeline } = require('stream/promises');
 const { Transform } = require('stream');
 
 const STATUSES = ['todo', 'doing', 'review', 'done'];
+const PENDING = 'pending';                  // tasks.spawned_id của việc lặp lại đã xong nhưng việc kế tiếp chưa đến ngày tạo
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const DEFAULT_WS = 'w_default', DEFAULT_DEPT = 'd_default', DEFAULT_PROJECT = 'p_general';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/uploads';
@@ -104,6 +105,18 @@ const decodeEntities = s => s.replace(/&(amp|lt|gt|quot|apos|nbsp|#39|#x27);/gi,
 const escapeText = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const RT_TOKEN = /<!--[\s\S]*?(?:-->|$)|<[!?][^>]*>|<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^'">])*)>|[^<]+|</g;
 const isRich = s => typeof s === 'string' && s.startsWith(RT);
+const RT_MAX_IMAGES = 20;                  // số ảnh dán tối đa trong 1 nội dung
+/** Mã ảnh dán hợp lệ (thuộc tính data-f) từ chuỗi thuộc tính, hoặc ''. Ảnh chỉ được tham chiếu bằng mã, không nhận đường dẫn/URL từ client. */
+function richImg(attrs) {
+  const re = /([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let m;
+  while ((m = re.exec(attrs))) {
+    if (m[1].toLowerCase() !== 'data-f') continue;
+    const v = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4] || '';
+    return /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : '';
+  }
+  return '';
+}
 /** Giá trị class hợp lệ (đúng 1 trong c-red|c-orange|c-blue) từ chuỗi thuộc tính, hoặc ''. */
 function richClass(attrs) {
   const re = /([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
@@ -119,7 +132,7 @@ function richClass(attrs) {
 function plainOf(s) {
   s = s === null || s === undefined ? '' : String(s);
   if (!isRich(s)) return s;
-  return decodeEntities(s.slice(RT.length).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, ''));
+  return decodeEntities(s.slice(RT.length).replace(/<br\s*\/?>/gi, '\n').replace(/<img\b[^>]*>/gi, '[ảnh]').replace(/<[^>]*>/g, ''));
 }
 /**
  * Làm sạch nội dung do client gửi. Không có tiền tố → trả về nguyên văn (chỉ cắt theo maxLen như trước).
@@ -129,7 +142,7 @@ function cleanRich(s, maxLen) {
   s = s === null || s === undefined ? '' : String(s);
   if (!isRich(s)) return maxLen ? s.slice(0, maxLen) : s;
   const body = s.slice(RT.length).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u2028\u2029]/g, '');
-  const out = [], stack = [];
+  const out = [], stack = []; let imgCount = 0;
   const openHtml = e => e.keep ? '<' + e.n + (e.cls ? ' class="' + e.cls + '"' : '') + '>' : '';
   const closeHtml = e => e.keep ? '</' + e.n + '>' : '';
   const closeEntry = n => {
@@ -147,6 +160,11 @@ function cleanRich(s, maxLen) {
     }
     const name = rawName.toLowerCase(), n = name === 'strong' ? 'b' : name === 'em' ? 'i' : name;
     if (n === 'br') { out.push('<br>'); continue; }
+    if (n === 'img') {                                                 // ảnh dán: chỉ giữ mã ảnh hợp lệ, bỏ mọi thuộc tính khác
+      const f = !slash ? richImg(attrs) : '';
+      if (f) { if (++imgCount > RT_MAX_IMAGES) throw new ErrCls('Mỗi nội dung dán tối đa ' + RT_MAX_IMAGES + ' ảnh.'); out.push('<img data-f="' + f + '">'); }
+      continue;
+    }
     if (slash) {
       if (n === 'b' || n === 'i' || n === 'span') closeEntry(n);
       else if (RT_BLOCK_END.has(name)) out.push('<br>');
@@ -214,6 +232,11 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
   priority text NOT NULL DEFAULT 'medium', tags jsonb NOT NULL DEFAULT '[]', subtasks jsonb NOT NULL DEFAULT '[]', assignees jsonb NOT NULL DEFAULT '[]', rule jsonb NOT NULL,
   created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', updated_at text NOT NULL DEFAULT '', seq bigserial);
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS followers jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
+ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS next_due text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
+CREATE TABLE IF NOT EXISTS inline_images (id text PRIMARY KEY, name text NOT NULL DEFAULT '', mime text NOT NULL DEFAULT '', size bigint NOT NULL DEFAULT 0,
+  uploaded_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS task_followers (task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (task_id, user_id));
 CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
 `;
@@ -359,7 +382,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
   /* ---------- Đọc dữ liệu ---------- */
   const jsonTask = (t, assignees, followers, cc, ac) => ({
     id: t.id, projectId: t.project_id, title: t.title, description: t.description, status: t.status, priority: t.priority,
-    assigneeIds: assignees, followerIds: followers || [], startDate: t.start_date || '', due: t.due, tags: t.tags || [], subtasks: t.subtasks || [], recurrence: t.recurrence || null,
+    assigneeIds: assignees, followerIds: followers || [], startDate: t.start_date || '', due: t.due, estHours: t.est_hours == null ? null : Number(t.est_hours), tags: t.tags || [], subtasks: t.subtasks || [], recurrence: t.recurrence || null,
     createdBy: t.created_by, createdAt: t.created_at, completedAt: t.completed_at, position: t.position,
     reportId: t.report_id || null, okrId: t.okr_id || null, krId: t.kr_id || '', seriesId: t.series_id || '', spawned: !!t.spawned_id, commentCount: cc || 0, attachCount: ac || 0,
   });
@@ -412,7 +435,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const s = stat.get(r.id);
       return { id: r.id, projectId: r.project_id, title: r.title, description: r.description, priority: r.priority, tags: r.tags || [], subtasks: r.subtasks || [],
         assigneeIds: idList(r.assignees), followerIds: idList(r.followers), rule: r.rule, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
-        openCount: s ? s.open : 0, nextDue: s && s.next ? s.next : '', canEdit: canManageRecurring(c, r) };
+        estHours: r.est_hours == null ? null : Number(r.est_hours), openCount: s ? s.open : 0, nextDue: s && s.next ? s.next : '', pendingDue: r.next_due || '', canEdit: canManageRecurring(c, r) };
     });
   }
   /** Chi tiết 1 công việc: bình luận + tệp đính kèm (chỉ người xem được việc mới nhận). */
@@ -434,6 +457,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
   /* ---------- Ghi: giá trị hợp lệ ---------- */
   const cleanTags = v => uniq((Array.isArray(v) ? v : []).map(x => str(x).trim().slice(0, 30)).filter(Boolean)).slice(0, 12);
   const cleanSubtasks = v => (Array.isArray(v) ? v : []).slice(0, 100).map(s => ({ id: safeId(s && s.id) ? String(s.id) : newId('s'), text: str(s && s.text).trim().slice(0, 300), done: !!(s && s.done) })).filter(s => s.text);
+  /** Số giờ hoàn thành dự kiến: số dương ≤ 1000, làm tròn 2 chữ số thập phân; để trống / không hợp lệ = không đặt (null). */
+  const cleanHours = v => { const n = typeof v === 'string' ? Number(v.replace(',', '.')) : Number(v); return v !== null && v !== '' && v !== undefined && isFinite(n) && n > 0 ? Math.min(1000, Math.round(n * 100) / 100) : null; };
   const normDue = v => { const s = str(v).slice(0, 10); return validISO(s) ? s : ''; };
 
   async function nextPosition(q, projectId, status) {
@@ -448,9 +473,10 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
   }
 
   /**
-   * Đổi trạng thái 1 công việc. Khi chuyển sang Done: ghi thời điểm hoàn thành và, nếu là việc lặp lại,
-   * tự sinh việc kế tiếp từ cấu hình mẫu (mỗi việc chỉ sinh MỘT lần dù mở lại rồi làm xong lần nữa).
-   * Trả về { spawned: { id, due } } nếu có việc mới.
+   * Đổi trạng thái 1 công việc. Khi chuyển sang Done: ghi thời điểm hoàn thành và, nếu là việc lặp lại, tính ngày của lần kế tiếp.
+   * Việc kế tiếp KHÔNG xuất hiện ngay: ngày chưa đến thì chỉ được hẹn (recurring_tasks.next_due) và máy chủ tự tạo khi đến ngày
+   * (spawnDueRecurring). Mỗi việc chỉ hẹn/sinh MỘT lần dù mở lại rồi làm xong lần nữa.
+   * Trả về { spawned: { id, due } } nếu việc mới đã xuất hiện (đến ngày rồi), hoặc { scheduled: { due, title } } nếu được hẹn ngày.
    */
   async function applyStatus(c, t, status) {
     if (t.status === status) return {};
@@ -459,10 +485,40 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
     if (!done || !t.series_id || t.spawned_id) return {};
     const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [t.series_id]); if (!tpl) return {};     // mẫu đã bị xoá → dừng lặp
     const rule = cleanRule(tpl.rule); if (!rule) return {};
-    const due = nextDue(rule, t.due, todayISO()); if (!due) return {};
+    const today = todayISO();
+    const due = nextDue(rule, t.due, today); if (!due) return {};
+    if (due > today) {                                                                      // chưa đến ngày: hẹn, chưa tạo việc
+      await c.q.query('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [tpl.id, due]);
+      await c.q.query('UPDATE tasks SET spawned_id=$2 WHERE id=$1', [t.id, PENDING]);
+      return { scheduled: { due, title: tpl.title } };
+    }
     const id = await spawnInstance(c, tpl, rule, due); if (!id) return {};
     await c.q.query('UPDATE tasks SET spawned_id=$2 WHERE id=$1', [t.id, id]);
     return { spawned: { id, due, title: tpl.title } };
+  }
+  /**
+   * Tạo các việc lặp lại đã ĐẾN NGÀY (next_due <= hôm nay). Chạy định kỳ ở nền (server.js) và mỗi lần mở màn Công việc.
+   * Nếu ngày hẹn đã trôi qua (máy chủ tắt lâu) thì nhảy tới lần gần nhất chưa qua, không sinh việc đã quá hạn.
+   * `c` cần { q, byId, me }; trả về số việc đã tạo.
+   */
+  async function spawnDueRecurring(c) {
+    const today = todayISO();
+    const rows = (await c.q.query(`SELECT * FROM recurring_tasks WHERE next_due <> '' AND next_due <= $1 ORDER BY seq`, [today])).rows;
+    let made = 0;
+    for (const tpl of rows) {
+      const rule = cleanRule(tpl.rule);
+      let due = rule ? tpl.next_due : '';
+      if (rule && due < today) due = nextDue(rule, due, today) || '';
+      if (!due || (rule && rule.end && due > rule.end)) { await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]); continue; }
+      if (due > today) { await c.q.query('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [tpl.id, due]); continue; }
+      const id = await spawnInstance(c, tpl, rule, due);
+      await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
+      if (id) {
+        await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [tpl.id, id, PENDING]);
+        made++;
+      }
+    }
+    return made;
   }
   /** Sinh 1 việc từ mẫu lặp lại (nội dung lấy theo mẫu hiện tại). Dự án đã lưu trữ/xoá thì không sinh. Trả về mã việc mới hoặc null. */
   async function spawnInstance(c, tpl, rule, due) {
@@ -472,11 +528,11 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
     if (!ids.length) ids = [c.byId[tpl.created_by] && c.byId[tpl.created_by].active ? tpl.created_by : c.me.id];
     const id = newId('t');
     const today = todayISO();
-    await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id,start_date)
-      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id,start_date,est_hours)
+      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [id, tpl.title, ids[0], due, new Date().toISOString(), tpl.project_id, tpl.description, tpl.priority, JSON.stringify(tpl.tags || []),
        JSON.stringify((tpl.subtasks || []).map(s => ({ ...s, done: false }))), JSON.stringify(rule), tpl.created_by || ids[0], await nextPosition(c.q, tpl.project_id, 'todo'), tpl.id,
-       due && due < today ? due : today]);        // việc lặp lại bắt đầu từ lúc được sinh ra (không sau hạn)
+       due && due < today ? due : today, tpl.est_hours == null ? null : tpl.est_hours]);        // việc lặp lại bắt đầu từ lúc được sinh ra (không sau hạn)
     for (const a of ids) {
       await c.q.query('INSERT INTO task_assignees(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, a]);
       if (!proj.open) await ensureMember(c.q, tpl.project_id, proj.workspace_id, a);
@@ -647,17 +703,18 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       if (startDate && !validISO(startDate)) throw new AppError('Ngày bắt đầu không hợp lệ.');
       if (startDate && due && startDate > due) throw new AppError('Ngày bắt đầu không được sau hạn chót.');
       const tags = cleanTags(t.tags), subtasks = cleanSubtasks(t.subtasks), desc = cleanRich(t.description, 20000);
+      const estHours = t.estHours === undefined && old ? (old.t.est_hours == null ? null : Number(old.t.est_hours)) : cleanHours(t.estHours);     // không gửi = giữ nguyên
       const followers = Array.isArray(t.followerIds) ? cleanFollowers(c, t.followerIds, assignees, old ? old.followers : []) : null;     // không gửi = giữ nguyên
       if (old) {
-        await c.q.query('UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, start_date=$8 WHERE id=$1',
-          [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), startDate]);
+        await c.q.query('UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, start_date=$8, est_hours=$9 WHERE id=$1',
+          [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), startDate, estHours]);
       } else {
         const status = STATUSES.includes(t.status) ? t.status : 'todo';
         const okrId = t.okrId ? str(t.okrId) : null;
-        await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id,start_date)
-          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'',$16)`,
+        await c.q.query(`INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id,start_date,est_hours)
+          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'',$16,$17)`,
           [t.id, title, assignees[0], okrId, due, status, new Date().toISOString(), projectId, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks),
-           c.me.id, await nextPosition(c.q, projectId, status), status === 'done' ? new Date().toISOString() : '', startDate]);
+           c.me.id, await nextPosition(c.q, projectId, status), status === 'done' ? new Date().toISOString() : '', startDate, estHours]);
       }
       await writeAssignees(c, t.id, assignees, pc);
       if (followers) await writeFollowers(c, t.id, followers, pc);
@@ -775,28 +832,32 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       for (const a of ids) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError(assignError(c, a));
       const priority = PRIORITIES.includes(r.priority) ? r.priority : 'medium';
       const tags = cleanTags(r.tags), subtasks = cleanSubtasks(r.subtasks).map(s => ({ ...s, done: false })), desc = cleanRich(r.description, 20000);
+      const estHours = r.estHours === undefined && old ? (old.est_hours == null ? null : Number(old.est_hours)) : cleanHours(r.estHours);
       const followers = Array.isArray(r.followerIds) ? cleanFollowers(c, r.followerIds, ids, old ? idList(old.followers) : []) : (old ? idList(old.followers).filter(f => !ids.includes(f)) : []);
       // Việc đầu tiên (hoặc việc kế tiếp nếu chuỗi đang không có việc mở) — kiểm tra trước khi ghi
       const open = old ? await one(c.q, `SELECT 1 FROM tasks WHERE series_id=$1 AND status <> 'done' LIMIT 1`, [r.id]) : null;
-      let due = '';
+      let due = '', pendingDue = old ? (old.next_due || '') : '';
+      const today = todayISO();
       if (!old) {
-        due = normDue(r.firstDue) || todayISO();
+        due = normDue(r.firstDue) || today;
         if (rule.end && due > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.');
       } else if (!open) {
-        const today = todayISO();
-        due = nextDue(rule, isoOf(addDays(parseISO(today), -1)), today);
+        const baseDay = pendingDue && pendingDue > today ? pendingDue : today;                 // đang hẹn ngày thì giữ ngày hẹn (đổi lịch thì lấy lần đầu tiên từ ngày hẹn trở đi)
+        due = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
         if (!due) throw new AppError('Lịch lặp đã quá ngày kết thúc. Hãy chọn ngày kết thúc muộn hơn.');
-      }
+        pendingDue = due > today ? due : '';                                                 // chưa đến ngày: hẹn, đến ngày máy chủ mới tạo việc
+        if (due > today) due = '';
+      } else pendingDue = '';
       const now = new Date().toISOString();
-      const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers)];
-      if (old) await c.q.query('UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, updated_at=$11 WHERE id=$1', [...row, now]);
-      else await c.q.query('INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)', [...row, c.me.id, now]);
+      const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue];
+      if (old) await c.q.query('UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, updated_at=$13 WHERE id=$1', [...row, now]);
+      else await c.q.query('INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)', [...row, c.me.id, now]);
       const result = {};
       if (due) {
         const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [r.id]);
         const id = await spawnInstance(c, tpl, rule, due);
-        if (id) result.spawned = { id, due, title };
-      }
+        if (id) { result.spawned = { id, due, title }; await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [r.id, id, PENDING]); }
+      } else if (pendingDue) result.scheduled = { due: pendingDue, title };
       return result;
     },
     async deleteRecurring(c, p) {
@@ -863,11 +924,51 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       return { id, name, mime: MIME[ext], size, uploadedBy: c.me.id, createdAt: now };
     } catch (e) { try { fs.rmSync(file, { force: true }); } catch (_) {} throw e; }
   }
+  /**
+   * Ảnh DÁN vào ô mô tả (không thuộc riêng một tệp đính kèm nào, vì việc có thể chưa được lưu). Lưu ở thư mục riêng, ghi vào inline_images;
+   * nội dung mô tả chỉ giữ MÃ ảnh (<img data-f="mã">). Người đăng nhập nào cũng xem được ảnh khi có mã (mã ngẫu nhiên, không đoán được).
+   */
+  const IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+  const inlineDir = () => path.join(UPLOAD_DIR, '.inline');
+  const imageKind = b => b.length >= 12 && (
+    (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) ? 'png'
+    : (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) ? 'jpg'
+    : (b.toString('latin1', 0, 4) === 'GIF8') ? 'gif'
+    : (b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') ? 'webp' : '');
+  async function uploadInline(c, req, params) {
+    const name = cleanFileName(params.name), ext = extOf(name);
+    if (!IMG_EXT.has(ext)) throw new AppError('Chỉ dán được ảnh PNG, JPG, GIF hoặc WebP.');
+    const declared = Number(req.headers['content-length'] || 0);
+    if (declared > MAX_FILE) throw new AppError('Ảnh quá lớn (tối đa ' + Math.round(MAX_FILE / 1048576) + 'MB).');
+    const id = newId('i'), dir = inlineDir(), file = path.join(dir, id);
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { console.error(e); throw new AppError('Máy chủ chưa cấu hình được nơi lưu ảnh.'); }
+    let size = 0;
+    const counter = new Transform({ transform(chunk, _enc, cb) { size += chunk.length; if (size > MAX_FILE) cb(new AppError('Ảnh quá lớn (tối đa ' + Math.round(MAX_FILE / 1048576) + 'MB).')); else cb(null, chunk); } });
+    try {
+      await pipeline(req, counter, fs.createWriteStream(file, { flags: 'wx', mode: 0o640 }));
+      if (!size) throw new AppError('Ảnh rỗng.');
+      const fd = fs.openSync(file, 'r'), head = Buffer.alloc(12);
+      try { fs.readSync(fd, head, 0, 12, 0); } finally { fs.closeSync(fd); }
+      const kind = imageKind(head);
+      if (!kind) throw new AppError('Tệp không phải ảnh hợp lệ.');
+      const mime = MIME[kind], now = new Date().toISOString();
+      await c.q.query('INSERT INTO inline_images(id,name,mime,size,uploaded_by,created_at) VALUES($1,$2,$3,$4,$5,$6)', [id, name, mime, size, c.me.id, now]);
+      return { id, name, mime, size };
+    } catch (e) { try { fs.rmSync(file, { force: true }); } catch (_) {} throw e; }
+  }
   /** Gửi tệp về trình duyệt. Ảnh/PDF xem trực tiếp; còn lại luôn tải xuống. */
   async function download(c, res, attId) {
     if (!safeId(attId)) throw new AppError('Tệp không hợp lệ.');
     const a = await one(c.q, 'SELECT * FROM task_attachments WHERE id=$1', [attId]);
-    if (!a) throw new AppError('Không tìm thấy tệp.');
+    if (!a) {
+      const im = await one(c.q, 'SELECT * FROM inline_images WHERE id=$1', [attId]);              // ảnh dán trong mô tả
+      if (!im) throw new AppError('Không tìm thấy tệp.');
+      const f = path.join(inlineDir(), im.id);
+      let st; try { st = fs.statSync(f); } catch (e) { throw new AppError('Ảnh không còn trên máy chủ.'); }
+      res.writeHead(200, { 'Content-Type': im.mime || 'application/octet-stream', 'Content-Length': st.size, 'X-Content-Type-Options': 'nosniff',
+        'Content-Disposition': "inline; filename*=UTF-8''" + encodeURIComponent(im.name), 'Cache-Control': 'private, max-age=86400', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
+      return fs.createReadStream(f).pipe(res);
+    }
     const tc = await taskCtx(c, a.task_id);
     if (!tc || !tc.canView) deny('Bạn không có quyền xem tệp này.');
     const file = path.join(taskDir(a.task_id), a.id);
@@ -881,7 +982,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
     fs.createReadStream(file).pipe(res);
   }
 
-  return { SCHEMA, migrate, actions, loadWork, loadTaskDetail, upload, download, removeTaskFiles, STATUSES, DEFAULT_PROJECT,
+  return { SCHEMA, migrate, actions, loadWork, loadTaskDetail, upload, uploadInline, download, spawnDueRecurring, removeTaskFiles, STATUSES, DEFAULT_PROJECT,
     loadPeople, filterVisibleTasks, visibleToViewer, isTopRole, cleanRich, cleanText, plainOf };
 };
 module.exports.recurrence = { cleanRule, nextAfter, nextDue, validISO };

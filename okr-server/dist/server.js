@@ -19836,6 +19836,7 @@ var require_work = __commonJS({
     var { pipeline } = require("stream/promises");
     var { Transform } = require("stream");
     var STATUSES = ["todo", "doing", "review", "done"];
+    var PENDING = "pending";
     var PRIORITIES = ["low", "medium", "high", "urgent"];
     var DEFAULT_WS = "w_default";
     var DEFAULT_DEPT = "d_default";
@@ -19928,6 +19929,17 @@ var require_work = __commonJS({
     var escapeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     var RT_TOKEN = /<!--[\s\S]*?(?:-->|$)|<[!?][^>]*>|<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^'">])*)>|[^<]+|</g;
     var isRich = (s) => typeof s === "string" && s.startsWith(RT);
+    var RT_MAX_IMAGES = 20;
+    function richImg(attrs) {
+      const re = /([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+      let m;
+      while (m = re.exec(attrs)) {
+        if (m[1].toLowerCase() !== "data-f") continue;
+        const v = m[2] !== void 0 ? m[2] : m[3] !== void 0 ? m[3] : m[4] || "";
+        return /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : "";
+      }
+      return "";
+    }
     function richClass(attrs) {
       const re = /([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
       let m;
@@ -19941,13 +19953,14 @@ var require_work = __commonJS({
     function plainOf(s) {
       s = s === null || s === void 0 ? "" : String(s);
       if (!isRich(s)) return s;
-      return decodeEntities(s.slice(RT.length).replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, ""));
+      return decodeEntities(s.slice(RT.length).replace(/<br\s*\/?>/gi, "\n").replace(/<img\b[^>]*>/gi, "[\u1EA3nh]").replace(/<[^>]*>/g, ""));
     }
     function cleanRich(s, maxLen) {
       s = s === null || s === void 0 ? "" : String(s);
       if (!isRich(s)) return maxLen ? s.slice(0, maxLen) : s;
       const body = s.slice(RT.length).replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u2028\u2029]/g, "");
       const out = [], stack = [];
+      let imgCount = 0;
       const openHtml = (e) => e.keep ? "<" + e.n + (e.cls ? ' class="' + e.cls + '"' : "") + ">" : "";
       const closeHtml = (e) => e.keep ? "</" + e.n + ">" : "";
       const closeEntry = (n) => {
@@ -19970,6 +19983,14 @@ var require_work = __commonJS({
         const name = rawName.toLowerCase(), n = name === "strong" ? "b" : name === "em" ? "i" : name;
         if (n === "br") {
           out.push("<br>");
+          continue;
+        }
+        if (n === "img") {
+          const f = !slash ? richImg(attrs) : "";
+          if (f) {
+            if (++imgCount > RT_MAX_IMAGES) throw new ErrCls("M\u1ED7i n\u1ED9i dung d\xE1n t\u1ED1i \u0111a " + RT_MAX_IMAGES + " \u1EA3nh.");
+            out.push('<img data-f="' + f + '">');
+          }
           continue;
         }
         if (slash) {
@@ -20038,6 +20059,11 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
   priority text NOT NULL DEFAULT 'medium', tags jsonb NOT NULL DEFAULT '[]', subtasks jsonb NOT NULL DEFAULT '[]', assignees jsonb NOT NULL DEFAULT '[]', rule jsonb NOT NULL,
   created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', updated_at text NOT NULL DEFAULT '', seq bigserial);
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS followers jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
+ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS next_due text NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
+CREATE TABLE IF NOT EXISTS inline_images (id text PRIMARY KEY, name text NOT NULL DEFAULT '', mime text NOT NULL DEFAULT '', size bigint NOT NULL DEFAULT 0,
+  uploaded_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS task_followers (task_id text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (task_id, user_id));
 CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
 `;
@@ -20194,6 +20220,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
         followerIds: followers || [],
         startDate: t.start_date || "",
         due: t.due,
+        estHours: t.est_hours == null ? null : Number(t.est_hours),
         tags: t.tags || [],
         subtasks: t.subtasks || [],
         recurrence: t.recurrence || null,
@@ -20301,8 +20328,10 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
             createdBy: r.created_by,
             createdAt: r.created_at,
             updatedAt: r.updated_at,
+            estHours: r.est_hours == null ? null : Number(r.est_hours),
             openCount: s ? s.open : 0,
             nextDue: s && s.next ? s.next : "",
+            pendingDue: r.next_due || "",
             canEdit: canManageRecurring(c, r)
           };
         });
@@ -20326,6 +20355,10 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       }
       const cleanTags = (v) => uniq((Array.isArray(v) ? v : []).map((x) => str2(x).trim().slice(0, 30)).filter(Boolean)).slice(0, 12);
       const cleanSubtasks = (v) => (Array.isArray(v) ? v : []).slice(0, 100).map((s) => ({ id: safeId(s && s.id) ? String(s.id) : newId("s"), text: str2(s && s.text).trim().slice(0, 300), done: !!(s && s.done) })).filter((s) => s.text);
+      const cleanHours = (v) => {
+        const n = typeof v === "string" ? Number(v.replace(",", ".")) : Number(v);
+        return v !== null && v !== "" && v !== void 0 && isFinite(n) && n > 0 ? Math.min(1e3, Math.round(n * 100) / 100) : null;
+      };
       const normDue = (v) => {
         const s = str2(v).slice(0, 10);
         return validISO(s) ? s : "";
@@ -20350,12 +20383,43 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
         if (!tpl) return {};
         const rule = cleanRule(tpl.rule);
         if (!rule) return {};
-        const due = nextDue(rule, t.due, todayISO2());
+        const today = todayISO2();
+        const due = nextDue(rule, t.due, today);
         if (!due) return {};
+        if (due > today) {
+          await c.q.query("UPDATE recurring_tasks SET next_due=$2 WHERE id=$1", [tpl.id, due]);
+          await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, PENDING]);
+          return { scheduled: { due, title: tpl.title } };
+        }
         const id = await spawnInstance(c, tpl, rule, due);
         if (!id) return {};
         await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, id]);
         return { spawned: { id, due, title: tpl.title } };
+      }
+      async function spawnDueRecurring(c) {
+        const today = todayISO2();
+        const rows = (await c.q.query(`SELECT * FROM recurring_tasks WHERE next_due <> '' AND next_due <= $1 ORDER BY seq`, [today])).rows;
+        let made = 0;
+        for (const tpl of rows) {
+          const rule = cleanRule(tpl.rule);
+          let due = rule ? tpl.next_due : "";
+          if (rule && due < today) due = nextDue(rule, due, today) || "";
+          if (!due || rule && rule.end && due > rule.end) {
+            await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
+            continue;
+          }
+          if (due > today) {
+            await c.q.query("UPDATE recurring_tasks SET next_due=$2 WHERE id=$1", [tpl.id, due]);
+            continue;
+          }
+          const id = await spawnInstance(c, tpl, rule, due);
+          await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
+          if (id) {
+            await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [tpl.id, id, PENDING]);
+            made++;
+          }
+        }
+        return made;
       }
       async function spawnInstance(c, tpl, rule, due) {
         const proj = await one2(c.q, "SELECT workspace_id, open, archived FROM projects WHERE id=$1", [tpl.project_id]);
@@ -20365,8 +20429,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
         const id = newId("t");
         const today = todayISO2();
         await c.q.query(
-          `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id,start_date)
-      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,series_id,start_date,est_hours)
+      VALUES($1,$2,$3,NULL,0,0,$4,'todo',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             id,
             tpl.title,
@@ -20382,7 +20446,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
             tpl.created_by || ids[0],
             await nextPosition(c.q, tpl.project_id, "todo"),
             tpl.id,
-            due && due < today ? due : today
+            due && due < today ? due : today,
+            tpl.est_hours == null ? null : tpl.est_hours
           ]
         );
         for (const a of ids) {
@@ -20557,18 +20622,19 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           if (startDate && !validISO(startDate)) throw new AppError2("Ng\xE0y b\u1EAFt \u0111\u1EA7u kh\xF4ng h\u1EE3p l\u1EC7.");
           if (startDate && due && startDate > due) throw new AppError2("Ng\xE0y b\u1EAFt \u0111\u1EA7u kh\xF4ng \u0111\u01B0\u1EE3c sau h\u1EA1n ch\xF3t.");
           const tags = cleanTags(t.tags), subtasks = cleanSubtasks(t.subtasks), desc = cleanRich(t.description, 2e4);
+          const estHours = t.estHours === void 0 && old ? old.t.est_hours == null ? null : Number(old.t.est_hours) : cleanHours(t.estHours);
           const followers = Array.isArray(t.followerIds) ? cleanFollowers(c, t.followerIds, assignees, old ? old.followers : []) : null;
           if (old) {
             await c.q.query(
-              "UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, start_date=$8 WHERE id=$1",
-              [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), startDate]
+              "UPDATE tasks SET title=$2, description=$3, priority=$4, due=$5, tags=$6, subtasks=$7, start_date=$8, est_hours=$9 WHERE id=$1",
+              [t.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(subtasks), startDate, estHours]
             );
           } else {
             const status = STATUSES.includes(t.status) ? t.status : "todo";
             const okrId = t.okrId ? str2(t.okrId) : null;
             await c.q.query(
-              `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id,start_date)
-          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'',$16)`,
+              `INSERT INTO tasks(id,title,assignee_id,okr_id,week,year,due,status,created_at,project_id,description,priority,tags,subtasks,recurrence,created_by,position,completed_at,series_id,start_date,est_hours)
+          VALUES($1,$2,$3,$4,0,0,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13,$14,$15,'',$16,$17)`,
               [
                 t.id,
                 title,
@@ -20585,7 +20651,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
                 c.me.id,
                 await nextPosition(c.q, projectId, status),
                 status === "done" ? (/* @__PURE__ */ new Date()).toISOString() : "",
-                startDate
+                startDate,
+                estHours
               ]
             );
           }
@@ -20720,27 +20787,34 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           for (const a of ids) if (!prev.includes(a) && !canAssign(c, pc.access, a)) throw new AppError2(assignError(c, a));
           const priority = PRIORITIES.includes(r.priority) ? r.priority : "medium";
           const tags = cleanTags(r.tags), subtasks = cleanSubtasks(r.subtasks).map((s) => ({ ...s, done: false })), desc = cleanRich(r.description, 2e4);
+          const estHours = r.estHours === void 0 && old ? old.est_hours == null ? null : Number(old.est_hours) : cleanHours(r.estHours);
           const followers = Array.isArray(r.followerIds) ? cleanFollowers(c, r.followerIds, ids, old ? idList(old.followers) : []) : old ? idList(old.followers).filter((f) => !ids.includes(f)) : [];
           const open = old ? await one2(c.q, `SELECT 1 FROM tasks WHERE series_id=$1 AND status <> 'done' LIMIT 1`, [r.id]) : null;
-          let due = "";
+          let due = "", pendingDue = old ? old.next_due || "" : "";
+          const today = todayISO2();
           if (!old) {
-            due = normDue(r.firstDue) || todayISO2();
+            due = normDue(r.firstDue) || today;
             if (rule.end && due > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t \u0111\u1EA7u ti\xEAn.");
           } else if (!open) {
-            const today = todayISO2();
-            due = nextDue(rule, isoOf(addDays(parseISO(today), -1)), today);
+            const baseDay = pendingDue && pendingDue > today ? pendingDue : today;
+            due = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
             if (!due) throw new AppError2("L\u1ECBch l\u1EB7p \u0111\xE3 qu\xE1 ng\xE0y k\u1EBFt th\xFAc. H\xE3y ch\u1ECDn ng\xE0y k\u1EBFt th\xFAc mu\u1ED9n h\u01A1n.");
-          }
+            pendingDue = due > today ? due : "";
+            if (due > today) due = "";
+          } else pendingDue = "";
           const now = (/* @__PURE__ */ new Date()).toISOString();
-          const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers)];
-          if (old) await c.q.query("UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, updated_at=$11 WHERE id=$1", [...row, now]);
-          else await c.q.query("INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)", [...row, c.me.id, now]);
+          const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue];
+          if (old) await c.q.query("UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, updated_at=$13 WHERE id=$1", [...row, now]);
+          else await c.q.query("INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)", [...row, c.me.id, now]);
           const result = {};
           if (due) {
             const tpl = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [r.id]);
             const id = await spawnInstance(c, tpl, rule, due);
-            if (id) result.spawned = { id, due, title };
-          }
+            if (id) {
+              result.spawned = { id, due, title };
+              await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [r.id, id, PENDING]);
+            }
+          } else if (pendingDue) result.scheduled = { due: pendingDue, title };
           return result;
         },
         async deleteRecurring(c, p) {
@@ -20828,10 +20902,72 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           throw e;
         }
       }
+      const IMG_EXT = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "gif", "webp"]);
+      const inlineDir = () => path.join(UPLOAD_DIR, ".inline");
+      const imageKind = (b) => b.length >= 12 && (b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71 ? "png" : b[0] === 255 && b[1] === 216 && b[2] === 255 ? "jpg" : b.toString("latin1", 0, 4) === "GIF8" ? "gif" : b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP" ? "webp" : "");
+      async function uploadInline(c, req, params) {
+        const name = cleanFileName(params.name), ext = extOf(name);
+        if (!IMG_EXT.has(ext)) throw new AppError2("Ch\u1EC9 d\xE1n \u0111\u01B0\u1EE3c \u1EA3nh PNG, JPG, GIF ho\u1EB7c WebP.");
+        const declared = Number(req.headers["content-length"] || 0);
+        if (declared > MAX_FILE) throw new AppError2("\u1EA2nh qu\xE1 l\u1EDBn (t\u1ED1i \u0111a " + Math.round(MAX_FILE / 1048576) + "MB).");
+        const id = newId("i"), dir = inlineDir(), file = path.join(dir, id);
+        try {
+          fs2.mkdirSync(dir, { recursive: true });
+        } catch (e) {
+          console.error(e);
+          throw new AppError2("M\xE1y ch\u1EE7 ch\u01B0a c\u1EA5u h\xECnh \u0111\u01B0\u1EE3c n\u01A1i l\u01B0u \u1EA3nh.");
+        }
+        let size = 0;
+        const counter = new Transform({ transform(chunk, _enc, cb) {
+          size += chunk.length;
+          if (size > MAX_FILE) cb(new AppError2("\u1EA2nh qu\xE1 l\u1EDBn (t\u1ED1i \u0111a " + Math.round(MAX_FILE / 1048576) + "MB)."));
+          else cb(null, chunk);
+        } });
+        try {
+          await pipeline(req, counter, fs2.createWriteStream(file, { flags: "wx", mode: 416 }));
+          if (!size) throw new AppError2("\u1EA2nh r\u1ED7ng.");
+          const fd = fs2.openSync(file, "r"), head = Buffer.alloc(12);
+          try {
+            fs2.readSync(fd, head, 0, 12, 0);
+          } finally {
+            fs2.closeSync(fd);
+          }
+          const kind = imageKind(head);
+          if (!kind) throw new AppError2("T\u1EC7p kh\xF4ng ph\u1EA3i \u1EA3nh h\u1EE3p l\u1EC7.");
+          const mime = MIME[kind], now = (/* @__PURE__ */ new Date()).toISOString();
+          await c.q.query("INSERT INTO inline_images(id,name,mime,size,uploaded_by,created_at) VALUES($1,$2,$3,$4,$5,$6)", [id, name, mime, size, c.me.id, now]);
+          return { id, name, mime, size };
+        } catch (e) {
+          try {
+            fs2.rmSync(file, { force: true });
+          } catch (_) {
+          }
+          throw e;
+        }
+      }
       async function download(c, res, attId) {
         if (!safeId(attId)) throw new AppError2("T\u1EC7p kh\xF4ng h\u1EE3p l\u1EC7.");
         const a = await one2(c.q, "SELECT * FROM task_attachments WHERE id=$1", [attId]);
-        if (!a) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y t\u1EC7p.");
+        if (!a) {
+          const im = await one2(c.q, "SELECT * FROM inline_images WHERE id=$1", [attId]);
+          if (!im) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y t\u1EC7p.");
+          const f = path.join(inlineDir(), im.id);
+          let st2;
+          try {
+            st2 = fs2.statSync(f);
+          } catch (e) {
+            throw new AppError2("\u1EA2nh kh\xF4ng c\xF2n tr\xEAn m\xE1y ch\u1EE7.");
+          }
+          res.writeHead(200, {
+            "Content-Type": im.mime || "application/octet-stream",
+            "Content-Length": st2.size,
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline; filename*=UTF-8''" + encodeURIComponent(im.name),
+            "Cache-Control": "private, max-age=86400",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+          });
+          return fs2.createReadStream(f).pipe(res);
+        }
         const tc = await taskCtx(c, a.task_id);
         if (!tc || !tc.canView) deny2("B\u1EA1n kh\xF4ng c\xF3 quy\u1EC1n xem t\u1EC7p n\xE0y.");
         const file = path.join(taskDir(a.task_id), a.id);
@@ -20859,7 +20995,9 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
         loadWork,
         loadTaskDetail,
         upload,
+        uploadInline,
         download,
+        spawnDueRecurring,
         removeTaskFiles,
         STATUSES,
         DEFAULT_PROJECT,
@@ -20894,7 +21032,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 14;
+var VERSION = 16;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
@@ -21602,6 +21740,11 @@ async function handle(req, res) {
       return send(res, await dbResponse(viewer2), 200, req);
     }
     if (req.method !== "POST") return send(res, { ok: false, error: "Method not allowed" }, 405);
+    if (url.pathname.endsWith("/upload-inline")) {
+      const viewer2 = await verifyToken(req.headers["x-okr-token"]);
+      const file = await W.uploadInline(await ctx(viewer2), req, { name: url.searchParams.get("name") });
+      return send(res, { ok: true, image: file });
+    }
     if (url.pathname.endsWith("/upload")) {
       const viewer2 = await verifyToken(req.headers["x-okr-token"]);
       const file = await W.upload(await ctx(viewer2), req, { taskId: url.searchParams.get("taskId"), name: url.searchParams.get("name") });
@@ -21642,6 +21785,26 @@ async function handle(req, res) {
     return send(res, await dbResponse(viewer, { result }), 200, req);
   } catch (e) {
     errOut(res, e);
+  }
+}
+var dueRunning = false;
+async function runDueRecurring() {
+  if (dueRunning) return;
+  dueRunning = true;
+  try {
+    const made = await tx(async (client) => {
+      const users = await getUsers(client), byId = {};
+      users.forEach((u) => {
+        byId[u.id] = u;
+      });
+      const me = users.find((u) => u.role === "director" && u.active) || users.find((u) => u.active) || { id: "" };
+      return W.spawnDueRecurring({ q: client, me, users, byId });
+    });
+    if (made) bumpVersion();
+  } catch (e) {
+    console.error((/* @__PURE__ */ new Date()).toISOString(), "T\u1EA1o vi\u1EC7c l\u1EB7p l\u1EA1i \u0111\u1EBFn ng\xE0y l\u1ED7i:", e.message || e);
+  } finally {
+    dueRunning = false;
   }
 }
 async function importDB(db, opts = {}) {
@@ -21745,6 +21908,8 @@ async function main() {
   http.createServer((req, res) => {
     handle(req, res);
   }).listen(PORT, () => console.log("OKR API v" + VERSION + " listening on " + PORT));
+  runDueRecurring();
+  setInterval(runDueRecurring, 5 * 6e4).unref();
 }
 main().catch((e) => {
   console.error(e.message || e);

@@ -33,7 +33,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 14;
+const VERSION = 16;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -590,6 +590,11 @@ async function handle(req, res) {
       return send(res, await dbResponse(viewer), 200, req);
     }
     if (req.method !== 'POST') return send(res, { ok: false, error: 'Method not allowed' }, 405);
+    if (url.pathname.endsWith('/upload-inline')) {                                                    // ảnh dán vào ô mô tả (chưa gắn với việc nào)
+      const viewer = await verifyToken(req.headers['x-okr-token']);
+      const file = await W.uploadInline(await ctx(viewer), req, { name: url.searchParams.get('name') });
+      return send(res, { ok: true, image: file });
+    }
     if (url.pathname.endsWith('/upload')) {                                                            // tải tệp lên: thân yêu cầu là dữ liệu thô, token ở header
       const viewer = await verifyToken(req.headers['x-okr-token']);
       const file = await W.upload(await ctx(viewer), req, { taskId: url.searchParams.get('taskId'), name: url.searchParams.get('name') });
@@ -622,6 +627,22 @@ async function handle(req, res) {
     viewer = (await getUsers()).find(u => u.id === viewer.id) || viewer;
     return send(res, await dbResponse(viewer, { result }), 200, req);
   } catch (e) { errOut(res, e); }
+}
+
+/** Tạo các việc lặp lại đã đến ngày (xem W.spawnDueRecurring). Chạy khi khởi động và mỗi 5 phút; lỗi chỉ ghi log. */
+let dueRunning = false;
+async function runDueRecurring() {
+  if (dueRunning) return;
+  dueRunning = true;
+  try {
+    const made = await tx(async client => {
+      const users = await getUsers(client), byId = {}; users.forEach(u => { byId[u.id] = u; });
+      const me = users.find(u => u.role === 'director' && u.active) || users.find(u => u.active) || { id: '' };
+      return W.spawnDueRecurring({ q: client, me, users, byId });
+    });
+    if (made) bumpVersion();
+  } catch (e) { console.error(new Date().toISOString(), 'Tạo việc lặp lại đến ngày lỗi:', e.message || e); }
+  finally { dueRunning = false; }
 }
 
 /* ---------------- Nhập dữ liệu ---------------- */
@@ -692,5 +713,6 @@ async function main() {
   }
   if (!TOKEN_SECRET || TOKEN_SECRET.length < 32) throw new Error('TOKEN_SECRET chưa được đặt (>= 32 ký tự).');
   http.createServer((req, res) => { handle(req, res); }).listen(PORT, () => console.log('OKR API v' + VERSION + ' listening on ' + PORT));
+  runDueRecurring(); setInterval(runDueRecurring, 5 * 60e3).unref();                                    // việc lặp lại đến ngày thì tự xuất hiện
 }
 main().catch(e => { console.error(e.message || e); process.exit(1); });
