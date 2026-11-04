@@ -110,34 +110,46 @@ async function wfetch(url, opts){
 }
 const enc = encodeURIComponent;
 const qurl = q => apiUrl() + (apiUrl().includes('?') ? '&' : '?') + q;
-async function load(silent){
-  if(!online() || !session()) return;
-  if(S.loading) return;
+/** Dấu nội dung của dữ liệu Công việc, bỏ `loadedAt` (đổi mỗi lần tải) để so sánh có thay đổi thật hay không. */
+const sigOf = d => JSON.stringify(d, (k, v) => k === 'loadedAt' ? undefined : v);
+/** Tải dữ liệu Công việc. Trả về true nếu nội dung thật sự đổi.
+ *  opts.poll: lần tải tự động — không vẽ lại nếu nội dung giống hệt (máy chủ chỉ đổi phiên bản vì người khác sửa phần khác).
+ *  opts.noPaint: chỉ tải, để người gọi tự vẽ lại một lần. */
+async function load(silent, opts){
+  opts = opts || {};
+  if(!online() || !session()) return false;
+  if(S.loading) return false;
   S.loading = true; if(!silent){ S.error = null; }
+  let changed = false;
   try {
     const sameWs = S.wsLoaded === S.ws && S.data;
     const j = await wfetch(qurl('work=1&ws=' + enc(S.ws) + '&t=' + Date.now() + '&token=' + enc(token()) + (sameWs && S.version ? '&v=' + enc(S.version) : '')));
     if(!j.unchanged){
+      const prev = opts.poll && sameWs ? sigOf(S.data) : null;
       S.data = j.work; S.version = j.version; S.wsLoaded = S.ws;
       if(S.data.currentId && S.data.currentId !== S.ws){ S.ws = S.data.currentId; S.wsLoaded = S.ws; lsSet('okr_work_ws', S.ws); }
       if(S.project !== 'all' && !projById(S.project)) S.project = 'all';
-      S.error = null; repaintIfActive();
-    } else if(S.error){ S.error = null; repaintIfActive(); }
+      S.error = null;
+      changed = prev === null || prev !== sigOf(S.data);
+      if(changed && !opts.noPaint) repaintIfActive(true);
+    } else if(S.error){ S.error = null; changed = true; if(!opts.noPaint) repaintIfActive(true); }
   } catch(e){
-    if(e.auth){ S.loading = false; forceLogout(e.message); return; }
-    S.error = e.message; if(!silent) toast(e.message, 'error'); repaintIfActive();
+    if(e.auth){ S.loading = false; forceLogout(e.message); return false; }
+    S.error = e.message; if(!silent) toast(e.message, 'error'); if(!opts.noPaint) repaintIfActive(true); changed = true;
   } finally { S.loading = false; }
+  return changed;
 }
 const active = () => typeof state !== 'undefined' && state.view === 'tasks' && !!session();
-function repaintIfActive(){ if(active()) repaint(); }
-/** Vẽ lại màn hình nhưng giữ vị trí cuộn (trang và bảng Kanban). */
-function repaint(){
+function repaintIfActive(quiet){ if(active()) repaint(quiet); }
+/** Vẽ lại màn hình nhưng giữ vị trí cuộn (trang và bảng Kanban). quiet: tắt hiệu ứng mờ-hiện để lần làm mới ngầm không nháy. */
+function repaint(quiet){
   const c = $('content'), b = $('kb-board');
   const top = c ? c.scrollTop : 0, left = b ? b.scrollLeft : 0, colTops = [...document.querySelectorAll('[data-col]')].map(e => e.scrollTop);
   render();
   const c2 = $('content'), b2 = $('kb-board');
   if(c2) c2.scrollTop = top; if(b2) b2.scrollLeft = left;
   document.querySelectorAll('[data-col]').forEach((e, i) => { if(colTops[i]) e.scrollTop = colTops[i]; });
+  if(quiet && typeof killFade === 'function') killFade();
 }
 /** Mở chi tiết 1 việc từ hộp thông báo: sang màn Công việc (đúng workspace), tải dữ liệu mới rồi mở chi tiết. */
 async function gotoTask(id, ws){
@@ -163,12 +175,9 @@ async function act(action, payload, okMsg){
   }
 }
 function reset(){ S.data = null; S.version = null; S.wsLoaded = null; S.error = null; S.project = 'all'; S.detail = null; S.draft = null; }
-setInterval(() => {                       // tự làm mới mỗi 60 giây khi đang xem màn Công việc (không làm phiền lúc đang gõ / mở khung)
-  if(!active() || document.visibilityState !== 'visible' || S.loading) return;
-  if($('modal') && $('modal').innerHTML.trim()) return;
-  const a = document.activeElement; if(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' || a.isContentEditable)) return;
-  load(true);
-}, 60000);
+/** Làm mới ngầm cho bộ hẹn giờ chung ở index.html: tải dữ liệu Công việc (nếu đang ở màn này), không vẽ lại; trả về true nếu có thay đổi thật. */
+const poll = () => active() ? load(true, { poll: true, noPaint: true }) : Promise.resolve(false);
+const dragging = () => !!S.drag;
 
 /* ---------- Lọc & sắp xếp ---------- */
 /* Khung thời gian: Hôm nay · Tuần này (T2–CN) · Tháng này/trước · Quý này/trước (quý dương lịch) · Năm này · Tuỳ chỉnh.
@@ -1394,7 +1403,7 @@ function reload(){ S.version = null; load(); }
 function retry(){ S.error = null; S.data = null; repaint(); }
 
 window.W = {
-  view, load, reload, reset, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
+  view, load, reload, reset, poll, repaint, active, dragging, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, gotoTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,

@@ -326,7 +326,7 @@ document.addEventListener('mousedown', e => { document.querySelectorAll('.rt-pop
 Object.assign(window, { RT, richEditor, richGet, richSet, richHtml, richPlain, richJoin });
 })();
 </script>
-<script src="work.js?v=16"></script>
+<script src="work.js?v=17"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
@@ -578,7 +578,24 @@ async function api(action, payload){
   return j;
 }
 let refreshTimer = null;
-function scheduleRefresh(){ clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if(!sync.busy) refreshFromServer(true); else scheduleRefresh(); }, 1500);
+/** Người dùng đang thao tác (mở khung, đang gõ — kể cả ô soạn thảo định dạng —, đang chọn ô chọn, đang kéo thả)? Khi đó không làm mới ngầm để khỏi phá thao tác. */
+function userBusy(){
+  const m = document.getElementById('modal'); if(m && m.innerHTML.trim()) return true;
+  const a = document.activeElement;
+  if(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.isContentEditable)) return true;
+  return typeof W !== 'undefined' && W.dragging && W.dragging();
+}
+/** Tắt hiệu ứng mờ-hiện (fade-in) của phần vừa vẽ lại — lần làm mới ngầm không được nháy. */
+function killFade(){ document.querySelectorAll('#app .fade-in').forEach(e => { e.style.animation = 'none'; }); }
+/** Vẽ lại ngầm: giữ vị trí cuộn, không nháy. Màn Công việc dùng repaint riêng (giữ thêm cuộn ngang của Kanban và từng cột). */
+function renderQuiet(){
+  if(typeof W !== 'undefined' && W.active && W.active()){ W.repaint(true); return; }
+  const c = document.getElementById('content'), top = c ? c.scrollTop : 0;
+  render();
+  const c2 = document.getElementById('content'); if(c2) c2.scrollTop = top;
+  killFade();
+}
+function scheduleRefresh(){ clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { if(sync.busy || userBusy()) scheduleRefresh(); else refreshFromServer(true); }, 1500);
 }
 /* Token hết hạn / không hợp lệ → đăng xuất, yêu cầu đăng nhập lại. */
 function forceLogout(msg){
@@ -601,17 +618,24 @@ async function mutate(action, payload, localFn, successMsg){
   }
   finally { setBusy(false); }
 }
-async function refreshFromServer(silent){
+/** Làm mới dữ liệu từ máy chủ. silent: chạy ngầm — chỉ vẽ lại (một lần, không nháy, giữ cuộn) khi nội dung thật sự đổi.
+ *  poll: lần tự động theo giờ — tải luôn dữ liệu màn Công việc cùng lượt để hai nguồn không vẽ lại riêng rẽ. */
+async function refreshFromServer(silent, poll){
   if(!online()) return;
   const before = JSON.stringify(DB);
-  try { await apiLoad(); if(JSON.stringify(DB) !== before || !silent) render(); if(!silent) toast('Đã tải dữ liệu mới nhất.', 'info'); }
-  catch(e){ if(e.auth){ forceLogout(e.message); return; } if(!silent) toast(e.message, 'error'); render(); }
+  try {
+    await apiLoad();
+    const wChanged = poll && typeof W !== 'undefined' ? await W.poll() : false;
+    if(!silent){ render(); toast('Đã tải dữ liệu mới nhất.', 'info'); }
+    else if(JSON.stringify(DB) !== before || wChanged) renderQuiet();
+  }
+  catch(e){ if(e.auth){ forceLogout(e.message); return; } if(!silent){ toast(e.message, 'error'); render(); } }     // làm mới ngầm lỗi (mất mạng...) thì im lặng, không vẽ lại — chấm đồng bộ đã báo đỏ
 }
-setInterval(() => {
-  if(!online() || !session() || document.visibilityState !== 'visible' || sync.busy) return;
-  if(document.getElementById('modal').innerHTML.trim()) return;                 // đang mở form
-  const a = document.activeElement; if(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return; // đang gõ
-  refreshFromServer(true);
+let pollBusy = false;
+setInterval(async () => {
+  if(!online() || !session() || document.visibilityState !== 'visible' || sync.busy || pollBusy || userBusy()) return;
+  pollBusy = true;
+  try { await refreshFromServer(true, true); } finally { pollBusy = false; }
 }, 60000);
 
 /* ---------- Hộp thông báo (v14): chuông ở đầu trang ----------
