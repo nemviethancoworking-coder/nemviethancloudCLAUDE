@@ -61,6 +61,8 @@
   .rt-nocolor:hover { background:#f3f4f6; }
   .rt-area { padding:8px 10px; font-size:14px; line-height:1.5; color:#1e293b; outline:none; white-space:pre-wrap; overflow-wrap:anywhere; overflow:auto; resize:vertical; max-height:70vh; }
   .rt-area[contenteditable=false] { cursor:default; }
+  .rt-img { display:inline-block; max-width:100%; max-height:340px; margin:4px 2px; border:1px solid #e5e7eb; border-radius:6px; vertical-align:bottom; cursor:zoom-in; background:#f9fafb; }
+  .rt-area .rt-img { cursor:default; }
   .rt-area:empty::before { content:attr(data-ph); color:#9ca3af; pointer-events:none; white-space:pre-line; }
   .btn:disabled { opacity:.5; cursor:default; }
   .nt-ic svg { width:11px; height:11px; }
@@ -77,7 +79,8 @@
 /* ============================================================
    TRÌNH SOẠN THẢO ĐỊNH DẠNG DÙNG CHUNG (index.html + work.js): in đậm / in nghiêng / màu chữ
    Quy ước dữ liệu: chuỗi THUẦN (không dấu hiệu, như dữ liệu cũ) hoặc '<!--rt-->' + HTML chỉ gồm
-   <b>, <i>, <br>, <span class="c-red|c-orange|c-blue"> (chữ bên trong đã escape & < >).
+   <b>, <i>, <br>, <span class="c-red|c-orange|c-blue"> (chữ bên trong đã escape & < >) và <img data-f="mã ảnh"> (ảnh dán vào ô soạn,
+   chỉ lưu MÃ ảnh; ảnh nằm trên máy chủ).
    - richEditor(id, {value, placeholder, minHeight, onInput, onKeyDown, disabled, cls, nodirty}) → HTML vùng soạn
    - richGet(idHoặcPhầnTử)  → chuỗi để gửi (thuần nếu không có định dạng, ngược lại có dấu hiệu)
    - richSet(idHoặcPhầnTử, giáTrị) → nạp giá trị cũ/mới vào vùng soạn
@@ -135,6 +138,7 @@ function runsOf(root){
       const tag = String(ch.tagName).toUpperCase();
       if(SKIP.has(tag)) return;
       if(tag === 'BR'){ lead(); out.push({ br:true }); return; }
+      if(tag === 'IMG'){ const f = ch.getAttribute('data-f'); if(f && /^[A-Za-z0-9_-]{1,64}$/.test(f)){ lead(); out.push({ img:f }); } return; }
       let b = st.b, i = st.i, c = st.c;
       const sty = ch.style || {}, fw = String(sty.fontWeight || '').toLowerCase(), fs = String(sty.fontStyle || '').toLowerCase();
       if(tag === 'B' || tag === 'STRONG') b = !(fw === 'normal' || fw === 'lighter' || (fw !== '' && +fw < 600));
@@ -157,20 +161,31 @@ function norm(runs){
   const o = [];
   for(const r of runs){
     if(r.br){ o.push({ br:true }); continue; }
+    if(r.img){ o.push({ img:r.img }); continue; }
     const x = /\S/.test(r.s) ? r : { s:r.s, b:false, i:false, c:null }, p = o[o.length - 1];
-    if(p && !p.br && p.b === !!x.b && p.i === !!x.i && p.c === (x.c || null)) p.s += x.s;
+    if(p && !p.br && !p.img && p.b === !!x.b && p.i === !!x.i && p.c === (x.c || null)) p.s += x.s;
     else o.push({ s:x.s, b:!!x.b, i:!!x.i, c:x.c || null });
   }
-  while(o.length && (o[0].br || !o[0].s.trim())) o.shift();
-  while(o.length && (o[o.length - 1].br || !o[o.length - 1].s.trim())) o.pop();
-  if(o.length){ if(!o[0].br) o[0].s = o[0].s.replace(/^\s+/, ''); const l = o[o.length - 1]; if(!l.br) l.s = l.s.replace(/\s+$/, ''); }
+  const blank = r => r.br || (!r.img && !r.s.trim());
+  while(o.length && blank(o[0])) o.shift();
+  while(o.length && blank(o[o.length - 1])) o.pop();
+  if(o.length){ if(!o[0].br && !o[0].img) o[0].s = o[0].s.replace(/^\s+/, ''); const l = o[o.length - 1]; if(!l.br && !l.img) l.s = l.s.replace(/\s+$/, ''); }
   return o;
 }
-const toPlain = runs => runs.map(r => r.br ? '\n' : r.s).join('');
-const hasFmt = runs => runs.some(r => !r.br && (r.b || r.i || r.c));
-function toHtml(runs, pre, tf){
+const toPlain = runs => runs.map(r => r.br ? '\n' : r.img ? '[ảnh]' : r.s).join('');
+const hasFmt = runs => runs.some(r => r.img || (!r.br && (r.b || r.i || r.c)));
+/* Địa chỉ xem ảnh dán: do trang chủ cung cấp (window.richImgUrl) vì cần địa chỉ máy chủ + token đăng nhập */
+const imgSrc = id => typeof window.richImgUrl === 'function' ? window.richImgUrl(id) : '';
+/** mode: 'store' = chuỗi lưu (chỉ mã ảnh), 'edit' = trong vùng soạn, 'view' = hiển thị (bấm vào ảnh để mở bản lớn) */
+function toHtml(runs, pre, tf, mode){
+  mode = mode || (pre === 'c' ? 'store' : 'view');
   return runs.map(r => {
     if(r.br) return '<br>';
+    if(r.img){
+      if(mode === 'store') return '<img data-f="' + escD(r.img) + '">';
+      const im = '<img data-f="' + escD(r.img) + '" class="rt-img" src="' + escD(imgSrc(r.img)) + '" alt="Ảnh" draggable="false">';
+      return mode === 'edit' ? im : '<a href="' + escD(imgSrc(r.img)) + '" target="_blank" rel="noopener">' + im + '</a>';
+    }
     let h = tf(r.s);
     if(r.i) h = '<i>' + h + '</i>';
     if(r.b) h = '<b>' + h + '</b>';
@@ -193,7 +208,7 @@ function richHtml(v, tf){
   if(!isRich(v)) return tf(escD(v)).replace(/\r?\n/g, '<br>');
   return toHtml(richRuns(v), 'rt', s => tf(escD(s)));
 }
-const richInner = v => !v ? '' : isRich(v) ? toHtml(richRuns(v), 'rt', escD) : escD(v).replace(/\r?\n/g, '<br>');
+const richInner = v => !v ? '' : isRich(v) ? toHtml(richRuns(v), 'rt', escD, 'edit') : escD(v).replace(/\r?\n/g, '<br>');
 function richSet(x, v){ const el = elOf(x); if(el) el.innerHTML = richInner(v); }
 /** Ghép các phần có tiêu đề: không có phần nào định dạng → giữ dạng thuần như cũ; có → chuỗi định dạng, <br> giữa các phần. */
 function richJoin(items){
@@ -216,7 +231,7 @@ function richEditor(id, o){
         <button type="button" class="rt-nocolor" onclick="RT.color('${id}','')">Bỏ màu</button>
       </div>
     </div>`}
-    <div id="${id}" class="rt-area${o.cls ? ' ' + escD(o.cls) : ''}" contenteditable="${dis ? 'false' : 'true'}" role="textbox" aria-multiline="true" data-ph="${escD(o.placeholder || '')}"${o.nodirty ? ' data-nodirty="1"' : ''} style="min-height:${+o.minHeight || 84}px"${dis ? '' : ` oninput="RT.input(this);${escD(o.onInput || '')}" onkeydown="RT.key(event,this);${escD(o.onKeyDown || '')}" onpaste="RT.paste(event)" ondrop="RT.drop(event)"`}>${richInner(o.value)}</div>
+    <div id="${id}" class="rt-area${o.cls ? ' ' + escD(o.cls) : ''}" contenteditable="${dis ? 'false' : 'true'}" role="textbox" aria-multiline="true" data-ph="${escD(o.placeholder || '')}"${o.nodirty ? ' data-nodirty="1"' : ''}${o.images && !dis ? ' data-img="1"' : ''} style="min-height:${+o.minHeight || 84}px"${dis ? '' : ` oninput="RT.input(this);${escD(o.onInput || '')}" onkeydown="RT.key(event,this);${escD(o.onKeyDown || '')}" onpaste="RT.paste(event)" ondrop="RT.drop(event)"`}>${richInner(o.value)}</div>
   </div>`;
 }
 const inside = el => { const s = window.getSelection && getSelection(); return !!(s && s.rangeCount && el.contains(s.anchorNode) && el.contains(s.focusNode)); };
@@ -234,6 +249,45 @@ function touch(el){ if(typeof modalDirty !== 'undefined' && el.closest('#modal')
 function focusEd(el){
   if(inside(el)) return; el.focus();
   const s = getSelection(), r = document.createRange(); r.selectNodeContents(el); r.collapse(false); s.removeAllRanges(); s.addRange(r);
+}
+/* ----- Dán ảnh vào ô soạn (chỉ ô có data-img): thu nhỏ ảnh lớn, tải lên máy chủ, chèn <img data-f="mã"> tại con trỏ ----- */
+const IMG_TYPES = /^image\/(png|jpe?g|gif|webp)$/i, MAX_IMG_BYTES = 10 * 1024 * 1024, MAX_IMG_PER_BOX = 20;
+const say = (msg, type) => { if(typeof window.toast === 'function') window.toast(msg, type); };
+async function shrinkImage(file){
+  if(file.type === 'image/gif' || typeof createImageBitmap !== 'function') return file;
+  try {
+    const bmp = await createImageBitmap(file), big = Math.max(bmp.width, bmp.height) > 2000;
+    if(!big && file.size <= 1.5 * 1048576){ if(bmp.close) bmp.close(); return file; }
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height)), cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
+    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(bmp, 0, 0, cv.width, cv.height);
+    if(bmp.close) bmp.close();
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+    if(blob && blob.size < file.size) return new File([blob], String(file.name || 'anh').replace(/\.\w+$/, '') + '.jpg', { type:'image/jpeg' });
+  } catch(e){}
+  return file;
+}
+async function pasteImages(el, files){
+  if(typeof window.richImgUpload !== 'function'){ say('Chưa dán được ảnh ở màn hình này.', 'error'); return; }
+  const sel = getSelection();
+  let range = sel && sel.rangeCount && el.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+  for(const f0 of files){
+    if(!el.isConnected) return;
+    if(el.querySelectorAll('img[data-f]').length >= MAX_IMG_PER_BOX){ say('Mỗi ô chỉ dán tối đa ' + MAX_IMG_PER_BOX + ' ảnh.', 'error'); return; }
+    say('Đang tải ảnh lên...', 'info');
+    try {
+      const f = await shrinkImage(f0);
+      if(f.size > MAX_IMG_BYTES) throw new Error('Ảnh quá lớn (tối đa 10MB).');
+      const id = await window.richImgUpload(f);
+      if(!el.isConnected) return;
+      const img = document.createElement('img');
+      img.setAttribute('data-f', id); img.className = 'rt-img'; img.src = imgSrc(id); img.alt = 'Ảnh'; img.draggable = false;
+      if(range && el.contains(range.startContainer)){ range.deleteContents(); range.insertNode(img); range.setStartAfter(img); range.collapse(true); }
+      else { el.appendChild(img); range = document.createRange(); range.setStartAfter(img); range.collapse(true); }
+      const s2 = getSelection(); if(s2){ s2.removeAllRanges(); s2.addRange(range); }
+      touch(el);
+    } catch(e){ say(e && e.message ? e.message : 'Không tải được ảnh.', 'error'); }
+  }
 }
 const RT = {
   input(el){ if(el.innerHTML === '<br>') el.innerHTML = ''; },        // để placeholder (:empty) hiện lại khi xoá hết
@@ -254,14 +308,25 @@ const RT = {
       if(k === 'b'){ e.preventDefault(); RT.cmd(el, 'bold'); } else if(k === 'i'){ e.preventDefault(); RT.cmd(el, 'italic'); }
     }
   },
-  paste(e){ e.preventDefault(); insertText((e.clipboardData || window.clipboardData).getData('text/plain')); },   // luôn dán văn bản thuần
+  paste(e){
+    e.preventDefault();
+    const cd = e.clipboardData || window.clipboardData, el = e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('rt-area') ? e.currentTarget : (e.target.closest && e.target.closest('.rt-area'));
+    const text = cd.getData('text/plain');
+    // Ô có bật dán ảnh: clipboard có ảnh mà không có chữ (chụp màn hình, "Sao chép ảnh") → tải ảnh lên và chèn vào chỗ con trỏ.
+    // Có chữ (vd. sao chép từ Excel kèm ảnh chụp bảng) thì vẫn dán chữ như cũ.
+    if(el && el.dataset.img === '1' && !text.trim()){
+      const imgs = [...(cd.files || [])].filter(f => IMG_TYPES.test(f.type));
+      if(imgs.length){ pasteImages(el, imgs); return; }
+    }
+    insertText(text);                                                                                                     // còn lại luôn dán văn bản thuần
+  },
   drop(e){ e.preventDefault(); },
 };
 document.addEventListener('mousedown', e => { document.querySelectorAll('.rt-pop.open').forEach(p => { if(!p.parentElement.contains(e.target)) p.classList.remove('open'); }); });
 Object.assign(window, { RT, richEditor, richGet, richSet, richHtml, richPlain, richJoin });
 })();
 </script>
-<script src="work.js?v=15"></script>
+<script src="work.js?v=16"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
@@ -468,6 +533,17 @@ function setSession(id, tok){ localStorage.setItem(SESSION_KEY, JSON.stringify({
 // URL máy chủ cố định cho cả team. Không có giao diện để xem/sửa URL; mọi override cũ trong trình duyệt bị bỏ qua.
 const DEFAULT_API = 'https://ttpemqkjp.tino.page/okr-api/';
 const apiUrl = () => DEFAULT_API.trim();
+/* Ảnh dán vào ô mô tả: địa chỉ xem + tải lên (xem khối RT ở đầu tệp). Ảnh nằm trên máy chủ, nội dung chỉ lưu mã ảnh. */
+window.richImgUrl = id => apiUrl() + 'file/' + encodeURIComponent(id) + '?token=' + encodeURIComponent(token());
+window.richImgUpload = async file => {
+  const ext = ({ 'image/png':'png', 'image/jpeg':'jpg', 'image/gif':'gif', 'image/webp':'webp' })[file.type] || 'png';
+  const name = (file.name && /\.(png|jpe?g|gif|webp)$/i.test(file.name)) ? file.name : 'anh-dan.' + ext;
+  let res, j;
+  try { res = await fetch(apiUrl() + 'upload-inline?name=' + encodeURIComponent(name), { method:'POST', headers:{ 'X-Okr-Token': token(), 'Content-Type':'application/octet-stream' }, body: file }); j = await res.json(); }
+  catch(e){ throw new Error('Không tải được ảnh lên (mất kết nối?).'); }
+  if(!j.ok) throw new Error(j.error || 'Không tải được ảnh lên.');
+  return j.image.id;
+};
 try { localStorage.removeItem(API_KEY); } catch(e){}
 const online = () => !!apiUrl();
 function setBusy(b){ sync.busy = b; const el = document.getElementById('sync-dot'); if(el) el.className = syncDotClass(); }

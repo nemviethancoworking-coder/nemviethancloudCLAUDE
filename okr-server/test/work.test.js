@@ -49,6 +49,17 @@ async function login(username, password = 'secret1') {
 }
 const work = async (token, ws = '') => { const r = await fetch(BASE + '?work=1&ws=' + ws + '&token=' + encodeURIComponent(token)); const j = await r.json(); assert.equal(j.ok, true, j.error); return j.work; };
 const detail = async (token, id) => (await (await fetch(BASE + '?workTask=' + id + '&token=' + encodeURIComponent(token))).json());
+/** Chạy 1 câu SQL trực tiếp trên CSDL kiểm thử. */
+async function sqlRun(q, args) {
+  const db = new Client({ ...PGENV, host: PGENV.PGHOST, port: Number(PGENV.PGPORT), user: PGENV.PGUSER, password: PGENV.PGPASSWORD, database: DBNAME });
+  await db.connect(); try { return await db.query(q, args); } finally { await db.end(); }
+}
+/** Giả lập "đã đến ngày" của việc lặp lại kế tiếp: đặt ngày hẹn = hôm nay rồi khởi động lại máy chủ (máy chủ tạo việc đến ngày khi khởi động và mỗi 5 phút). */
+async function arrive(tplId) {
+  const r = await sqlRun(`UPDATE recurring_tasks SET next_due=$2 WHERE id=$1 AND next_due <> ''`, [tplId, todayISO()]);
+  assert.equal(r.rowCount, 1, 'mẫu phải đang hẹn ngày cho việc kế tiếp');
+  await stopServer(); await startServer();
+}
 let seqId = 0; const nid = p => p + (++seqId) + Math.random().toString(36).slice(2, 6);
 
 before(async () => {
@@ -291,28 +302,43 @@ describe('API công việc', () => {
     assert.equal(first.subtasks[0].done, false, 'việc con được đặt lại'); assert.equal(first.recurrence.type, 'weekly');
     // việc sinh từ lịch lặp: khoá nội dung kể cả với người tạo → phải sửa ở mẫu
     await denied(ptok.mgr, 'saveTask', { task: { ...first, title: 'Đổi tên' } }, /lặp lại/);
-    // Done → sinh việc kế tiếp theo mẫu
+    // Done → việc kế tiếp chỉ được HẸN NGÀY, chưa xuất hiện (ngày chưa đến)
     const r = await call(ptok.a, 'moveTask', { id: first.id, status: 'done' });
-    assert.ok(r.result && r.result.spawned, 'phải báo việc mới');
-    const next = (await work(ptok.mgr, w1)).tasks.find(x => x.id === r.result.spawned.id);
-    assert.ok(next, 'việc mới tồn tại');
+    assert.ok(r.result && !r.result.spawned, 'chưa đến ngày thì chưa tạo việc mới');
+    assert.ok(r.result.scheduled && r.result.scheduled.due > today && r.result.scheduled.due <= plusDays(7), 'được hẹn đúng ngày kế tiếp theo lịch');
+    const w0 = await work(ptok.mgr, w1);
+    assert.equal(w0.tasks.filter(x => x.title === 'Họp giao ban').length, 1, 'danh sách chưa có việc mới');
+    const tplRow = w0.recurring.find(x => x.id === R.id); assert.equal(tplRow.pendingDue, r.result.scheduled.due); assert.equal(tplRow.openCount, 0);
+    // mở lại rồi làm xong lần nữa → không hẹn/sinh thêm
+    await call(ptok.a, 'moveTask', { id: first.id, status: 'review' });
+    const again = await call(ptok.a, 'moveTask', { id: first.id, status: 'done' }); assert.ok(!again.result.spawned && !again.result.scheduled);
+    // sửa mẫu khi đang chờ đến ngày: không tạo việc sớm
+    const early = await call(ptok.mgr, 'saveRecurring', { recurring: { ...R, description: 'Mỗi tuần' } });
+    assert.ok(!early.result.spawned, 'chưa đến ngày thì sửa mẫu cũng không tạo việc sớm');
+    assert.equal((await work(ptok.mgr, w1)).tasks.filter(x => x.title === 'Họp giao ban').length, 1);
+    // đến ngày → máy chủ tự tạo việc theo mẫu
+    await arrive(R.id);
+    const wn = await work(ptok.mgr, w1);
+    const next = wn.tasks.find(x => x.seriesId === R.id && x.status !== 'done');
+    assert.ok(next, 'đến ngày thì việc mới xuất hiện');
     assert.equal(next.status, 'todo'); assert.equal(next.title, 'Họp giao ban'); assert.deepEqual(next.assigneeIds, [a, b]);
     assert.equal(next.priority, 'high'); assert.deepEqual(next.tags, ['họp']); assert.equal(next.description, 'Mỗi tuần'); assert.equal(next.createdBy, mgr);
-    assert.ok(next.due > today, 'hạn mới nằm sau hạn cũ'); assert.ok(next.due <= plusDays(7)); assert.equal(next.seriesId, R.id);
-    // mở lại rồi làm xong lần nữa → không sinh thêm
-    await call(ptok.a, 'moveTask', { id: first.id, status: 'review' });
-    assert.ok(!(await call(ptok.a, 'moveTask', { id: first.id, status: 'done' })).result.spawned);
-    assert.equal((await work(ptok.mgr, w1)).tasks.filter(x => x.title === 'Họp giao ban').length, 2);
+    assert.equal(next.due, today); assert.equal(next.seriesId, R.id);
+    assert.equal(wn.recurring.find(x => x.id === R.id).pendingDue, '', 'hết hẹn sau khi đã tạo');
+    assert.equal(wn.tasks.find(x => x.id === first.id).spawned, true);
+    assert.equal(wn.tasks.filter(x => x.title === 'Họp giao ban').length, 2);
     // sửa mẫu: việc đã sinh ra giữ nguyên; việc kế tiếp lấy nội dung mới
     const up = await call(ptok.mgr, 'saveRecurring', { recurring: { ...R, title: 'Họp giao ban (mới)', assigneeIds: [a], priority: 'low' } });
     assert.ok(!up.result.spawned, 'đang có việc mở thì không sinh thêm');
     const still = (await work(ptok.mgr, w1)).tasks.find(x => x.id === next.id); assert.equal(still.title, 'Họp giao ban'); assert.deepEqual(still.assigneeIds, [a, b]);
     const r3 = await call(ptok.a, 'moveTask', { id: next.id, status: 'done' });
-    const n3 = (await work(ptok.mgr, w1)).tasks.find(x => x.id === r3.result.spawned.id);
-    assert.equal(n3.title, 'Họp giao ban (mới)'); assert.deepEqual(n3.assigneeIds, [a]); assert.equal(n3.priority, 'low'); assert.ok(r3.result.spawned.due > next.due);
-    // xoá mẫu: việc đã sinh còn nguyên, nhưng làm xong thì không sinh thêm
+    assert.ok(!r3.result.spawned && r3.result.scheduled.due > today);
+    await arrive(R.id);
+    const n3 = (await work(ptok.mgr, w1)).tasks.find(x => x.seriesId === R.id && x.status !== 'done');
+    assert.equal(n3.title, 'Họp giao ban (mới)'); assert.deepEqual(n3.assigneeIds, [a]); assert.equal(n3.priority, 'low');
+    // xoá mẫu: việc đã sinh còn nguyên, nhưng làm xong thì không hẹn/sinh thêm
     await call(ptok.mgr, 'deleteRecurring', { id: R.id });
-    assert.ok(!(await call(ptok.a, 'moveTask', { id: n3.id, status: 'done' })).result.spawned);
+    const gone = await call(ptok.a, 'moveTask', { id: n3.id, status: 'done' }); assert.ok(!gone.result.spawned && !gone.result.scheduled);
     assert.ok((await work(ptok.mgr, w1)).tasks.some(x => x.id === n3.id));
   });
   test('Việc lặp lại: ai cũng tạo được; sửa/xoá chỉ người tạo + cấp trên; danh sách đúng người xem', async () => {
@@ -341,12 +367,13 @@ describe('API công việc', () => {
     const mk = async (rule) => (await call(ptok.mgr, 'saveRecurring', { recurring: REC({ rule }) })).result.spawned.id;
     const dly = await mk({ type: 'daily' });
     const r = await call(ptok.a, 'updateTask', { id: dly, patch: { status: 'done' } });               // đường cũ (báo cáo tuần) cũng kích hoạt
-    assert.equal(r.result.spawned.due, plusDays(1));
+    assert.equal(r.result.scheduled.due, plusDays(1)); assert.ok(!r.result.spawned, 'mai mới tới hạn thì hôm nay chưa tạo');
     const mth = await mk({ type: 'monthly', monthDay: 31 });
     const r2 = await call(ptok.a, 'moveTask', { id: mth, status: 'done' });
-    assert.match(r2.result.spawned.due, /^\d{4}-\d{2}-(28|29|30|31)$/);
+    assert.match(r2.result.scheduled.due, /^\d{4}-\d{2}-(28|29|30|31)$/);
     const fin = await mk({ type: 'daily', end: todayISO() });
-    assert.ok(!(await call(ptok.a, 'moveTask', { id: fin, status: 'done' })).result.spawned, 'quá ngày kết thúc thì dừng');
+    const r3 = await call(ptok.a, 'moveTask', { id: fin, status: 'done' });
+    assert.ok(!r3.result.spawned && !r3.result.scheduled, 'quá ngày kết thúc thì dừng');
   });
   test('v9: việc lặp lại cũ (chưa có mẫu) được chuyển thành mẫu khi nâng cấp máy chủ', async () => {
     const db = new Client({ ...PGENV, host: PGENV.PGHOST, port: Number(PGENV.PGPORT), user: PGENV.PGUSER, password: PGENV.PGPASSWORD, database: DBNAME });
@@ -365,7 +392,7 @@ describe('API công việc', () => {
     assert.equal(w.tasks.find(x => x.id === id).seriesId, 'r_' + id);
     await denied(ptok.mgr, 'saveTask', { task: { id, projectId: p1, title: 'Đổi' } }, /lặp lại/);        // việc cũ cũng bị khoá nội dung
     const r = await call(ptok.a, 'moveTask', { id, status: 'done' });                                  // vẫn tự sinh việc kế tiếp
-    assert.equal(r.result.spawned.due, plusDays(2));
+    assert.equal(r.result.scheduled.due, plusDays(2)); assert.ok(!r.result.spawned);
     await stopServer(); await startServer();                                                          // chạy migrate lần nữa: không tạo mẫu trùng
     ptok.mgr = await login('mgr'); ptok.a = await login('a'); ptok.b = await login('b'); ptok.head = await login('head'); ptok.c = await login('c'); ptok.mgr2 = await login('mgr2'); dir = await login('admin');
     assert.equal((await work(ptok.mgr, w1)).recurring.filter(x => x.title === 'Việc lặp kiểu cũ').length, 1);
@@ -448,6 +475,87 @@ describe('API công việc', () => {
     await denied(ptok.mgr, 'saveTask', { task: T({ assigneeIds: [b] }) }, /khoá/);
     await call(dir, 'setUserActive', { id: b, active: true });
   });
+  test('v16: thời gian hoàn thành (giờ): lưu, giữ nguyên khi không gửi, xoá, làm tròn/giới hạn; việc lặp lại chuyển sang việc sinh ra', async () => {
+    const t = { id: nid('t'), projectId: p1, title: 'Việc có giờ', description: '', priority: 'medium', assigneeIds: [a], startDate: todayISO(), due: plusDays(3), tags: [], subtasks: [], estHours: 2.5 };
+    await call(ptok.a, 'saveTask', { task: t });
+    const get = async id => (await work(ptok.a, w1)).tasks.find(x => x.id === id);
+    assert.equal((await get(t.id)).estHours, 2.5);
+    const { estHours: _drop, ...noHours } = t;
+    await call(ptok.a, 'saveTask', { task: { ...noHours, title: 'Đổi tên' } });                       // không gửi estHours → giữ nguyên
+    assert.equal((await get(t.id)).estHours, 2.5);
+    await call(ptok.a, 'saveTask', { task: { ...t, estHours: '1,25' } }); assert.equal((await get(t.id)).estHours, 1.25);
+    await call(ptok.a, 'saveTask', { task: { ...t, estHours: 5000 } }); assert.equal((await get(t.id)).estHours, 1000);
+    for (const bad of ['', null, 0, -3, 'abc']) { await call(ptok.a, 'saveTask', { task: { ...t, estHours: bad } }); assert.equal((await get(t.id)).estHours, null, 'giá trị ' + JSON.stringify(bad) + ' → không đặt'); }
+    const none = { ...t, id: nid('t') }; delete none.estHours; await call(ptok.a, 'saveTask', { task: none }); assert.equal((await get(none.id)).estHours, null);
+    // việc lặp lại: số giờ nằm trên mẫu và được chép sang việc sinh ra (cả việc đầu tiên và việc kế tiếp)
+    const R = REC({ title: 'Lặp có giờ', rule: { type: 'daily' }, estHours: 3 });
+    const cr = await call(ptok.mgr, 'saveRecurring', { recurring: R });
+    const first = (await work(ptok.mgr, w1)).tasks.find(x => x.id === cr.result.spawned.id); assert.equal(first.estHours, 3);
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R.id).estHours, 3);
+    const { estHours: _d2, ...rNo } = R; await call(ptok.mgr, 'saveRecurring', { recurring: rNo });     // không gửi → giữ nguyên
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R.id).estHours, 3);
+    await call(ptok.a, 'moveTask', { id: first.id, status: 'done' }); await arrive(R.id);
+    assert.equal((await work(ptok.mgr, w1)).tasks.find(x => x.seriesId === R.id && x.status !== 'done').estHours, 3);
+    await call(ptok.mgr, 'deleteRecurring', { id: R.id });
+  });
+
+  test('v16: việc lặp lại chỉ xuất hiện khi ĐẾN NGÀY; ngày chưa tới thì khởi động lại cũng không tạo; ngày đã qua thì nhảy tới lần gần nhất', async () => {
+    const R = REC({ title: 'Lặp hẹn ngày', rule: { type: 'daily' } });
+    const cr = await call(ptok.mgr, 'saveRecurring', { recurring: R });
+    const r = await call(ptok.a, 'moveTask', { id: cr.result.spawned.id, status: 'done' });
+    assert.equal(r.result.scheduled.due, plusDays(1));
+    const count = async () => (await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R.id).length;
+    assert.equal(await count(), 1, 'vừa xong việc cũ: chưa có việc mới');
+    await stopServer(); await startServer();                                                          // mai mới tới: khởi động lại vẫn chưa tạo
+    assert.equal(await count(), 1, 'chưa đến ngày thì chưa hiện');
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R.id).pendingDue, plusDays(1));
+    // ngày hẹn đã qua (máy chủ tắt lâu) → tạo việc ở lần gần nhất chưa qua, không tạo việc quá hạn
+    await sqlRun('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [R.id, plusDays(-4)]);
+    await stopServer(); await startServer();
+    const ts = (await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R.id);
+    assert.equal(ts.length, 2); assert.equal(ts.find(x => x.status !== 'done').due, todayISO());
+    // mẫu có ngày kết thúc: hẹn quá ngày kết thúc thì bị xoá hẹn, không tạo
+    const R2 = REC({ title: 'Lặp sắp hết', rule: { type: 'daily', end: plusDays(1) } });
+    const c2r = await call(ptok.mgr, 'saveRecurring', { recurring: R2 });
+    assert.equal((await call(ptok.a, 'moveTask', { id: c2r.result.spawned.id, status: 'done' })).result.scheduled.due, plusDays(1));
+    await sqlRun('UPDATE recurring_tasks SET rule=$2 WHERE id=$1', [R2.id, JSON.stringify({ type: 'daily', interval: 1, end: plusDays(-1) })]);
+    await sqlRun('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [R2.id, todayISO()]);
+    await stopServer(); await startServer();
+    assert.equal((await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R2.id).length, 1, 'quá ngày kết thúc thì không tạo');
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R2.id).pendingDue, '');
+    await call(ptok.mgr, 'deleteRecurring', { id: R.id }); await call(ptok.mgr, 'deleteRecurring', { id: R2.id });
+  });
+
+  test('v16: ảnh dán vào mô tả: tải lên, xem bằng token, chỉ nhận ảnh thật, mô tả giữ mã ảnh và bỏ URL lạ', async () => {
+    const RT = '<!--rt-->';
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+    const up = (token, name, body) => fetch(BASE + 'upload-inline?name=' + encodeURIComponent(name), { method: 'POST', headers: { 'x-okr-token': token, 'Content-Type': 'application/octet-stream' }, body }).then(r => r.json());
+    const ok = await up(ptok.a, 'anh-dan.png', png); assert.equal(ok.ok, true, ok.error);
+    const imgId = ok.image.id; assert.match(imgId, /^i[0-9a-f]+$/); assert.equal(ok.image.mime, 'image/png');
+    const view = await fetch(BASE + 'file/' + imgId + '?token=' + encodeURIComponent(ptok.b));            // người khác đã đăng nhập cũng xem được ảnh trong mô tả
+    assert.equal(view.status, 200); assert.equal(view.headers.get('content-type'), 'image/png'); assert.match(view.headers.get('content-disposition'), /^inline/);
+    assert.deepEqual(Buffer.from(await view.arrayBuffer()), png);
+    const noTok = await (await fetch(BASE + 'file/' + imgId + '?token=')).json(); assert.equal(noTok.ok, false, 'không có token thì không xem được');
+    await up(ptok.a, 'x.png', Buffer.from('<html><script>alert(1)</script></html>')).then(j => { assert.equal(j.ok, false); assert.match(j.error, /không phải ảnh/); });
+    await up(ptok.a, 'x.svg', Buffer.from('<svg/>')).then(j => { assert.equal(j.ok, false); assert.match(j.error, /PNG|JPG/); });
+    await up(ptok.a, 'x.html', png).then(j => assert.equal(j.ok, false));
+    await up(ptok.a, 'rong.png', Buffer.alloc(0)).then(j => assert.equal(j.ok, false));
+    const bad = await fetch(BASE + 'upload-inline?name=a.png', { method: 'POST', headers: { 'x-okr-token': 'sai.token.x' }, body: png }).then(r => r.json()); assert.equal(bad.ok, false);
+    const big = await fetch(BASE + 'upload-inline?name=lon.png', { method: 'POST', headers: { 'x-okr-token': ptok.a }, body: Buffer.concat([png, Buffer.alloc(11 * 1024 * 1024)]) }).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }));
+    assert.equal(big.ok, false, 'ảnh 11MB bị từ chối');
+    // mô tả việc: chỉ giữ mã ảnh, bỏ URL/thuộc tính lạ
+    const t = { id: nid('t'), projectId: p1, title: 'Việc có ảnh', priority: 'medium', assigneeIds: [a], startDate: todayISO(), due: '', tags: [], subtasks: [],
+      description: RT + 'Xem ảnh<br><img data-f="' + imgId + '" src="http://evil.example/x.png" onerror="alert(1)"><img src="http://evil.example/y.png">' };
+    await call(ptok.a, 'saveTask', { task: t });
+    const saved = (await work(ptok.a, w1)).tasks.find(x => x.id === t.id);
+    assert.equal(saved.description, RT + 'Xem ảnh<br><img data-f="' + imgId + '">');
+    // mẫu lặp lại cũng giữ ảnh và chép sang việc sinh ra
+    const R = REC({ title: 'Lặp có ảnh', description: RT + '<img data-f="' + imgId + '">', rule: { type: 'daily' } });
+    const cr = await call(ptok.mgr, 'saveRecurring', { recurring: R });
+    assert.equal((await work(ptok.mgr, w1)).tasks.find(x => x.id === cr.result.spawned.id).description, RT + '<img data-f="' + imgId + '">');
+    await call(ptok.mgr, 'deleteRecurring', { id: R.id });
+  });
+
 });
 
 describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', () => {
@@ -661,15 +769,20 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
     const rb = await get('eb1'); assert.ok(rb, 'người theo dõi thấy mẫu'); assert.equal(rb.canEdit, false);
     assert.equal(await get('es'), undefined); assert.equal(await get('mgrB'), undefined);
     await denied(tk.eb1, 'saveRecurring', { recurring: { ...R, followerIds: [] } }, /người tạo/);
+    const openIn = async () => (await work(tk.mgrA, WS)).tasks.find(x => x.seriesId === R.id && x.status !== 'done');
     const r2 = await call(tk.ea1, 'moveTask', { id: first.id, status: 'done' });
-    assert.deepEqual((await taskIn('mgrA', r2.result.spawned.id)).followerIds, [id.eb1], 'việc kế tiếp copy người theo dõi');
+    assert.ok(r2.result.scheduled && !r2.result.spawned);
+    await arrive(R.id);
+    const next2 = await openIn();
+    assert.deepEqual(next2.followerIds, [id.eb1], 'việc kế tiếp copy người theo dõi');
     const { followerIds: _omit, ...noFollow } = R;
     await call(tk.mgrA, 'saveRecurring', { recurring: { ...noFollow, title: 'Lặp v11 (sửa)' } });     // không gửi followerIds → giữ
     assert.deepEqual((await get('mgrA')).followerIds, [id.eb1]);
     await call(tk.mgrA, 'saveRecurring', { recurring: { ...R, followerIds: [id.ea2] } });
     assert.deepEqual((await get('mgrA')).followerIds, [id.ea2]);
-    const r3 = await call(tk.ea1, 'moveTask', { id: r2.result.spawned.id, status: 'done' });
-    assert.deepEqual((await taskIn('mgrA', r3.result.spawned.id)).followerIds, [id.ea2]);
+    await call(tk.ea1, 'moveTask', { id: next2.id, status: 'done' });
+    await arrive(R.id);
+    assert.deepEqual((await openIn()).followerIds, [id.ea2]);
     assert.equal(await get('eb1'), undefined, 'bỏ khỏi mẫu thì không thấy mẫu nữa');
     await call(tk.mgrA, 'deleteRecurring', { id: R.id });
   });
@@ -745,8 +858,8 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
     assert.equal(await count(), before);
     const col = await pg.query("SELECT data_type FROM information_schema.columns WHERE table_name='recurring_tasks' AND column_name='followers'");
     assert.equal(col.rows[0].data_type, 'jsonb');
-    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 14);
-    assert.equal((await (await fetch(BASE + 'health')).json()).version, 14);
+    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 16);
+    assert.equal((await (await fetch(BASE + 'health')).json()).version, 16);
   });
 });
 
