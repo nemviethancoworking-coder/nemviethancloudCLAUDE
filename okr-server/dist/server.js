@@ -19836,7 +19836,6 @@ var require_work = __commonJS({
     var { pipeline } = require("stream/promises");
     var { Transform } = require("stream");
     var STATUSES = ["todo", "doing", "review", "done"];
-    var PENDING = "pending";
     var PRIORITIES = ["low", "medium", "high", "urgent"];
     var DEFAULT_WS = "w_default";
     var DEFAULT_DEPT = "d_default";
@@ -20093,6 +20092,16 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       ON CONFLICT DO NOTHING`, [now]);
         await pool2.query(`UPDATE tasks t SET series_id = 'r_' || t.id WHERE t.recurrence IS NOT NULL AND t.spawned_id = '' AND t.status <> 'done'
       AND t.series_id <> 'r_' || t.id AND EXISTS (SELECT 1 FROM recurring_tasks r WHERE r.id = 'r_' || t.id)`);
+        const today = todayISO2();
+        const stuck = (await pool2.query(`SELECT r.id, r.rule, (SELECT max(t.due) FROM tasks t WHERE t.series_id = r.id AND t.due <> '') AS last_due
+      FROM recurring_tasks r WHERE r.next_due = ''`)).rows;
+        for (const s of stuck) {
+          const rule = cleanRule(s.rule);
+          if (!rule) continue;
+          const base = s.last_due && validISO(s.last_due) ? s.last_due : isoOf(addDays(parseISO(today), -1));
+          const due = nextDue(rule, base, today);
+          if (due) await pool2.query(`UPDATE recurring_tasks SET next_due=$2 WHERE id=$1 AND next_due=''`, [s.id, due]);
+        }
         try {
           fs2.mkdirSync(UPLOAD_DIR, { recursive: true });
         } catch (e) {
@@ -20378,47 +20387,39 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
         if (t.status === status) return {};
         const done = status === "done";
         await c.q.query("UPDATE tasks SET status=$2, completed_at=$3 WHERE id=$1", [t.id, status, done ? (/* @__PURE__ */ new Date()).toISOString() : ""]);
-        if (!done || !t.series_id || t.spawned_id) return {};
-        const tpl = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [t.series_id]);
-        if (!tpl) return {};
+        return {};
+      }
+      function afterISO(rule, d) {
+        const n = isoOf(nextAfter(rule, parseISO(d)));
+        return rule.end && n > rule.end ? "" : n;
+      }
+      const MAX_CATCHUP = 100;
+      async function spawnTemplateUpTo(c, tpl, today) {
         const rule = cleanRule(tpl.rule);
-        if (!rule) return {};
-        const today = todayISO2();
-        const due = nextDue(rule, t.due, today);
-        if (!due) return {};
-        if (due > today) {
-          await c.q.query("UPDATE recurring_tasks SET next_due=$2 WHERE id=$1", [tpl.id, due]);
-          await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, PENDING]);
-          return { scheduled: { due, title: tpl.title } };
+        const made = [];
+        let d = rule ? tpl.next_due : "";
+        if (!rule || !d) {
+          if (tpl.next_due) await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
+          return made;
         }
-        const id = await spawnInstance(c, tpl, rule, due);
-        if (!id) return {};
-        await c.q.query("UPDATE tasks SET spawned_id=$2 WHERE id=$1", [t.id, id]);
-        return { spawned: { id, due, title: tpl.title } };
+        if (rule.end && d > rule.end) d = "";
+        for (let guard = 0; d && d <= today && guard < MAX_CATCHUP; guard++) {
+          const id = await spawnInstance(c, tpl, rule, d);
+          if (!id) {
+            d = afterISO(rule, today);
+            break;
+          }
+          made.push({ id, due: d });
+          d = afterISO(rule, d);
+        }
+        if (d !== tpl.next_due) await c.q.query("UPDATE recurring_tasks SET next_due=$2 WHERE id=$1", [tpl.id, d]);
+        return made;
       }
       async function spawnDueRecurring(c) {
         const today = todayISO2();
         const rows = (await c.q.query(`SELECT * FROM recurring_tasks WHERE next_due <> '' AND next_due <= $1 ORDER BY seq`, [today])).rows;
         let made = 0;
-        for (const tpl of rows) {
-          const rule = cleanRule(tpl.rule);
-          let due = rule ? tpl.next_due : "";
-          if (rule && due < today) due = nextDue(rule, due, today) || "";
-          if (!due || rule && rule.end && due > rule.end) {
-            await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
-            continue;
-          }
-          if (due > today) {
-            await c.q.query("UPDATE recurring_tasks SET next_due=$2 WHERE id=$1", [tpl.id, due]);
-            continue;
-          }
-          const id = await spawnInstance(c, tpl, rule, due);
-          await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
-          if (id) {
-            await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [tpl.id, id, PENDING]);
-            made++;
-          }
-        }
+        for (const tpl of rows) made += (await spawnTemplateUpTo(c, tpl, today)).length;
         return made;
       }
       async function spawnInstance(c, tpl, rule, due) {
@@ -20789,32 +20790,28 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           const tags = cleanTags(r.tags), subtasks = cleanSubtasks(r.subtasks).map((s) => ({ ...s, done: false })), desc = cleanRich(r.description, 2e4);
           const estHours = r.estHours === void 0 && old ? old.est_hours == null ? null : Number(old.est_hours) : cleanHours(r.estHours);
           const followers = Array.isArray(r.followerIds) ? cleanFollowers(c, r.followerIds, ids, old ? idList(old.followers) : []) : old ? idList(old.followers).filter((f) => !ids.includes(f)) : [];
-          const open = old ? await one2(c.q, `SELECT 1 FROM tasks WHERE series_id=$1 AND status <> 'done' LIMIT 1`, [r.id]) : null;
-          let due = "", pendingDue = old ? old.next_due || "" : "";
           const today = todayISO2();
+          let pendingDue;
           if (!old) {
-            due = normDue(r.firstDue) || today;
-            if (rule.end && due > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t \u0111\u1EA7u ti\xEAn.");
-          } else if (!open) {
-            const baseDay = pendingDue && pendingDue > today ? pendingDue : today;
-            due = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
-            if (!due) throw new AppError2("L\u1ECBch l\u1EB7p \u0111\xE3 qu\xE1 ng\xE0y k\u1EBFt th\xFAc. H\xE3y ch\u1ECDn ng\xE0y k\u1EBFt th\xFAc mu\u1ED9n h\u01A1n.");
-            pendingDue = due > today ? due : "";
-            if (due > today) due = "";
-          } else pendingDue = "";
+            pendingDue = normDue(r.firstDue) || today;
+            if (rule.end && pendingDue > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t \u0111\u1EA7u ti\xEAn.");
+          } else {
+            const baseDay = old.next_due && old.next_due > today ? old.next_due : today;
+            pendingDue = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
+            if (!pendingDue) throw new AppError2("L\u1ECBch l\u1EB7p \u0111\xE3 qu\xE1 ng\xE0y k\u1EBFt th\xFAc. H\xE3y ch\u1ECDn ng\xE0y k\u1EBFt th\xFAc mu\u1ED9n h\u01A1n.");
+          }
           const now = (/* @__PURE__ */ new Date()).toISOString();
           const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue];
           if (old) await c.q.query("UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, updated_at=$13 WHERE id=$1", [...row, now]);
           else await c.q.query("INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)", [...row, c.me.id, now]);
           const result = {};
-          if (due) {
+          if (pendingDue <= today) {
             const tpl = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [r.id]);
-            const id = await spawnInstance(c, tpl, rule, due);
-            if (id) {
-              result.spawned = { id, due, title };
-              await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [r.id, id, PENDING]);
-            }
-          } else if (pendingDue) result.scheduled = { due: pendingDue, title };
+            const made = await spawnTemplateUpTo(c, tpl, today);
+            if (made.length) result.spawned = { id: made[0].id, due: made[0].due, title };
+            const after = await one2(c.q, "SELECT next_due FROM recurring_tasks WHERE id=$1", [r.id]);
+            if (after && after.next_due) result.scheduled = { due: after.next_due, title };
+          } else result.scheduled = { due: pendingDue, title };
           return result;
         },
         async deleteRecurring(c, p) {
