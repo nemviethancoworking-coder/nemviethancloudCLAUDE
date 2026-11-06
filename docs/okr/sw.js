@@ -1,11 +1,11 @@
-/* Service worker của OKR Weekly (v19).
+/* Service worker của OKR Weekly (v20).
    - Tệp của app (HTML, JS, biểu tượng): ưu tiên MẠNG, luôn lấy bản mới nhất; chỉ khi mất mạng mới dùng bản đã lưu
      → app không bao giờ kẹt ở phiên bản cũ sau mỗi lần cập nhật.
    - Thư viện ngoài (Tailwind, phông chữ): dùng bản đã lưu cho mở nhanh, đồng thời cập nhật ngầm.
    - Không đụng tới API máy chủ dữ liệu (khác tên miền) và mọi yêu cầu không phải GET: dữ liệu luôn đi thẳng lên máy chủ. */
-const VER = 'okr-v19';
+const VER = 'okr-v20';
 const SHELL = VER + '-shell', CDN = VER + '-cdn';
-const PRECACHE = ['./', 'index.html', 'work.js?v=19', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
+const PRECACHE = ['./', 'index.html', 'work.js?v=20', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 const CDN_HOSTS = ['cdn.tailwindcss.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', e => {

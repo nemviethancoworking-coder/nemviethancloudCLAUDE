@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#2f6fed">
-<meta name="app-build" content="2026-11-06-v19">
+<meta name="app-build" content="2026-11-06-v20">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -469,7 +469,7 @@ document.addEventListener('mousedown', e => { document.querySelectorAll('.rt-pop
 Object.assign(window, { RT, richEditor, richGet, richSet, richHtml, richPlain, richJoin });
 })();
 </script>
-<script src="work.js?v=19"></script>
+<script src="work.js?v=20"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
@@ -1528,7 +1528,7 @@ function reportDetail(r){
         <div class="mt-4 flex gap-3" id="comment-box">
           ${avatar(me(), 'w-8 h-8 text-[11px]')}
           <div class="flex-1">
-            ${richEditor('cm-' + r.id, { placeholder: manages ? 'Viết nhận xét / chỉ đạo cho nhân viên...' : 'Phản hồi lại quản lý (nếu cần)...', minHeight: 70 })}
+            ${richEditor('cm-' + r.id, { placeholder: (manages ? 'Viết nhận xét / chỉ đạo cho nhân viên...' : 'Phản hồi lại quản lý (nếu cần)...') + ' (có thể dán ảnh bằng Ctrl+V)', minHeight: 70, images: true })}
             <div class="flex justify-end mt-2"><button class="btn btn-primary btn-sm" onclick="A.addComment('${r.id}')">${I.chat} Gửi ${manages ? 'phản hồi' : 'trả lời'}</button></div>
           </div>
         </div>` : `<div class="mt-4 text-[12.5px] text-gray-400 flex items-center gap-1.5" id="comment-locked">${I.lock} Chỉ cấp trên của ${esc(u.name)}${m ? ' (' + esc(m.name) + '…)' : ''} hoặc Giám đốc được phản hồi báo cáo này.</div>`}
