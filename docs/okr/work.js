@@ -735,7 +735,7 @@ function openDetail(id){
         <div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm</label>${ed ? `<label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Thêm tệp<input type="file" multiple class="hidden" id="tk-file" onchange="event.stopPropagation();W.pickFiles(this)" accept=".${OK_EXT.join(',.')}"></label>` : ''}</div><div id="tk-att" class="space-y-1.5"><div class="text-[12.5px] text-gray-400">Đang tải...</div></div></div>
         <div><label class="label">Bình luận</label><div id="tk-cm" class="space-y-3"></div>
           <div class="mt-3 relative">
-            ${richEditor('tk-cmt', { placeholder: 'Viết bình luận... gõ @ để nhắc tên đồng nghiệp', minHeight: 70, nodirty: true, onInput: 'event.stopPropagation();W.cmInput(this)', onKeyDown: 'W.cmKey(event)' })}
+            ${richEditor('tk-cmt', { placeholder: 'Viết bình luận... gõ @ để nhắc tên đồng nghiệp (có thể dán ảnh bằng Ctrl+V)', minHeight: 70, nodirty: true, images: true, onInput: 'event.stopPropagation();W.cmInput(this)', onKeyDown: 'W.cmKey(event)' })}
             <div id="tk-mention" class="hidden absolute left-2 right-2 z-10 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto" style="bottom:100%"></div>
             <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400 desk-only">Ctrl + Enter để gửi</span><button class="btn btn-primary btn-sm" id="tk-cm-send" onclick="W.postComment()">${I.chat} Gửi</button></div>
           </div></div>
