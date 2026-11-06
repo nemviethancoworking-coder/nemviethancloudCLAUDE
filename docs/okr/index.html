@@ -2,7 +2,16 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2f6fed">
+<meta name="app-build" content="2026-11-06-v19">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="OKR Weekly">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <title>OKRs & Báo cáo tuần</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -67,6 +76,132 @@
   .btn:disabled { opacity:.5; cursor:default; }
   .nt-ic svg { width:11px; height:11px; }
   .rt-red { color:#dc2626; } .rt-orange { color:#ea580c; } .rt-blue { color:#2563eb; }
+  /* ===== Điện thoại (v19) =====
+     Mọi quy tắc cho điện thoại nằm trong @media (max-width:767px) nên giao diện máy tính giữ nguyên.
+     Các lớp .desk-only / .m-only / .tabbar / .tree-toggle … chỉ có tác dụng khi bật ở khối media bên dưới. */
+  html { -webkit-text-size-adjust:100%; }
+  body { -webkit-tap-highlight-color:transparent; }
+  .app-shell { height:100vh; height:100dvh; }
+  .tabbar, #side-backdrop, .tree-toggle, .m-only { display:none; }
+  .tb-tabs { display:contents; }
+  .rt-imgbtn { display:none; cursor:pointer; }
+  @media (max-width:767px){
+    body { overscroll-behavior-y:none; }
+    .desk-only { display:none !important; }
+    .m-only { display:block; }
+    #app header { padding-left:12px; padding-right:12px; }
+    #app #content { padding:12px; }
+    #app header h1 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* Thanh tab phía dưới + menu trượt */
+    .tabbar { display:flex; flex-shrink:0; background:#fff; border-top:1px solid #e5e7eb; padding-bottom:env(safe-area-inset-bottom); }
+    .tab-item { flex:1; position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; min-height:54px; padding:6px 2px 5px; font-size:10.5px; font-weight:500; color:#6b7280; cursor:pointer; -webkit-user-select:none; user-select:none; }
+    .tab-item svg { width:22px; height:22px; }
+    .tab-item.active { color:#1f5ad8; }
+    .tab-badge { position:absolute; top:3px; left:calc(50% + 6px); min-width:16px; height:16px; padding:0 4px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:600; line-height:16px; text-align:center; }
+    #side { position:fixed; top:0; bottom:0; left:0; z-index:60; width:288px; max-width:86vw; transform:translateX(-104%); transition:transform .2s ease; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+    body.menu-open { overflow:hidden; }
+    body.menu-open #side { transform:none; box-shadow:0 0 40px rgba(15,23,42,.25); }
+    body.menu-open #side-backdrop { display:block; position:fixed; top:0; right:0; bottom:0; left:0; z-index:55; background:rgba(15,23,42,.4); }
+    #toast { left:12px; right:12px; bottom:70px; }
+
+    /* Chạm bằng ngón tay: nút, ô nhập đủ lớn; cỡ chữ ô nhập ≥16px để iPhone không tự phóng to */
+    .btn { min-height:40px; }
+    .btn-sm { min-height:36px; }
+    .chip { padding:8px 14px; flex:none; white-space:nowrap; }
+    .nav-item { padding:12px; font-size:15px; }
+    .checkbox { width:22px; height:22px; }
+    .input { padding:10px 12px; }
+    input:not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea, .rt-area { font-size:16px !important; }
+    .rt-btn { width:40px; height:36px; font-size:16px; }
+    .rt-imgbtn { display:inline-flex; }
+    .rt-sw { width:30px; height:30px; }
+    .rt-nocolor { padding:8px 12px; font-size:13px; }
+    .rt-pop { left:8px; }
+    .rt-area { min-height:110px; }
+
+    /* Khung điền form → toàn màn hình, tiêu đề và nút lưu dính cố định */
+    #modal > div { display:block !important; padding:0 !important; background:#fff !important; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+    #modal .card { display:flex; flex-direction:column; width:100%; max-width:none !important; min-height:100%; margin:0 !important; border:0; border-radius:0; box-shadow:none; }
+    #modal .card > :first-child { position:sticky; top:0; z-index:5; background:#fff; }
+    #modal .card > .border-t { position:sticky; bottom:0; z-index:5; background:#fff; margin-top:auto; flex-wrap:wrap; gap:8px; padding-bottom:calc(12px + env(safe-area-inset-bottom)); }
+    #modal .card > .border-t > div { flex-wrap:wrap; }
+    #modal .px-6 { padding-left:16px; padding-right:16px; }
+    #modal .p-6 { padding:16px; }
+    #modal .max-h-\[75vh\] { max-height:none !important; overflow:visible !important; }
+
+    /* KR trong form OKR: tên một dòng, 3 ô số xếp hàng dưới */
+    .kr-row { grid-template-columns:repeat(3, minmax(0,1fr)) 36px !important; row-gap:6px; }
+    .kr-row > .kr-title { grid-column:1 / -1 !important; }
+    .kr-row > .kr-f { grid-column:auto !important; }
+    .kr-lab { display:block; font-size:11px; color:#6b7280; margin-bottom:2px; }
+
+    /* Thẻ OKR: tiêu đề, KR và dòng thông tin xuống dòng thay vì tràn ngang */
+    .okr-head { flex-wrap:wrap; }
+    .okr-head-t { flex:1 1 100%; }
+    .okr-head-b { flex-wrap:wrap; }
+    .okr-kr { flex-wrap:wrap; row-gap:4px; }
+    .okr-kr-t { flex:1 1 calc(100% - 36px); white-space:normal; }
+    .okr-kr > .whitespace-nowrap { margin-left:36px; }
+    .okr-meta { flex-wrap:wrap; }
+    .okr-when { flex-basis:100%; text-align:left; white-space:normal; padding-left:38px; }
+
+    /* Sơ đồ tổ chức: bớt thụt lề, chức danh xuống dòng riêng */
+    #org-tree { padding:14px; }
+    .org-n { margin-left:8px !important; padding-left:8px !important; }
+    .org-r { flex-wrap:wrap; row-gap:2px; column-gap:8px; }
+    .org-name { white-space:nowrap; }
+    .org-title { flex-basis:100%; order:5; padding-left:38px; white-space:normal; margin-top:-2px; }
+    .org-r > button { order:2; }
+
+    /* Kế hoạch tuần sau: chữ chiếm cả dòng, hạn + trạng thái xuống dòng dưới */
+    .sol-row { flex-wrap:wrap; row-gap:6px; }
+    .sol-t { flex:1 1 calc(100% - 40px); min-width:0; }
+    .sol-row > .checkbox ~ .sol-t ~ * { margin-left:28px; }
+
+    /* Chi tiết báo cáo tuần */
+    #report-detail .p-5 { padding:14px; }
+    #report-detail .px-5 { padding-left:14px; padding-right:14px; }
+    #report-detail table { display:block; overflow-x:auto; }
+    #report-detail .rd-head, #report-detail .rd-kr { flex-wrap:wrap; }
+
+    /* Bảng → thẻ */
+    table.m-cards, .m-cards tbody { display:block; width:100%; }
+    .m-cards thead { display:none; }
+    .m-cards tr { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:12px; }
+    .m-cards td { display:block; padding:0 !important; max-width:100%; }
+    .m-cards td.mc-title { flex:1 1 100%; min-width:0; max-width:none; }
+    .m-cards td.mc-chk + td.mc-title { flex:1 1 calc(100% - 44px); }
+    .m-cards td.mc-st { flex:1 1 150px; }
+    .m-cards td.mc-act { margin-left:auto; }
+    .m-cards td.mc-hide { display:none; }
+    .m-cards td[colspan] { flex:1 1 100%; text-align:center; }
+    .m-scroll { min-width:720px; }
+
+    /* Màn Công việc */
+    .tb-left, .tb-right { width:100%; }
+    .tb-tabs { display:flex; align-items:center; gap:8px; flex:1 1 100%; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch; }
+    .tb-tabs > * { flex:none; }
+    #wk-q { flex:1 1 100%; width:100% !important; }
+    .tb-add { position:fixed; right:16px; bottom:calc(72px + env(safe-area-inset-bottom)); z-index:35; width:54px; height:54px; min-height:0; padding:0; justify-content:center; border-radius:999px; box-shadow:0 6px 18px rgba(31,90,216,.4); }
+    .tb-add .fab-text { display:none; }
+    .m-form, .m-detail { display:flex !important; flex-direction:column; gap:20px; }
+    .m-form > .m-col-main, .m-detail > .m-col-main { display:contents; }
+    .m-col-main > * { margin-top:0 !important; }
+    .m-form > .m-col-side { order:2; }
+    .m-form .m-last { order:3; }
+    .m-detail #tk-head { order:0; }
+    .m-detail #tk-side { order:1; }
+    .m-detail .m-col-main > :not(#tk-head) { order:2; }
+    .tm-bar { flex-wrap:nowrap !important; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch; }
+    .tm-bar > * { flex:none; white-space:nowrap; }
+    .tree-toggle { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; padding:6px 4px; font-size:14px; color:#1e293b; background:none; border:0; text-align:left; cursor:pointer; }
+    .wk-tree .tree-body { display:none; margin-top:8px; }
+    .wk-tree.tree-open .tree-body { display:block; }
+    #kb-board { grid-template-columns:repeat(4, 84vw) !important; scroll-snap-type:x mandatory; scroll-padding-left:0; }
+    #kb-board > div { scroll-snap-align:start; }
+    #kb-board [data-col] { max-height:none !important; }
+  }
 </style>
 </head>
 <body class="bg-[#f4f5f7] text-slate-800 text-sm">
@@ -226,6 +361,7 @@ function richEditor(id, o){
     ${dis ? '' : `<div class="rt-bar">
       ${btn('', 'In đậm (Ctrl+B)', `RT.cmd('${id}','bold')`, '<b>B</b>')}${btn('', 'In nghiêng (Ctrl+I)', `RT.cmd('${id}','italic')`, '<i style="font-family:serif">I</i>')}
       ${btn('', 'Màu chữ', `RT.pop(this)`, '<span class="rt-A">A</span>')}
+      ${o.images ? `<label class="rt-btn rt-imgbtn" title="Chèn ảnh (chụp hoặc chọn từ thư viện)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg><input type="file" accept="image/*" multiple class="hidden" onchange="RT.pickImg('${id}',this)"></label>` : ''}
       <div class="rt-pop" onmousedown="event.preventDefault()">
         ${['red', 'orange', 'blue'].map(k => `<button type="button" class="rt-sw" style="background:${HEX[k]}" title="${{ red:'Đỏ', orange:'Cam', blue:'Xanh dương' }[k]}" onclick="RT.color('${id}','${k}')"></button>`).join('')}
         <button type="button" class="rt-nocolor" onclick="RT.color('${id}','')">Bỏ màu</button>
@@ -321,12 +457,19 @@ const RT = {
     insertText(text);                                                                                                     // còn lại luôn dán văn bản thuần
   },
   drop(e){ e.preventDefault(); },
+  pickImg(id, input){
+    const el = elOf(id), all = [...input.files]; input.value = '';
+    if(!el || !all.length) return;
+    const imgs = all.filter(f => IMG_TYPES.test(f.type));
+    if(imgs.length < all.length) say('Chỉ chèn được ảnh PNG, JPG, GIF hoặc WebP.', 'error');
+    if(imgs.length) pasteImages(el, imgs);
+  },
 };
 document.addEventListener('mousedown', e => { document.querySelectorAll('.rt-pop.open').forEach(p => { if(!p.parentElement.contains(e.target)) p.classList.remove('open'); }); });
 Object.assign(window, { RT, richEditor, richGet, richSet, richHtml, richPlain, richJoin });
 })();
 </script>
-<script src="work.js?v=18"></script>
+<script src="work.js?v=19"></script>
 <script>
 /* ============================================================
    HỆ THỐNG QUẢN TRỊ OKRs & BÁO CÁO TUẦN — Single-file app (v4)
@@ -911,6 +1054,7 @@ function toast(msg, type='success'){
 let modalDirty = false;   // đã nhập/sửa gì trong khung đang mở chưa
 function openModal(html, width='max-w-2xl'){
   modalDirty = false;
+  document.body.classList.remove('menu-open');
   document.getElementById('modal').innerHTML = `
     <div class="fixed inset-0 z-50 bg-slate-900/40 flex items-start justify-center p-4 overflow-y-auto">
       <div class="card w-full ${width} my-6 fade-in shadow-xl">${html}</div>
@@ -926,7 +1070,7 @@ const modalHeader = (title, sub='') => `
 function render(){
   const app = document.getElementById('app');
   buildIndex();
-  if(!session() || !me()){ app.innerHTML = viewLogin(); return; }
+  if(!session() || !me()){ document.body.classList.remove('menu-open'); app.innerHTML = viewLogin(); return; }
   if(state.view === 'people' && !isDir()) state.view = 'dashboard';
   const views = { dashboard: viewDashboard, okrs: viewOKRs, checkin: viewCheckin, tasks: viewTasks, people: viewPeople };
   const titles = { dashboard:'Tổng quan OKRs', okrs:'Quản lý OKR', checkin:'Báo cáo tuần', tasks:'Quản lý công việc', people:'Nhân sự & phân quyền' };
@@ -936,9 +1080,12 @@ function render(){
   const mgr = u.managerId ? user(u.managerId) : null;
   const navItem = (key, icon, label, count) => `
     <div class="nav-item ${state.view === key ? 'active' : ''}" data-nav="${key}" onclick="A.nav('${key}')">${icon}<span class="flex-1">${label}</span>${count ? `<span class="bg-red-500 text-white text-[11px] font-semibold px-1.5 py-0.5 rounded-full">${count}</span>` : ''}</div>`;
+  const tabItem = (key, icon, label, count) => `<div class="tab-item ${state.view === key ? 'active' : ''}" onclick="A.nav('${key}')">${icon}<span>${label}</span>${count ? `<span class="tab-badge">${count}</span>` : ''}</div>`;
+  const menuIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>';
   app.innerHTML = `
-  <div class="flex h-screen overflow-hidden">
-    <aside class="w-[232px] bg-white border-r border-gray-200 flex flex-col shrink-0">
+  <div class="app-shell flex overflow-hidden">
+    <div id="side-backdrop" onclick="A.menu(false)"></div>
+    <aside id="side" class="w-[232px] bg-white border-r border-gray-200 flex flex-col shrink-0">
       <div class="h-14 flex items-center gap-2.5 px-4 border-b border-gray-200">
         <div class="w-8 h-8 rounded-lg bg-base-500 text-white flex items-center justify-center font-bold text-sm">OK</div>
         <div><div class="font-semibold text-slate-900 leading-tight">OKR Weekly</div><div class="text-[11px] text-gray-500 leading-tight">Quản trị mục tiêu & họp tuần</div></div>
@@ -978,16 +1125,20 @@ function render(){
       </div>
     </aside>
     <main class="flex-1 flex flex-col min-w-0">
-      <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
-        <div class="flex items-center gap-3"><h1 class="text-base font-semibold text-slate-900">${titles[state.view]}</h1><span class="text-gray-300">|</span><span class="text-gray-500 text-[13px]">${weekLabel(isoWeek(new Date()).week, isoWeek(new Date()).year)}</span></div>
+      <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between gap-2 px-6 shrink-0">
+        <div class="flex items-center gap-3 min-w-0"><h1 class="text-base font-semibold text-slate-900">${titles[state.view]}</h1><span class="text-gray-300 desk-only">|</span><span class="desk-only text-gray-500 text-[13px] whitespace-nowrap">${weekLabel(isoWeek(new Date()).week, isoWeek(new Date()).year)}</span><span class="m-only text-gray-500 text-[12.5px] whitespace-nowrap">${weekLabel(isoWeek(new Date()).week, isoWeek(new Date()).year, true)}</span></div>
         <div class="flex items-center gap-3">
           ${ntBell()}
           ${mgr ? `<span class="text-[12px] text-gray-500 hidden md:inline">Quản lý trực tiếp: <b class="text-slate-700">${esc(mgr.name)}</b></span>` : ''}
-          ${roleBadge(u)}
+          <span class="desk-only inline-flex">${roleBadge(u)}</span>
           ${avatar(u, 'w-8 h-8 text-[11px]')}
         </div>
       </header>
       <div class="flex-1 overflow-y-auto p-6 fade-in" id="content">${views[state.view]()}</div>
+      <nav class="tabbar" aria-label="Điều hướng">
+        ${tabItem('dashboard', I.dash, 'Tổng quan')}${tabItem('okrs', I.flag, 'OKR', oc)}${tabItem('checkin', I.report, 'Báo cáo', pc)}${tabItem('tasks', I.task, 'Công việc')}
+        <div class="tab-item ${state.view === 'people' ? 'active' : ''}" onclick="A.menu()">${menuIcon}<span>Menu</span></div>
+      </nav>
     </main>
   </div>`;
 }
@@ -1095,16 +1246,16 @@ function okrCard(o, cyc, opts={}){
   const approved = o.status === 'approved';
   return `
   <div class="border ${approved ? 'border-gray-200' : 'border-dashed border-amber-300 bg-amber-50/30'} rounded-lg p-4" data-okr="${o.id}">
-    <div class="flex items-start justify-between gap-3">
-      <div class="flex items-start gap-2 min-w-0"><span class="text-base-600 mt-0.5 shrink-0">${I.flag}</span><div class="font-semibold text-slate-900 leading-snug">${esc(o.title)}</div></div>
-      <div class="flex items-center gap-1.5 shrink-0">${approved ? badge(st.t, st.c) : badge(OKR_STATUS[o.status].t, OKR_STATUS[o.status].c)}${opts.actions || ''}</div>
+    <div class="okr-head flex items-start justify-between gap-3">
+      <div class="okr-head-t flex items-start gap-2 min-w-0"><span class="text-base-600 mt-0.5 shrink-0">${I.flag}</span><div class="font-semibold text-slate-900 leading-snug">${esc(o.title)}</div></div>
+      <div class="okr-head-b flex items-center gap-1.5 shrink-0">${approved ? badge(st.t, st.c) : badge(OKR_STATUS[o.status].t, OKR_STATUS[o.status].c)}${opts.actions || ''}</div>
     </div>
-    ${approved ? `<div class="flex items-center gap-3 mt-3"><div class="flex-1">${progressBar(p, st.bar, 'h-2.5')}</div><span class="text-[13px] font-semibold w-10 text-right">${p}%</span></div>` : ''}
+    ${approved ? `<div class="flex items-center gap-3 mt-3"><div class="flex-1 min-w-0">${progressBar(p, st.bar, 'h-2.5')}</div><span class="text-[13px] font-semibold w-10 text-right">${p}%</span></div>` : ''}
     <div class="mt-3 space-y-2">
       ${o.krs.map(k => `
-      <div class="flex items-center gap-3 text-[12.5px]">
+      <div class="okr-kr flex items-center gap-3 text-[12.5px]">
         <span class="text-gray-400 font-medium w-6 shrink-0">KR</span>
-        <span class="flex-1 text-slate-700 truncate" title="${esc(k.title)}">${esc(k.title)}</span>
+        <span class="okr-kr-t flex-1 min-w-0 text-slate-700 truncate" title="${esc(k.title)}">${esc(k.title)}</span>
         <span class="text-gray-500 whitespace-nowrap" title="Đầu kỳ ${num(k.baseline)} · Hiện tại ${num(k.current)} · Mục tiêu ${num(k.target)}">${approved ? `<b class="text-slate-700">${num(k.current)}</b>/` : ''}${num(k.target)} ${esc(k.unit)}${Number(k.baseline) ? ` <span class="text-gray-400">(từ ${num(k.baseline)})</span>` : ''}</span>
         ${approved ? `<div class="w-20">${progressBar(krPct(k), 'bg-slate-400', 'h-1.5')}</div><span class="w-9 text-right font-medium">${krPct(k)}%</span>` : ''}
       </div>`).join('')}
@@ -1145,10 +1296,10 @@ function viewOKRs(){
         ${canDeleteOkr(o) ? `<button class="btn btn-danger btn-sm" data-act="delete" title="Xoá" onclick="A.deleteOkr('${o.id}')">${I.trash}</button>` : ''}`;
       return `
       <div class="card p-4">
-        <div class="flex items-center gap-2.5 mb-3 text-[12.5px] text-gray-500">
+        <div class="okr-meta flex items-center gap-2.5 mb-3 text-[12.5px] text-gray-500">
           ${avatar(u, 'w-7 h-7 text-[10px]')}
           <div class="min-w-0 flex-1"><span class="font-medium text-slate-800">${esc(u.name)}</span> · ${esc(u.dept)}</div>
-          <div class="text-right whitespace-nowrap">${o.createdBy !== o.ownerId ? `Tạo bởi ${esc(cr.name)}` : 'Tự đề xuất'}${o.updatedAt ? ` · ${fmt(o.updatedAt)}` : ''}</div>
+          <div class="okr-when text-right whitespace-nowrap">${o.createdBy !== o.ownerId ? `Tạo bởi ${esc(cr.name)}` : 'Tự đề xuất'}${o.updatedAt ? ` · ${fmt(o.updatedAt)}` : ''}</div>
         </div>
         ${okrCard(o, cyc, { actions })}
       </div>`;
@@ -1159,9 +1310,9 @@ function krRowHTML(k = {}){
   return `
   <div class="kr-row grid grid-cols-12 gap-2 items-center fade-in" data-id="${esc(k.id || '')}">
     <input class="input kr-title col-span-5" placeholder="Tên kết quả then chốt (vd: Số đơn hàng mới)" value="${esc(k.title || '')}">
-    <input type="number" step="any" class="input kr-baseline col-span-2 text-right" placeholder="Đầu kỳ" value="${esc(k.baseline ?? 0)}" title="Giá trị đầu kỳ">
-    <input type="number" step="any" class="input kr-target col-span-2 text-right" placeholder="Mục tiêu" value="${esc(k.target ?? '')}" title="Giá trị mục tiêu">
-    <input class="input kr-unit col-span-2" list="unit-list" placeholder="Đơn vị" value="${esc(k.unit || '')}" title="Đơn vị đo lường">
+    <div class="kr-f col-span-2"><span class="m-only kr-lab">Đầu kỳ</span><input type="number" inputmode="decimal" step="any" class="input kr-baseline text-right" placeholder="Đầu kỳ" value="${esc(k.baseline ?? 0)}" title="Giá trị đầu kỳ"></div>
+    <div class="kr-f col-span-2"><span class="m-only kr-lab">Mục tiêu</span><input type="number" inputmode="decimal" step="any" class="input kr-target text-right" placeholder="Mục tiêu" value="${esc(k.target ?? '')}" title="Giá trị mục tiêu"></div>
+    <div class="kr-f col-span-2"><span class="m-only kr-lab">Đơn vị</span><input class="input kr-unit" list="unit-list" placeholder="Đơn vị" value="${esc(k.unit || '')}" title="Đơn vị đo lường"></div>
     <button class="text-gray-400 hover:text-red-600 p-1 justify-self-center" title="Xoá KR" onclick="this.closest('.kr-row').remove()">${I.x}</button>
   </div>`;
 }
@@ -1188,7 +1339,7 @@ function openOkrForm(id, ownerId){
       <div>
         <div class="flex items-center justify-between mb-1.5"><label class="label !mb-0">Kết quả then chốt (Key Results) <span class="text-red-500">*</span></label><button class="btn btn-ghost btn-sm" onclick="A.addKrRow()">${I.plus} Thêm KR</button></div>
         <p class="text-[12px] text-gray-500 mb-2">Mỗi KR là một chỉ số đo được. Tiến độ tính từ <b>giá trị đầu kỳ</b> đến <b>mục tiêu</b> (vd CSAT từ 80% → 92%). Với KR cần giảm (vd CPL), nhập mục tiêu nhỏ hơn đầu kỳ.</p>
-        <div class="grid grid-cols-12 gap-2 text-[11.5px] font-semibold text-gray-500 uppercase tracking-wide px-0.5 mb-1"><div class="col-span-5">Kết quả then chốt</div><div class="col-span-2 text-right">Đầu kỳ</div><div class="col-span-2 text-right">Mục tiêu</div><div class="col-span-2">Đơn vị đo</div><div></div></div>
+        <div class="desk-only grid grid-cols-12 gap-2 text-[11.5px] font-semibold text-gray-500 uppercase tracking-wide px-0.5 mb-1"><div class="col-span-5">Kết quả then chốt</div><div class="col-span-2 text-right">Đầu kỳ</div><div class="col-span-2 text-right">Mục tiêu</div><div class="col-span-2">Đơn vị đo</div><div></div></div>
         <div id="of-krs" class="space-y-2">${(o ? o.krs : [{}, {}]).map(krRowHTML).join('')}</div>
         <datalist id="unit-list">${UNITS.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
       </div>
@@ -1277,7 +1428,7 @@ function viewCheckin(){
   <div class="grid lg:grid-cols-12 gap-4">
     <div class="lg:col-span-4 card overflow-hidden">
       <div class="px-4 py-3 border-b border-gray-100 section-title">Danh sách báo cáo</div>
-      <div class="divide-y divide-gray-100 max-h-[calc(100vh-220px)] overflow-y-auto">
+      <div class="divide-y divide-gray-100 max-h-[40vh] lg:max-h-[calc(100vh-220px)] overflow-y-auto">
         ${rs.length ? rs.slice(0, state.reportLimit).map(r => { const u = user(r.userId), o = okrById(r.okrId) || {title:'(OKR đã xoá)'}, st = reportStatus(r); return `
         <div class="report-item px-4 py-3 ${state.reportId === r.id ? 'active' : ''}" data-report="${r.id}" onclick="A.selectReport('${r.id}')">
           <div class="flex items-center gap-2.5">
@@ -1289,16 +1440,16 @@ function viewCheckin(){
         </div>`; }).join('') + (rs.length > state.reportLimit ? `<div class="p-3 text-center"><button class="btn btn-ghost btn-sm" id="more-reports" onclick="A.more('reportLimit')">Xem thêm ${Math.min(PAGE.reportLimit, rs.length - state.reportLimit)} báo cáo (còn ${rs.length - state.reportLimit})</button></div>` : '') : `<div class="p-8 text-center text-gray-400 text-[13px]">Chưa có báo cáo nào.${!isDir() ? '<br>Bấm "Tạo báo cáo" để bắt đầu.' : ''}</div>`}
       </div>
     </div>
-    <div class="lg:col-span-8">${sel ? reportDetail(sel) : '<div class="card p-12 text-center text-gray-400">Chọn một báo cáo để xem chi tiết.</div>'}</div>
+    <div class="lg:col-span-8 min-w-0">${sel ? reportDetail(sel) : '<div class="card p-12 text-center text-gray-400">Chọn một báo cáo để xem chi tiết.</div>'}</div>
   </div>`;
 }
 /* Danh sách giải pháp/hành động (kèm trạng thái công việc sinh ra) */
 function solList(r, sols, taskScope){
   if(!sols.length) return '<div class="text-gray-400 italic">Không có</div>';
   return `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${sols.map(s => { const t = taskScope ? IX.taskBySol.get(r.id + '|' + s.id) : null; const ts = t ? TASK_STATUS[t.status] : null; return `
-    <div class="flex items-center gap-3 px-3 py-2.5">
+    <div class="sol-row flex items-center gap-3 px-3 py-2.5">
       ${taskScope ? `<input type="checkbox" class="checkbox" ${t && t.status === 'done' ? 'checked' : ''} ${t ? `onchange="A.toggleTask('${t.id}')"` : 'disabled'}>` : `<span class="text-gray-300">•</span>`}
-      <span class="flex-1 ${t && t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span>
+      <span class="sol-t flex-1 ${t && t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-700'}">${esc(s.text)}</span>
       ${s.due ? `<span class="text-[12px] ${t && isOverdue(t) ? 'text-red-600 font-medium' : 'text-gray-500'}">Hạn ${fmt(s.due)}</span>` : ''}
       ${taskScope ? (ts ? badge(ts.t, ts.c) : badge('Chưa tạo task', 'bg-gray-100 text-gray-500 border-gray-200')) : ''}
     </div>`; }).join('')}</div>`;
@@ -1317,8 +1468,8 @@ function reportDetail(r){
   const sec = (title, body, extra='') => `<div><div class="section-title mb-1.5">${title}</div><div class="text-slate-700 whitespace-pre-line leading-relaxed break-words">${richPlain(body).trim() ? richHtml(body) : '<span class="text-gray-400 italic">Không có</span>'}</div>${extra}</div>`;
   return `
   <div class="card" id="report-detail" data-report="${r.id}">
-    <div class="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
-      <div class="flex items-center gap-3">
+    <div class="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-4 rd-head">
+      <div class="flex items-center gap-3 min-w-0">
         ${avatar(u, 'w-10 h-10 text-sm')}
         <div>
           <div class="font-semibold text-slate-900">${esc(u.name)} <span class="text-gray-400 font-normal">· ${esc(u.dept)}</span></div>
@@ -1341,7 +1492,7 @@ function reportDetail(r){
       </div>
       ${perKr ? r.krUpdates.map(ku => { const k = o && o.krs.find(k => k.id === ku.krId); if(!k) return ''; return `
       <div class="border border-gray-200 rounded-lg p-4 space-y-4" data-kr-report="${esc(ku.krId)}">
-        <div class="flex items-center justify-between gap-3"><div class="font-semibold text-slate-900 flex items-center gap-2"><span class="text-base-600">${I.flag}</span>KR: ${esc(k.title)}</div><div class="text-[12.5px] text-gray-500 whitespace-nowrap"><b class="text-slate-800">${num(ku.value)}</b> / ${num(k.target)} ${esc(k.unit)} · ${krPctOf(k, ku.value)}%</div></div>
+        <div class="rd-kr flex items-center justify-between gap-3"><div class="font-semibold text-slate-900 flex items-center gap-2"><span class="text-base-600">${I.flag}</span>KR: ${esc(k.title)}</div><div class="text-[12.5px] text-gray-500 whitespace-nowrap"><b class="text-slate-800">${num(ku.value)}</b> / ${num(k.target)} ${esc(k.unit)} · ${krPctOf(k, ku.value)}%</div></div>
         ${sec('Đánh giá / Công việc đã thực hiện', ku.work)}
         <div class="grid md:grid-cols-2 gap-5">${sec('Vấn đề / Rào cản', ku.issues)}${sec('Nguyên nhân', ku.causes)}</div>
         <div><div class="section-title mb-1.5">Kế hoạch / Hành động tuần tiếp theo <span class="normal-case font-normal text-gray-400">${taskScope ? '(đã chuyển thành công việc)' : ''}</span></div>${solList(r, ku.solutions || [], taskScope)}</div>
@@ -1426,11 +1577,11 @@ function orgNode(u, depth, seen){
   const kids = staffOf(u.id).sort((a,b) => (ROLE_RANK[a.role] - ROLE_RANK[b.role]) || a.name.localeCompare(b.name));
   const bad = u.managerId && PARENT_ROLE[u.role] && user(u.managerId).role !== PARENT_ROLE[u.role];
   return `
-  <div class="${depth ? 'ml-6 pl-4 border-l-2 border-gray-200' : ''}">
-    <div class="flex items-center gap-2.5 py-1.5 ${isActive(u) ? '' : 'opacity-60'}" data-node="${u.id}">
+  <div class="${depth ? 'org-n ml-6 pl-4 border-l-2 border-gray-200' : ''}">
+    <div class="org-r flex items-center gap-2.5 py-1.5 ${isActive(u) ? '' : 'opacity-60'}" data-node="${u.id}">
       ${avatar(u, 'w-7 h-7 text-[10px]')}
-      <span class="font-medium text-slate-900">${esc(u.name)}</span>${roleBadge(u)}${isActive(u) ? '' : LOCKED_BADGE}
-      <span class="text-[12px] text-gray-500 truncate">${esc(u.title || u.dept)}</span>${isDir() && isActive(u) && !emailOf(u) ? '<span class="text-[11.5px] text-amber-700" title="Chưa nhập email: người này sẽ không nhận được thông báo qua email">· chưa có email</span>' : ''}
+      <span class="org-name font-medium text-slate-900">${esc(u.name)}</span>${roleBadge(u)}${isActive(u) ? '' : LOCKED_BADGE}
+      <span class="org-title text-[12px] text-gray-500 truncate">${esc(u.title || u.dept)}</span>${isDir() && isActive(u) && !emailOf(u) ? '<span class="text-[11.5px] text-amber-700" title="Chưa nhập email: người này sẽ không nhận được thông báo qua email">· chưa có email</span>' : ''}
       ${kids.length ? `<span class="text-[11.5px] text-gray-400">· ${kids.length} trực thuộc</span>` : ''}
       ${bad ? `<span class="text-[11.5px] text-amber-700">· cấp trên chưa đúng cấp</span>` : ''}
       <button class="ml-auto text-gray-400 hover:text-slate-700 p-1" title="Sửa" onclick="A.openUserForm('${u.id}')">${I.edit}</button>
@@ -1461,8 +1612,8 @@ function viewPeople(){
       ${orphans.map(o => orgNode(o, 0, seen)).join('')}
     </div>` : ''}
   </div>
-  <div class="card overflow-hidden">
-    <table class="w-full">
+  <div class="card overflow-x-auto">
+    <table class="w-full m-scroll">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide">
         <tr><th class="text-left font-medium py-2.5 px-4">Nhân sự</th><th class="text-left font-medium py-2.5 px-2">Vai trò</th><th class="text-left font-medium py-2.5 px-2">Cấp trên trực tiếp</th><th class="text-left font-medium py-2.5 px-2">Tên đăng nhập</th><th class="text-left font-medium py-2.5 px-2">Email nhận thông báo</th><th class="w-32"></th></tr>
       </thead>
@@ -1556,7 +1707,8 @@ function openPasswordForm(){
 
 /* ---------- Hành động ---------- */
 const A = {
-  nav(v){ state.view = v; state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; render(); },
+  menu(open){ document.body.classList.toggle('menu-open', open === undefined ? !document.body.classList.contains('menu-open') : !!open); },
+  nav(v){ document.body.classList.remove('menu-open'); state.view = v; state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; render(); },
   set(k, v){ state[k] = v; if(k === 'ckWeek' || k === 'ckUser') state.reportId = null; if(k !== 'reportLimit' && k !== 'taskLimit'){ state.reportLimit = PAGE.reportLimit; state.taskLimit = PAGE.taskLimit; } render(); },
   more(k){ state[k] += PAGE[k]; render(); },
   closeModal(){ document.getElementById('modal').innerHTML = ''; modalDirty = false; editingReportId = null; },
@@ -1586,7 +1738,7 @@ const A = {
   },
   logout(){ localStorage.removeItem(SESSION_KEY); sync.version = null; W.reset(); ntReset(); if(online()){ DB.tasks = []; save(); } render(); },
   refresh(){ refreshFromServer(false); if(state.view === 'tasks') W.reload(); },
-  selectReport(id){ state.reportId = id; render(); },
+  selectReport(id){ state.reportId = id; render(); if(window.matchMedia && matchMedia('(max-width:1023px)').matches){ const d = document.getElementById('report-detail'); if(d) d.scrollIntoView({ block:'start' }); } },
   /* Hộp thông báo (v14) */
   ntToggle(e){ if(e) e.stopPropagation(); NT.open = !NT.open; if(NT.open) ntFetch(); ntPaint(); const b = document.getElementById('nt-bell'); if(b) b.className = ntBellClass(); },
   ntClose(){ if(!NT.open) return; NT.open = false; ntPaint(); const b = document.getElementById('nt-bell'); if(b) b.className = ntBellClass(); },
@@ -1896,6 +2048,42 @@ async function init(){
   if(session()) ntFetch();
 }
 init();
+
+/* ---------- PWA: đăng ký service worker + tự cập nhật khi có bản mới (v19) ----------
+   Ứng dụng thêm vào màn hình chính iPhone có thể mở nguyên nhiều ngày; mỗi lần quay lại app (tối đa 5 phút/lần)
+   và mỗi 30 phút, app hỏi máy chủ xem có phiên bản mới không. Có bản mới: tự tải lại nếu bạn đang không nhập dở,
+   còn đang nhập dở thì hiện thanh nhắc để bạn tự bấm cập nhật. */
+(function pwa(){
+  const secure = location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  if(!('serviceWorker' in navigator) || !secure) return;
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+  const meta = document.querySelector('meta[name="app-build"]'), mine = meta ? meta.content : '';
+  let last = 0;
+  function bar(){
+    if(document.getElementById('upd-bar')) return;
+    const d = document.createElement('div'); d.id = 'upd-bar';
+    d.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(8px + env(safe-area-inset-top));z-index:90;background:#1f2937;color:#fff;border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:10px;font-size:13.5px;box-shadow:0 6px 18px rgba(15,23,42,.3)';
+    d.innerHTML = '<span style="flex:1">Có phiên bản mới của OKR Weekly.</span><button style="background:#2f6fed;color:#fff;border:0;border-radius:8px;padding:7px 12px;font-weight:600" onclick="location.reload()">Cập nhật</button>';
+    document.body.appendChild(d);
+  }
+  async function check(){
+    if(!mine || Date.now() - last < 5 * 60 * 1000) return;
+    last = Date.now();
+    try {
+      const r = await fetch('index.html?_=' + Date.now(), { cache: 'no-store' });
+      if(!r.ok) return;
+      const m = /name="app-build" content="([^"]+)"/.exec(await r.text());
+      if(!m || m[1] === mine) return;
+      let tried = ''; try { tried = sessionStorage.getItem('okr_reload_for') || ''; } catch(e){}
+      if(tried === m[1] || userBusy()){ bar(); return; }                    // đã thử tải lại mà vẫn bản cũ, hoặc đang nhập dở → chỉ nhắc
+      try { sessionStorage.setItem('okr_reload_for', m[1]); } catch(e){}
+      location.reload();
+    } catch(e){}
+  }
+  document.addEventListener('visibilitychange', () => { if(!document.hidden) check(); });
+  setInterval(() => { if(!document.hidden) check(); }, 30 * 60 * 1000);
+  setTimeout(check, 20000);
+})();
 </script>
 </body>
 </html>

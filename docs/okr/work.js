@@ -33,6 +33,7 @@ const MAX_MB = 10;
 const DONE_SHOW = 30;           // số thẻ "Hoàn thành" hiện sẵn trong Kanban
 
 /* ---------- Biểu tượng riêng của module ---------- */
+const FINE = !!(window.matchMedia && matchMedia('(hover:hover) and (pointer:fine)').matches);
 const svg = (p, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 const WI = {
   kanban: svg('<rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="4" height="8" rx="1"/>'),
@@ -226,7 +227,7 @@ function timebar(){
   const chip = ([k, l]) => `<span class="chip ${t.p === k ? 'active' : ''}" onclick="W.setTm('${k}')">${l}</span>`;
   const edge = (s, none) => s === none ? '…' : fmt(s);
   const rangeTxt = r ? (r[0] === r[1] ? fmt(r[0]) : `${edge(r[0], '0000-01-01')} – ${edge(r[1], '9999-12-31')}`) : '';
-  return `<div class="flex items-center gap-2 mb-3 flex-wrap">
+  return `<div class="tm-bar flex items-center gap-2 mb-3 flex-wrap">
     <span class="text-[12.5px] text-gray-500 inline-flex items-center gap-1">${WI.cal} Thời gian:</span>
     ${TM_PRESETS.map(chip).join('')}
     ${t.p === 'custom' ? `<input type="date" class="input !w-auto !py-1" title="Từ ngày" value="${esc(t.from)}" ${t.to ? 'max="' + esc(t.to) + '"' : ''} onchange="W.setTmDate('from',this.value)"><span class="text-gray-400">→</span><input type="date" class="input !w-auto !py-1" title="Đến ngày" value="${esc(t.to)}" ${t.from ? 'min="' + esc(t.from) + '"' : ''} onchange="W.setTmDate('to',this.value)">` : ''}
@@ -322,9 +323,9 @@ function view(){
   const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : S.mode === 'mine' ? mineBoard() : S.mode === 'created' ? personalView('created') : S.mode === 'rec' ? recView() : dashboard();
   return `
   ${toolbar(ws)}
-  <div class="text-[12px] text-gray-400 mb-3 -mt-1 flex items-center gap-1.5">${WI.eye} ${esc(scopeNote())}</div>
+  <div class="desk-only text-[12px] text-gray-400 mb-3 -mt-1 flex items-center gap-1.5">${WI.eye} ${esc(scopeNote())}</div>
   ${timebar()}
-  <div class="flex gap-4 items-start">
+  <div class="flex flex-col md:flex-row gap-4 items-stretch md:items-start">
     ${tree()}
     <div class="flex-1 min-w-0" id="work-body">${S.error ? `<div class="card px-4 py-2 mb-3 text-[13px] text-red-600">${esc(S.error)}</div>` : ''}${body}</div>
   </div>`;
@@ -341,7 +342,7 @@ function toolbar(ws){
   const tab = (k, ic, label) => `<button class="btn btn-sm ${S.mode === k ? 'btn-primary' : 'btn-ghost'}" onclick="W.setMode('${k}')">${ic} ${label}</button>`;
   return `
   <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
-    <div class="flex items-center gap-2 flex-wrap">
+    <div class="tb-left flex items-center gap-2 flex-wrap">
       <div class="flex items-center gap-2 card !rounded-lg px-2 py-1">
         <span class="w-3 h-3 rounded shrink-0" style="background:${esc(ws ? ws.color : '#2f6fed')}"></span>
         <select class="!border-0 !shadow-none bg-transparent font-semibold text-slate-900 text-[14px] outline-none cursor-pointer max-w-[220px]" title="Chuyển Workspace" onchange="W.setWs(this.value)">
@@ -349,15 +350,15 @@ function toolbar(ws){
         </select>
       </div>
       ${isDir() ? `<button class="btn btn-ghost btn-sm" title="Quản lý Workspace" onclick="W.openWorkspace('${esc(d.currentId)}')">${I.gear} Workspace</button><button class="btn btn-ghost btn-sm" title="Thêm Workspace mới" onclick="W.openWorkspace('')">${I.plus}</button>` : ''}
-      <span class="w-px h-6 bg-gray-200 mx-1"></span>
-      ${tab('kanban', WI.kanban, 'Kanban')}${tab('list', WI.list, 'Danh sách')}${tab('dash', WI.chart, 'Tổng quan')}<span class="w-px h-6 bg-gray-200 mx-1"></span>${tab('mine', WI.check, 'Việc của tôi')}${tab('created', I.edit, 'Việc tôi tạo')}${tab('rec', WI.repeat, 'Việc lặp lại')}
+      <span class="w-px h-6 bg-gray-200 mx-1 desk-only"></span>
+      <div class="tb-tabs">${tab('kanban', WI.kanban, 'Kanban')}${tab('list', WI.list, 'Danh sách')}${tab('dash', WI.chart, 'Tổng quan')}<span class="w-px h-6 bg-gray-200 mx-1"></span>${tab('mine', WI.check, 'Việc của tôi')}${tab('created', I.edit, 'Việc tôi tạo')}${tab('rec', WI.repeat, 'Việc lặp lại')}</div>
     </div>
-    <div class="flex items-center gap-2 flex-wrap">
+    <div class="tb-right flex items-center gap-2 flex-wrap">
       <input class="input !w-48" id="wk-q" placeholder="Tìm công việc, nhãn..." value="${esc(S.f.q)}" oninput="W.setQ(this.value)">
       ${!showF ? '' : people.length > 1 ? `<select class="input !w-auto" onchange="W.setF('who',this.value)"><option value="all">Mọi người</option>${people.map(u => `<option value="${u.id}" ${S.f.who === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
       ${!showF ? '' : `<select class="input !w-auto" onchange="W.setF('pri',this.value)"><option value="all">Mọi ưu tiên</option>${Object.entries(PRIO).map(([k, v]) => `<option value="${k}" ${S.f.pri === k ? 'selected' : ''}>${v.t}</option>`).join('')}</select>
       <span class="chip ${S.f.fol ? 'active' : ''}" title="Chỉ hiện việc bạn là người theo dõi" onclick="W.toggleFol()">Tôi theo dõi</span>`}
-      ${S.mode === 'rec' ? `<button class="btn btn-primary" onclick="W.openRecurring('')">${I.plus} Thêm việc lặp lại</button>` : `<button class="btn btn-primary" onclick="W.openTaskForm('')">${I.plus} Thêm công việc</button>`}
+      ${S.mode === 'rec' ? `<button class="btn btn-primary tb-add" aria-label="Thêm việc lặp lại" onclick="W.openRecurring('')">${I.plus}<span class="fab-text"> Thêm việc lặp lại</span></button>` : `<button class="btn btn-primary tb-add" aria-label="Thêm công việc" onclick="W.openTaskForm('')">${I.plus}<span class="fab-text"> Thêm công việc</span></button>`}
     </div>
   </div>`;
 }
@@ -380,8 +381,11 @@ function tree(){
   const groups = d.departments.map(dp => ({ dp, ps: live.filter(p => p.departmentId === dp.id) }));
   const loose = live.filter(p => !p.departmentId || !d.departments.some(x => x.id === p.departmentId));
   const head = id => id ? `<div class="text-[11px] text-gray-400 font-normal normal-case truncate">Trưởng: ${esc(user(id).name)}</div>` : '';
+  const curProj = S.project === 'all' ? 'Tất cả dự án' : (projById(S.project) || { name: '?' }).name;
   return `
-  <aside class="w-60 shrink-0 card p-3">
+  <aside id="wk-tree" class="wk-tree w-full md:w-60 shrink-0 card p-3">
+    <button class="tree-toggle" onclick="W.treeToggle()"><span class="flex items-center gap-2 min-w-0">${WI.folder}<span class="truncate">Dự án: <b>${esc(curProj)}</b></span></span><span class="text-gray-400">▾</span></button>
+    <div class="tree-body">
     <div class="flex items-center justify-between mb-2"><span class="section-title">Dự án</span>
       <span class="flex items-center gap-2">${isDir() ? `<a class="normal-case text-[12px] font-medium text-base-600 hover:underline cursor-pointer" onclick="W.openDepartments()">Phòng ban</a>` : ''}${canCreateProject() ? `<button class="text-base-600 hover:text-base-700" title="Thêm dự án" onclick="W.openProject('')">${I.plus}</button>` : ''}</span></div>
     <div class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer text-[13.5px] ${S.project === 'all' ? 'bg-base-50 text-base-700 font-semibold' : 'text-slate-700 hover:bg-gray-100'}" onclick="W.setProject('all')">${WI.folder}<span class="flex-1">Tất cả dự án</span><span class="text-[11.5px] text-gray-400">${ts.filter(t => isOpen(t) && live.some(p => p.id === t.projectId)).length || ''}</span></div>
@@ -391,6 +395,7 @@ function tree(){
       ${arch.length ? `<div><div class="px-2 pt-1 pb-0.5 text-[11.5px] font-semibold text-gray-400 uppercase tracking-wide cursor-pointer" onclick="W.toggleArch()">${S.showArch ? '▾' : '▸'} Đã lưu trữ (${arch.length})</div>${S.showArch ? arch.map(row).join('') : ''}</div>` : ''}
     </div>
     ${!live.length && !arch.length ? '<div class="px-2 py-3 text-[12.5px] text-gray-400">Bạn chưa tham gia dự án nào trong Workspace này.</div>' : ''}
+    </div>
   </aside>`;
 }
 function emptyWorkspace(){
@@ -430,7 +435,7 @@ function card(t, multi){
   const p = projById(t.projectId), od = overdue(t), ed = canEdit(t);
   return `
   <div class="bg-white rounded-lg border ${od ? 'border-red-200' : 'border-gray-200'} p-3 shadow-sm hover:shadow-md transition-shadow ${ed ? 'cursor-grab' : 'cursor-pointer'} ${t.status === 'done' ? 'opacity-75' : ''}"
-       data-id="${t.id}" ${ed ? 'draggable="true" ondragstart="W.dragStart(event,\'' + t.id + '\')" ondragend="W.dragEnd(event)"' : ''}
+       data-id="${t.id}" ${ed && FINE ? 'draggable="true" ondragstart="W.dragStart(event,\'' + t.id + '\')" ondragend="W.dragEnd(event)"' : ''}
        ondragover="W.cardOver(event,'${t.id}')" onclick="W.openTask('${t.id}')">
     <div class="flex items-start gap-2">
       <div class="w-1 self-stretch rounded-full shrink-0" style="background:${PRIO[t.priority].bar}" title="Ưu tiên: ${PRIO[t.priority].t}"></div>
@@ -449,6 +454,7 @@ function card(t, multi){
           </div>
           ${stack(t.assigneeIds)}
         </div>
+        ${ed ? `<select class="m-only input !py-1.5 !px-2 mt-2.5 !w-full" title="Đổi trạng thái" onclick="event.stopPropagation()" onchange="event.stopPropagation();W.setStatus('${t.id}',this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select>` : ''}
       </div>
     </div>
   </div>`;
@@ -523,23 +529,23 @@ function listView(){
   return `
   <div class="flex items-center gap-2 mb-3 flex-wrap">${tab('all', 'Tất cả')}${STATUS_KEYS.map(k => tab(k, STATUS[k].t)).join('')}${tab('overdue', 'Quá hạn')}</div>
   <div class="card overflow-x-auto">
-    <table class="w-full">
+    <table class="w-full m-cards">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide"><tr>
         <th class="w-10 py-2.5"></th>${th('title', 'Công việc')}${multi ? th('proj', 'Dự án') : ''}<th class="text-left font-medium py-2.5 px-2">Người làm</th>${th('pri', 'Ưu tiên')}${th('start', 'Bắt đầu')}${th('due', 'Hạn')}${th('status', 'Trạng thái', 'w-36')}<th class="w-16"></th>
       </tr></thead>
       <tbody class="divide-y divide-gray-100">
         ${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId), ed = canEdit(t); return `
         <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
-          <td class="text-center py-3" onclick="event.stopPropagation()"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} ${ed ? '' : 'disabled'} onchange="W.toggleDone('${t.id}')"></td>
-          <td class="py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>
+          <td class="mc-chk text-center py-3" onclick="event.stopPropagation()"><input type="checkbox" class="checkbox align-middle" ${t.status === 'done' ? 'checked' : ''} ${ed ? '' : 'disabled'} onchange="W.toggleDone('${t.id}')"></td>
+          <td class="mc-title py-3 px-2"><div class="font-medium ${t.status === 'done' ? 'line-through text-gray-400' : 'text-slate-900'}">${esc(t.title)}</div>
             <div class="flex items-center gap-2 mt-0.5 flex-wrap">${krChip(t)}${tagChips(t.tags.slice(0, 5))}${hoursChip(t) ? `<span class="text-[12px] text-gray-500">${hoursChip(t)}</span>` : ''}${subProg(t)}${t.recurrence ? `<span class="text-indigo-600 inline-flex items-center gap-1 text-[11.5px]">${WI.repeat}${esc(recText(t.recurrence))}</span>` : ''}${t.commentCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${I.chat}${t.commentCount}</span>` : ''}${t.attachCount ? `<span class="inline-flex items-center gap-1 text-[12px] text-gray-500">${WI.clip}${t.attachCount}</span>` : ''}${folBadge(t)}</div></td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(t.assigneeIds, 4)}</td>
           <td class="py-3 px-2">${prioBadge(t.priority)}</td>
-          <td class="py-3 px-2 text-[12.5px] whitespace-nowrap ${t.startDate ? 'text-slate-700' : 'text-gray-400'}">${t.startDate ? fmt(t.startDate) : '—'}</td>
+          <td class="mc-hide py-3 px-2 text-[12.5px] whitespace-nowrap ${t.startDate ? 'text-slate-700' : 'text-gray-400'}">${t.startDate ? fmt(t.startDate) : '—'}</td>
           <td class="py-3 px-2 text-[12.5px]">${dueHtml(t)}</td>
-          <td class="py-3 px-2" onclick="event.stopPropagation()">${statusCell(t)}</td>
-          <td class="py-3 text-center whitespace-nowrap" onclick="event.stopPropagation()">${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
+          <td class="mc-st py-3 px-2" onclick="event.stopPropagation()">${statusCell(t)}</td>
+          <td class="mc-act py-3 text-center whitespace-nowrap" onclick="event.stopPropagation()">${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
         </tr>`; }).join('') + (ts.length > S.listLimit ? `<tr><td colspan="9" class="p-3 text-center"><button class="btn btn-ghost btn-sm" onclick="W.moreList()">Xem thêm ${Math.min(200, ts.length - S.listLimit)} việc (còn ${ts.length - S.listLimit})</button></td></tr>` : '')
         : `<tr><td colspan="9" class="p-10 text-center text-gray-400">Không có công việc nào.</td></tr>`}
       </tbody>
@@ -625,14 +631,14 @@ function openTaskForm(id, status){
   const p = projById(S.draft.projectId);
   openModal(`
     ${modalHeader(isNew ? 'Thêm công việc' : 'Sửa nội dung công việc', isNew ? 'Giao việc cho bất kỳ ai. Sau khi tạo, tên và mô tả bị khoá trên bảng; chỉ bạn (người tạo) sửa lại được ở mục "Việc tôi tạo".' : 'Bạn là người tạo nên sửa được ở đây. Trên bảng, tên và mô tả của việc này đã bị khoá.')}
-    <div class="p-6 grid md:grid-cols-5 gap-6">
-      <div class="md:col-span-3 space-y-5 min-w-0">
+    <div class="p-6 grid md:grid-cols-5 gap-6 m-form">
+      <div class="md:col-span-3 space-y-5 min-w-0 m-col-main">
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(S.draft.title)}" maxlength="300" placeholder="Nhập nội dung công việc..." oninput="W.d('title',this.value)"></div>
         <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: S.draft.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết... (có thể dán ảnh bằng Ctrl+V)', minHeight: 130, images: true })}</div>
-        <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
-        <div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm <span class="font-normal text-gray-400">(tối đa ${MAX_MB}MB/tệp)</span></label><label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Chọn tệp<input type="file" multiple class="hidden" onchange="event.stopPropagation();W.pendFiles(this)" accept=".${OK_EXT.join(',.')}"></label></div><div id="tk-pfiles" class="space-y-1.5"></div></div>
+        <div class="m-last"><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
+        <div class="m-last"><div class="flex items-center justify-between"><label class="label">Tệp đính kèm <span class="font-normal text-gray-400">(tối đa ${MAX_MB}MB/tệp)</span></label><label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Chọn tệp<input type="file" multiple class="hidden" onchange="event.stopPropagation();W.pendFiles(this)" accept=".${OK_EXT.join(',.')}"></label></div><div id="tk-pfiles" class="space-y-1.5"></div></div>
       </div>
-      <div class="md:col-span-2 space-y-4 min-w-0">
+      <div class="md:col-span-2 space-y-4 min-w-0 m-col-side">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === S.draft.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
         <div class="grid grid-cols-2 gap-3">
           ${isNew ? `<div><label class="label">Trạng thái ban đầu</label><select class="input" onchange="W.d('status',this.value)">${STATUS_KEYS.map(k => `<option value="${k}" ${S.draft.status === k ? 'selected' : ''}>${STATUS[k].t}</option>`).join('')}</select></div>` : ''}
@@ -722,16 +728,16 @@ function openDetail(id){
   const ed = canEdit(t);
   openModal(`
     ${modalHeader('Chi tiết công việc', `Tạo bởi ${esc(user(t.createdBy || (t.assigneeIds[0] || '')).name)} · ${t.createdAt ? fmtDT(t.createdAt) : ''}${t.reportId ? ' · Từ báo cáo tuần' : ''}`)}
-    <div class="p-6 grid md:grid-cols-5 gap-6">
-      <div class="md:col-span-3 space-y-5 min-w-0">
+    <div class="p-6 grid md:grid-cols-5 gap-6 m-detail">
+      <div class="md:col-span-3 space-y-5 min-w-0 m-col-main">
         <div id="tk-head"></div>
-        <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
+        <div class="m-last"><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
         <div><div class="flex items-center justify-between"><label class="label">Tệp đính kèm</label>${ed ? `<label class="btn btn-ghost btn-sm cursor-pointer">${WI.clip} Thêm tệp<input type="file" multiple class="hidden" id="tk-file" onchange="event.stopPropagation();W.pickFiles(this)" accept=".${OK_EXT.join(',.')}"></label>` : ''}</div><div id="tk-att" class="space-y-1.5"><div class="text-[12.5px] text-gray-400">Đang tải...</div></div></div>
         <div><label class="label">Bình luận</label><div id="tk-cm" class="space-y-3"></div>
           <div class="mt-3 relative">
             ${richEditor('tk-cmt', { placeholder: 'Viết bình luận... gõ @ để nhắc tên đồng nghiệp', minHeight: 70, nodirty: true, onInput: 'event.stopPropagation();W.cmInput(this)', onKeyDown: 'W.cmKey(event)' })}
             <div id="tk-mention" class="hidden absolute left-2 right-2 z-10 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto" style="bottom:100%"></div>
-            <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400">Ctrl + Enter để gửi</span><button class="btn btn-primary btn-sm" id="tk-cm-send" onclick="W.postComment()">${I.chat} Gửi</button></div>
+            <div class="flex items-center justify-between mt-2"><span class="text-[12px] text-gray-400 desk-only">Ctrl + Enter để gửi</span><button class="btn btn-primary btn-sm" id="tk-cm-send" onclick="W.postComment()">${I.chat} Gửi</button></div>
           </div></div>
       </div>
       <div class="md:col-span-2 space-y-4 min-w-0" id="tk-side"></div>
@@ -1134,20 +1140,20 @@ function personalView(kind){
   </div>
   <div class="flex items-center gap-2 mb-3 flex-wrap">${tabBtn('open')}${tabBtn('done')}${tabBtn('all')}</div>
   <div class="card overflow-x-auto">
-    <table class="w-full">
+    <table class="w-full m-cards">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide"><tr>
         ${th('Công việc', 'px-3')}${multi ? th('Dự án') : ''}${th(mine ? 'Người giao' : 'Người thực hiện')}${th('Ưu tiên')}${th('Hạn')}${th('Trạng thái', 'px-2 w-36')}<th class="w-44"></th>
       </tr></thead>
       <tbody class="divide-y divide-gray-100">
         ${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId); return `
         <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
-          <td class="py-3 px-3 max-w-md"><div class="font-medium text-slate-900 ${t.status === 'done' ? 'line-through text-gray-400' : ''}">${esc(t.title)}</div>
+          <td class="mc-title py-3 px-3 max-w-md"><div class="font-medium text-slate-900 ${t.status === 'done' ? 'line-through text-gray-400' : ''}">${esc(t.title)}</div>
             ${krRef(t) || subProg(t) || folBadge(t) ? `<div class="mt-1 flex items-center gap-2 flex-wrap">${krChip(t)}${subProg(t)}${folBadge(t)}</div>` : ''}
             ${richPlain(t.description).trim() ? `<div class="text-[12.5px] text-gray-500 mt-0.5 truncate">${esc(richPlain(t.description).replace(/\s+/g, ' ').trim().slice(0, 140))}</div>` : ''}</td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${mine ? giver(t) : stack(t.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(t.priority)}</td><td class="py-3 px-2 text-[12.5px]">${dueHtml(t)}</td>
-          <td class="py-3 px-2" ${mine ? 'onclick="event.stopPropagation()"' : ''}>${mine ? statusCell(t) : statusBadge(t.status)}</td>
-          <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${canEditContent(t) ? `<button class="btn btn-ghost btn-sm" onclick="W.openTaskForm('${t.id}')">${I.edit} Sửa nội dung</button>` : ''}${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
+          <td class="mc-st py-3 px-2" ${mine ? 'onclick="event.stopPropagation()"' : ''}>${mine ? statusCell(t) : statusBadge(t.status)}</td>
+          <td class="mc-act py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${canEditContent(t) ? `<button class="btn btn-ghost btn-sm" onclick="W.openTaskForm('${t.id}')">${I.edit} Sửa nội dung</button>` : ''}${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
         </tr>`; }).join('') + (ts.length > S.listLimit ? `<tr><td colspan="7" class="p-3 text-center"><button class="btn btn-ghost btn-sm" onclick="W.moreList()">Xem thêm ${Math.min(200, ts.length - S.listLimit)} việc (còn ${ts.length - S.listLimit})</button></td></tr>` : '') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${empty}</td></tr>`}
       </tbody>
     </table>
@@ -1184,20 +1190,20 @@ function recView(){
     <span class="text-[12.5px] text-gray-400 ml-1">${filtering ? `Hiện ${rs.length} / ${base.length} việc lặp lại` : `${base.length} việc lặp lại`}</span>
   </div>
   <div class="card overflow-x-auto">
-    <table class="w-full">
+    <table class="w-full m-cards">
       <thead class="bg-gray-50 text-gray-500 text-[12px] uppercase tracking-wide"><tr>
         <th class="text-left font-medium py-2.5 px-3">Việc lặp lại</th>${multi ? '<th class="text-left font-medium py-2.5 px-2">Dự án</th>' : ''}<th class="text-left font-medium py-2.5 px-2">Người thực hiện</th><th class="text-left font-medium py-2.5 px-2">Ưu tiên</th><th class="text-left font-medium py-2.5 px-2">Lịch lặp</th><th class="text-left font-medium py-2.5 px-2">Việc đang mở</th><th class="w-36"></th>
       </tr></thead>
       <tbody class="divide-y divide-gray-100">
         ${rs.length ? rs.map(r => { const p = projById(r.projectId); return `
         <tr class="hover:bg-gray-50 cursor-pointer" onclick="W.openRecurring('${r.id}')">
-          <td class="py-3 px-3 max-w-md"><div class="font-medium text-slate-900">${esc(r.title)}</div>
+          <td class="mc-title py-3 px-3 max-w-md"><div class="font-medium text-slate-900">${esc(r.title)}</div>
             <div class="text-[12px] text-gray-400 mt-0.5">Tạo bởi ${esc(user(r.createdBy).name)}</div>${richPlain(r.description).trim() ? `<div class="text-[12.5px] text-gray-500 mt-0.5 truncate">${esc(richPlain(r.description).replace(/\s+/g, ' ').trim().slice(0, 140))}</div>` : ''}</td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(r.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(r.priority)}</td>
           <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
           <td class="py-3 px-2 text-[12.5px]">${[r.openCount ? `<div class="text-slate-700">Đang mở ${r.openCount} việc · hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</div>` : '', r.pendingDue ? `<div class="text-indigo-700">Việc mới sẽ xuất hiện ngày ${fmt(r.pendingDue)}</div>` : (r.openCount ? '' : '<div class="text-amber-600">Chưa có (lịch đã kết thúc)</div>')].join('')}</td>
-          <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
+          <td class="mc-act py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
         </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${filtering && base.length ? 'Không có việc lặp lại nào khớp bộ lọc. <a class="text-base-600 underline cursor-pointer" onclick="W.clearRF()">Xoá lọc</a>' : 'Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.'}</td></tr>`}
       </tbody>
     </table>
@@ -1219,13 +1225,13 @@ function openRecurring(id){
   const p = projById(r.projectId), v = ro();
   openModal(`
     ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; các lần sau tự xuất hiện đúng ngày theo lịch, không cần việc trước đã xong.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
-    <div class="p-6 grid md:grid-cols-5 gap-6">
-      <div class="md:col-span-3 space-y-5 min-w-0">
+    <div class="p-6 grid md:grid-cols-5 gap-6 m-form">
+      <div class="md:col-span-3 space-y-5 min-w-0 m-col-main">
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(r.title)}" maxlength="300" placeholder="VD: Báo cáo doanh số cuối ngày" ${v ? 'disabled' : ''} oninput="W.d('title',this.value)"></div>
         <div><label class="label">Mô tả</label>${richEditor('tk-desc', { value: r.description, placeholder: 'Mô tả chi tiết, yêu cầu, liên kết... (có thể dán ảnh bằng Ctrl+V)', minHeight: 110, disabled: v, images: true })}</div>
-        <div><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
+        <div class="m-last"><label class="label">Việc con / Checklist <span id="tk-subcount" class="font-normal text-gray-400"></span></label><div id="tk-subs"></div></div>
       </div>
-      <div class="md:col-span-2 space-y-4 min-w-0">
+      <div class="md:col-span-2 space-y-4 min-w-0 m-col-side">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === r.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
         <div><label class="label">Ưu tiên</label><select class="input" ${v ? 'disabled' : ''} onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, x]) => `<option value="${k}" ${r.priority === k ? 'selected' : ''}>${x.t}</option>`).join('')}</select></div>
         ${isNew ? '' : `<div class="text-[12.5px] text-gray-500">${[r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : '', r.pendingDue ? `Việc mới sẽ tự xuất hiện vào ngày <b>${fmt(r.pendingDue)}</b>.` : (r.openDue ? '' : 'Hiện chưa có việc nào đang mở.')].filter(Boolean).join(' ')}</div>`}
@@ -1395,6 +1401,7 @@ function clearRF(){ S.rf = { who: 'all', pri: 'all', type: 'all' }; repaint(); }
 function setTm(p){ if(!TM_PRESETS.some(x => x[0] === p)) return; S.tm.p = p; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
 function setTmBy(v){ if(!TM_BY.some(x => x[0] === v)) return; S.tm.by = v; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
 function setTmDate(k, v){ if(k !== 'from' && k !== 'to') return; S.tm[k] = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; S.listLimit = 200; S.doneLimit = DONE_SHOW; repaint(); }
+function treeToggle(){ const el = $('wk-tree'); if(el) el.classList.toggle('tree-open'); }
 function toggleArch(){ S.showArch = !S.showArch; repaint(); }
 function sortBy(k){ S.sort = S.sort.k === k ? { k, d: -S.sort.d } : { k, d: 1 }; repaint(); }
 function moreDone(){ S.doneLimit += DONE_SHOW; repaint(); }
@@ -1403,7 +1410,7 @@ function reload(){ S.version = null; load(); }
 function retry(){ S.error = null; S.data = null; repaint(); }
 
 window.W = {
-  view, load, reload, reset, poll, repaint, active, dragging, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry,
+  view, load, reload, reset, poll, repaint, active, dragging, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry, treeToggle,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, gotoTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
