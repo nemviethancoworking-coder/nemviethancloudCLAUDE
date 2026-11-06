@@ -24,7 +24,7 @@ const { pipeline } = require('stream/promises');
 const { Transform } = require('stream');
 
 const STATUSES = ['todo', 'doing', 'review', 'done'];
-const PENDING = 'pending';                  // tasks.spawned_id của việc lặp lại đã xong nhưng việc kế tiếp chưa đến ngày tạo
+const PENDING = 'pending';                  // (cũ, v16–v17) tasks.spawned_id của việc đã xong chờ lần kế tiếp; từ v18 không còn dùng, chỉ còn trong dữ liệu cũ
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const DEFAULT_WS = 'w_default', DEFAULT_DEPT = 'd_default', DEFAULT_PROJECT = 'p_general';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/uploads';
@@ -268,6 +268,17 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       ON CONFLICT DO NOTHING`, [now]);
     await pool.query(`UPDATE tasks t SET series_id = 'r_' || t.id WHERE t.recurrence IS NOT NULL AND t.spawned_id = '' AND t.status <> 'done'
       AND t.series_id <> 'r_' || t.id AND EXISTS (SELECT 1 FROM recurring_tasks r WHERE r.id = 'r_' || t.id)`);
+    // v18: việc lặp lại sinh theo lịch, không đợi việc cũ xong. Mẫu đang "kẹt" (việc cũ chưa xong nên chưa có lần kế tiếp: next_due rỗng)
+    // được đặt lại next_due = lần lặp gần nhất từ hôm nay trở đi (đến ngày thì máy chủ tạo ngay). Chạy lại an toàn: mẫu hết hạn lịch vẫn rỗng.
+    const today = todayISO();
+    const stuck = (await pool.query(`SELECT r.id, r.rule, (SELECT max(t.due) FROM tasks t WHERE t.series_id = r.id AND t.due <> '') AS last_due
+      FROM recurring_tasks r WHERE r.next_due = ''`)).rows;
+    for (const s of stuck) {
+      const rule = cleanRule(s.rule); if (!rule) continue;
+      const base = s.last_due && validISO(s.last_due) ? s.last_due : isoOf(addDays(parseISO(today), -1));
+      const due = nextDue(rule, base, today);
+      if (due) await pool.query(`UPDATE recurring_tasks SET next_due=$2 WHERE id=$1 AND next_due=''`, [s.id, due]);
+    }
     try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) { console.error('Không tạo được thư mục tệp đính kèm ' + UPLOAD_DIR + ': ' + e.message); }
   }
 
@@ -473,51 +484,51 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
   }
 
   /**
-   * Đổi trạng thái 1 công việc. Khi chuyển sang Done: ghi thời điểm hoàn thành và, nếu là việc lặp lại, tính ngày của lần kế tiếp.
-   * Việc kế tiếp KHÔNG xuất hiện ngay: ngày chưa đến thì chỉ được hẹn (recurring_tasks.next_due) và máy chủ tự tạo khi đến ngày
-   * (spawnDueRecurring). Mỗi việc chỉ hẹn/sinh MỘT lần dù mở lại rồi làm xong lần nữa.
-   * Trả về { spawned: { id, due } } nếu việc mới đã xuất hiện (đến ngày rồi), hoặc { scheduled: { due, title } } nếu được hẹn ngày.
+   * Đổi trạng thái 1 công việc. Khi chuyển sang Done: ghi thời điểm hoàn thành.
+   * Việc lặp lại KHÔNG còn phụ thuộc vào việc cũ đã xong hay chưa: máy chủ tự tạo việc mới đúng lịch của mẫu
+   * (recurring_tasks.next_due → spawnDueRecurring), việc cũ chưa xong vẫn giữ nguyên và hiện quá hạn.
    */
   async function applyStatus(c, t, status) {
     if (t.status === status) return {};
     const done = status === 'done';
     await c.q.query('UPDATE tasks SET status=$2, completed_at=$3 WHERE id=$1', [t.id, status, done ? new Date().toISOString() : '']);
-    if (!done || !t.series_id || t.spawned_id) return {};
-    const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [t.series_id]); if (!tpl) return {};     // mẫu đã bị xoá → dừng lặp
-    const rule = cleanRule(tpl.rule); if (!rule) return {};
-    const today = todayISO();
-    const due = nextDue(rule, t.due, today); if (!due) return {};
-    if (due > today) {                                                                      // chưa đến ngày: hẹn, chưa tạo việc
-      await c.q.query('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [tpl.id, due]);
-      await c.q.query('UPDATE tasks SET spawned_id=$2 WHERE id=$1', [t.id, PENDING]);
-      return { scheduled: { due, title: tpl.title } };
+    return {};
+  }
+  /** Ngày lặp ngay sau ngày d (chuỗi ISO) theo lịch; '' nếu vượt ngày kết thúc. */
+  function afterISO(rule, d) {
+    const n = isoOf(nextAfter(rule, parseISO(d)));
+    return rule.end && n > rule.end ? '' : n;
+  }
+  const MAX_CATCHUP = 100;                    // số việc tối đa tạo bù cho 1 mẫu trong một lần chạy (lần sau chạy tiếp)
+  /**
+   * Tạo mọi việc của mẫu có ngày lặp ≤ hôm nay, bắt đầu từ tpl.next_due (tạo bù đủ các ngày bị lỡ), rồi đẩy next_due tới lần kế tiếp.
+   * Dự án đã lưu trữ/xoá thì không tạo và bỏ qua tới lần sau hôm nay. Trả về mảng { id, due }.
+   */
+  async function spawnTemplateUpTo(c, tpl, today) {
+    const rule = cleanRule(tpl.rule);
+    const made = [];
+    let d = rule ? tpl.next_due : '';
+    if (!rule || !d) { if (tpl.next_due) await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]); return made; }
+    if (rule.end && d > rule.end) d = '';
+    for (let guard = 0; d && d <= today && guard < MAX_CATCHUP; guard++) {
+      const id = await spawnInstance(c, tpl, rule, d);
+      if (!id) { d = afterISO(rule, today); break; }                 // dự án đã lưu trữ: không tạo bù, chờ lần sau
+      made.push({ id, due: d });
+      d = afterISO(rule, d);
     }
-    const id = await spawnInstance(c, tpl, rule, due); if (!id) return {};
-    await c.q.query('UPDATE tasks SET spawned_id=$2 WHERE id=$1', [t.id, id]);
-    return { spawned: { id, due, title: tpl.title } };
+    if (d !== tpl.next_due) await c.q.query('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [tpl.id, d]);
+    return made;
   }
   /**
    * Tạo các việc lặp lại đã ĐẾN NGÀY (next_due <= hôm nay). Chạy định kỳ ở nền (server.js) và mỗi lần mở màn Công việc.
-   * Nếu ngày hẹn đã trôi qua (máy chủ tắt lâu) thì nhảy tới lần gần nhất chưa qua, không sinh việc đã quá hạn.
+   * Không phụ thuộc việc trước đã xong chưa; ngày bị lỡ (máy chủ tắt…) được tạo bù đủ.
    * `c` cần { q, byId, me }; trả về số việc đã tạo.
    */
   async function spawnDueRecurring(c) {
     const today = todayISO();
     const rows = (await c.q.query(`SELECT * FROM recurring_tasks WHERE next_due <> '' AND next_due <= $1 ORDER BY seq`, [today])).rows;
     let made = 0;
-    for (const tpl of rows) {
-      const rule = cleanRule(tpl.rule);
-      let due = rule ? tpl.next_due : '';
-      if (rule && due < today) due = nextDue(rule, due, today) || '';
-      if (!due || (rule && rule.end && due > rule.end)) { await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]); continue; }
-      if (due > today) { await c.q.query('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [tpl.id, due]); continue; }
-      const id = await spawnInstance(c, tpl, rule, due);
-      await c.q.query(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [tpl.id]);
-      if (id) {
-        await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [tpl.id, id, PENDING]);
-        made++;
-      }
-    }
+    for (const tpl of rows) made += (await spawnTemplateUpTo(c, tpl, today)).length;
     return made;
   }
   /** Sinh 1 việc từ mẫu lặp lại (nội dung lấy theo mẫu hiện tại). Dự án đã lưu trữ/xoá thì không sinh. Trả về mã việc mới hoặc null. */
@@ -834,30 +845,29 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const tags = cleanTags(r.tags), subtasks = cleanSubtasks(r.subtasks).map(s => ({ ...s, done: false })), desc = cleanRich(r.description, 20000);
       const estHours = r.estHours === undefined && old ? (old.est_hours == null ? null : Number(old.est_hours)) : cleanHours(r.estHours);
       const followers = Array.isArray(r.followerIds) ? cleanFollowers(c, r.followerIds, ids, old ? idList(old.followers) : []) : (old ? idList(old.followers).filter(f => !ids.includes(f)) : []);
-      // Việc đầu tiên (hoặc việc kế tiếp nếu chuỗi đang không có việc mở) — kiểm tra trước khi ghi
-      const open = old ? await one(c.q, `SELECT 1 FROM tasks WHERE series_id=$1 AND status <> 'done' LIMIT 1`, [r.id]) : null;
-      let due = '', pendingDue = old ? (old.next_due || '') : '';
+      // next_due = ngày của lần lặp kế tiếp chưa được tạo; luôn có giá trị khi lịch còn hiệu lực, không phụ thuộc việc cũ đã xong chưa.
       const today = todayISO();
+      let pendingDue;
       if (!old) {
-        due = normDue(r.firstDue) || today;
-        if (rule.end && due > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.');
-      } else if (!open) {
-        const baseDay = pendingDue && pendingDue > today ? pendingDue : today;                 // đang hẹn ngày thì giữ ngày hẹn (đổi lịch thì lấy lần đầu tiên từ ngày hẹn trở đi)
-        due = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
-        if (!due) throw new AppError('Lịch lặp đã quá ngày kết thúc. Hãy chọn ngày kết thúc muộn hơn.');
-        pendingDue = due > today ? due : '';                                                 // chưa đến ngày: hẹn, đến ngày máy chủ mới tạo việc
-        if (due > today) due = '';
-      } else pendingDue = '';
+        pendingDue = normDue(r.firstDue) || today;                                          // việc đầu tiên: tạo ngay nếu đã đến ngày
+        if (rule.end && pendingDue > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.');
+      } else {
+        const baseDay = old.next_due && old.next_due > today ? old.next_due : today;          // giữ ngày đã hẹn; đổi lịch thì lấy lần đầu tiên từ ngày đó trở đi
+        pendingDue = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
+        if (!pendingDue) throw new AppError('Lịch lặp đã quá ngày kết thúc. Hãy chọn ngày kết thúc muộn hơn.');
+      }
       const now = new Date().toISOString();
       const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue];
       if (old) await c.q.query('UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, updated_at=$13 WHERE id=$1', [...row, now]);
       else await c.q.query('INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)', [...row, c.me.id, now]);
       const result = {};
-      if (due) {
+      if (pendingDue <= today) {                                                              // đến ngày rồi: tạo việc ngay (không đợi lượt chạy nền)
         const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [r.id]);
-        const id = await spawnInstance(c, tpl, rule, due);
-        if (id) { result.spawned = { id, due, title }; await c.q.query(`UPDATE tasks SET spawned_id=$2 WHERE series_id=$1 AND spawned_id=$3`, [r.id, id, PENDING]); }
-      } else if (pendingDue) result.scheduled = { due: pendingDue, title };
+        const made = await spawnTemplateUpTo(c, tpl, today);
+        if (made.length) result.spawned = { id: made[0].id, due: made[0].due, title };
+        const after = await one(c.q, 'SELECT next_due FROM recurring_tasks WHERE id=$1', [r.id]);
+        if (after && after.next_due) result.scheduled = { due: after.next_due, title };
+      } else result.scheduled = { due: pendingDue, title };
       return result;
     },
     async deleteRecurring(c, p) {

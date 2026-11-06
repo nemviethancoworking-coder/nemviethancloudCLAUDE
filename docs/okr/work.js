@@ -921,7 +921,7 @@ function paintRecurrence(){
     ${type === 'weekly' ? `<div class="flex gap-1 mt-2">${[1, 2, 3, 4, 5, 6, 7].map(n => `<button type="button" ${r ? 'disabled' : ''} class="w-9 h-8 rounded-md text-[12.5px] font-medium border ${rule.weekdays.includes(n) ? 'bg-base-500 text-white border-base-500' : 'bg-white text-slate-600 border-gray-300 hover:bg-gray-50'}" onclick="W.recWd(${n})">${WD[n]}</button>`).join('')}</div>` : ''}
     ${type === 'monthly' ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Vào ngày <input type="number" min="1" max="31" class="input !w-20 !py-1" value="${rule.monthDay}" ${r ? 'disabled' : ''} onchange="W.recSet('monthDay',Math.max(1,Math.min(31,Number(this.value)||1)))"> hằng tháng</div><div class="text-[11.5px] text-gray-400 mt-1">Tháng không có ngày này sẽ lấy ngày cuối tháng.</div>` : ''}
     ${rule ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Kết thúc <input type="date" class="input !w-40 !py-1" value="${esc(rule.end || '')}" ${r ? 'disabled' : ''} onchange="W.recSet('end',this.value)"><span class="text-[11.5px] text-gray-400">(tuỳ chọn)</span></div>
-      <div class="mt-2 text-[12.5px] ${nx ? 'text-indigo-700 bg-indigo-50' : 'text-amber-700 bg-amber-50'} rounded-lg px-2.5 py-2">${WI.repeat} ${nx ? `Khi bấm <b>Hoàn thành</b>, việc kế tiếp sẽ <b>tự xuất hiện vào ngày ${fmt(nx)}</b> (chưa đến ngày thì chưa hiện).` : 'Chưa có lần lặp kế tiếp (kiểm tra thứ trong tuần / ngày kết thúc).'}</div>` : ''}`;
+      <div class="mt-2 text-[12.5px] ${nx ? 'text-indigo-700 bg-indigo-50' : 'text-amber-700 bg-amber-50'} rounded-lg px-2.5 py-2">${WI.repeat} ${nx ? `Việc mới sẽ <b>tự xuất hiện đúng lịch</b>, lần kế tiếp vào ngày <b>${fmt(nx)}</b> — dù việc trước đã hoàn thành hay chưa.` : 'Chưa có lần lặp kế tiếp (kiểm tra thứ trong tuần / ngày kết thúc).'}</div>` : ''}`;
 }
 function recType(v){
   if(!v) S.draft.recurrence = null;
@@ -1172,7 +1172,7 @@ function recView(){
   const multi = S.project === 'all';
   return `
   <div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
-    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa việc lặp lại.</b> Ai cũng tạo được và giao cho bất kỳ ai. Khi một việc được đánh dấu <b>Hoàn thành</b>, việc kế tiếp chỉ <b>xuất hiện khi đến ngày</b> theo lịch (chưa đến ngày thì chưa hiện). Sửa lịch hay nội dung ở đây chỉ áp dụng cho các việc sinh <b>sau</b> — việc đã sinh ra giữ nguyên và bị khoá tên, mô tả như mọi việc khác. Người sửa/xoá: người tạo và cấp trên của họ.</div>
+    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Nơi tạo và sửa việc lặp lại.</b> Ai cũng tạo được và giao cho bất kỳ ai. Việc mới <b>tự xuất hiện đúng ngày theo lịch</b>, dù việc trước đã <b>Hoàn thành</b> hay chưa (việc chưa xong vẫn giữ nguyên và hiện quá hạn). Sửa lịch hay nội dung ở đây chỉ áp dụng cho các việc sinh <b>sau</b> — việc đã sinh ra giữ nguyên và bị khoá tên, mô tả như mọi việc khác. Người sửa/xoá: người tạo và cấp trên của họ.</div>
     <button class="btn btn-primary" onclick="W.openRecurring('')">${I.plus} Thêm việc lặp lại</button>
   </div>
   <div class="flex items-center gap-2 flex-wrap mb-3">
@@ -1196,7 +1196,7 @@ function recView(){
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(r.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(r.priority)}</td>
           <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
-          <td class="py-3 px-2 text-[12.5px]">${r.openCount ? `<span class="text-slate-700">Hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</span>` : r.pendingDue ? `<span class="text-indigo-700">Sẽ xuất hiện ngày ${fmt(r.pendingDue)}</span>` : '<span class="text-amber-600">Chưa có (lịch đã kết thúc)</span>'}</td>
+          <td class="py-3 px-2 text-[12.5px]">${[r.openCount ? `<div class="text-slate-700">Đang mở ${r.openCount} việc · hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</div>` : '', r.pendingDue ? `<div class="text-indigo-700">Việc mới sẽ xuất hiện ngày ${fmt(r.pendingDue)}</div>` : (r.openCount ? '' : '<div class="text-amber-600">Chưa có (lịch đã kết thúc)</div>')].join('')}</td>
           <td class="py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
         </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${filtering && base.length ? 'Không có việc lặp lại nào khớp bộ lọc. <a class="text-base-600 underline cursor-pointer" onclick="W.clearRF()">Xoá lọc</a>' : 'Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.'}</td></tr>`}
       </tbody>
@@ -1218,7 +1218,7 @@ function openRecurring(id){
   S.draft = r; S.draft.isNew = isNew; S.draft.kind = 'recurring'; S.draft.readOnly = !isNew && !r.canEdit; S.detail = null; S.mention = new Set();
   const p = projById(r.projectId), v = ro();
   openModal(`
-    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; mỗi lần có người bấm Hoàn thành, việc kế tiếp tự xuất hiện khi đến ngày theo lịch.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
+    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; các lần sau tự xuất hiện đúng ngày theo lịch, không cần việc trước đã xong.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
     <div class="p-6 grid md:grid-cols-5 gap-6">
       <div class="md:col-span-3 space-y-5 min-w-0">
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(r.title)}" maxlength="300" placeholder="VD: Báo cáo doanh số cuối ngày" ${v ? 'disabled' : ''} oninput="W.d('title',this.value)"></div>
@@ -1228,7 +1228,7 @@ function openRecurring(id){
       <div class="md:col-span-2 space-y-4 min-w-0">
         <div><label class="label">Dự án</label>${isNew ? `<select id="tk-proj" class="input" onchange="W.d('projectId',this.value);W.paintAssignees()">${creatableProjects().map(x => `<option value="${x.id}" ${x.id === r.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : `<div class="flex items-center gap-2 text-[14px] text-slate-700 py-1.5">${projDot(p)}${esc(p ? p.name : '?')}</div>`}</div>
         <div><label class="label">Ưu tiên</label><select class="input" ${v ? 'disabled' : ''} onchange="W.d('priority',this.value)">${Object.entries(PRIO).map(([k, x]) => `<option value="${k}" ${r.priority === k ? 'selected' : ''}>${x.t}</option>`).join('')}</select></div>
-        ${isNew ? '' : `<div class="text-[12.5px] text-gray-500">${r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : r.pendingDue ? `Việc kế tiếp sẽ tự xuất hiện vào ngày <b>${fmt(r.pendingDue)}</b>.` : 'Hiện chưa có việc nào đang mở.'}</div>`}
+        ${isNew ? '' : `<div class="text-[12.5px] text-gray-500">${[r.openDue ? `Việc đang mở hiện có hạn <b>${fmt(r.openDue)}</b> (giữ nguyên).` : '', r.pendingDue ? `Việc mới sẽ tự xuất hiện vào ngày <b>${fmt(r.pendingDue)}</b>.` : (r.openDue ? '' : 'Hiện chưa có việc nào đang mở.')].filter(Boolean).join(' ')}</div>`}
         <div><label class="label">Thời gian hoàn thành (giờ) <span class="font-normal text-gray-400">(tuỳ chọn)</span></label><input id="tk-hours" type="number" inputmode="decimal" min="0" max="1000" step="0.25" class="input" value="${S.draft.estHours == null ? '' : esc(S.draft.estHours)}" placeholder="VD: 2 hoặc 1.5" ${v ? 'disabled' : ''} oninput="W.d('estHours',this.value)"></div>
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>

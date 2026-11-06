@@ -302,13 +302,14 @@ describe('API công việc', () => {
     assert.equal(first.subtasks[0].done, false, 'việc con được đặt lại'); assert.equal(first.recurrence.type, 'weekly');
     // việc sinh từ lịch lặp: khoá nội dung kể cả với người tạo → phải sửa ở mẫu
     await denied(ptok.mgr, 'saveTask', { task: { ...first, title: 'Đổi tên' } }, /lặp lại/);
-    // Done → việc kế tiếp chỉ được HẸN NGÀY, chưa xuất hiện (ngày chưa đến)
+    // Lịch kế tiếp đã được hẹn ngay từ lúc tạo mẫu (không phụ thuộc việc cũ xong hay chưa)
+    assert.ok(cr.result.scheduled && cr.result.scheduled.due > today && cr.result.scheduled.due <= plusDays(7), 'được hẹn đúng ngày kế tiếp theo lịch');
+    // Done không còn sinh/hẹn gì thêm
     const r = await call(ptok.a, 'moveTask', { id: first.id, status: 'done' });
-    assert.ok(r.result && !r.result.spawned, 'chưa đến ngày thì chưa tạo việc mới');
-    assert.ok(r.result.scheduled && r.result.scheduled.due > today && r.result.scheduled.due <= plusDays(7), 'được hẹn đúng ngày kế tiếp theo lịch');
+    assert.ok(r.result && !r.result.spawned && !r.result.scheduled, 'bấm Hoàn thành không tạo việc mới');
     const w0 = await work(ptok.mgr, w1);
     assert.equal(w0.tasks.filter(x => x.title === 'Họp giao ban').length, 1, 'danh sách chưa có việc mới');
-    const tplRow = w0.recurring.find(x => x.id === R.id); assert.equal(tplRow.pendingDue, r.result.scheduled.due); assert.equal(tplRow.openCount, 0);
+    const tplRow = w0.recurring.find(x => x.id === R.id); assert.equal(tplRow.pendingDue, cr.result.scheduled.due); assert.equal(tplRow.openCount, 0);
     // mở lại rồi làm xong lần nữa → không hẹn/sinh thêm
     await call(ptok.a, 'moveTask', { id: first.id, status: 'review' });
     const again = await call(ptok.a, 'moveTask', { id: first.id, status: 'done' }); assert.ok(!again.result.spawned && !again.result.scheduled);
@@ -324,15 +325,15 @@ describe('API công việc', () => {
     assert.equal(next.status, 'todo'); assert.equal(next.title, 'Họp giao ban'); assert.deepEqual(next.assigneeIds, [a, b]);
     assert.equal(next.priority, 'high'); assert.deepEqual(next.tags, ['họp']); assert.equal(next.description, 'Mỗi tuần'); assert.equal(next.createdBy, mgr);
     assert.equal(next.due, today); assert.equal(next.seriesId, R.id);
-    assert.equal(wn.recurring.find(x => x.id === R.id).pendingDue, '', 'hết hẹn sau khi đã tạo');
-    assert.equal(wn.tasks.find(x => x.id === first.id).spawned, true);
+    assert.ok(wn.recurring.find(x => x.id === R.id).pendingDue > today, 'sau khi tạo thì hẹn tiếp lần kế');
+    assert.equal(wn.tasks.find(x => x.id === first.id).status, 'done');
     assert.equal(wn.tasks.filter(x => x.title === 'Họp giao ban').length, 2);
     // sửa mẫu: việc đã sinh ra giữ nguyên; việc kế tiếp lấy nội dung mới
     const up = await call(ptok.mgr, 'saveRecurring', { recurring: { ...R, title: 'Họp giao ban (mới)', assigneeIds: [a], priority: 'low' } });
     assert.ok(!up.result.spawned, 'đang có việc mở thì không sinh thêm');
     const still = (await work(ptok.mgr, w1)).tasks.find(x => x.id === next.id); assert.equal(still.title, 'Họp giao ban'); assert.deepEqual(still.assigneeIds, [a, b]);
     const r3 = await call(ptok.a, 'moveTask', { id: next.id, status: 'done' });
-    assert.ok(!r3.result.spawned && r3.result.scheduled.due > today);
+    assert.ok(!r3.result.spawned && !r3.result.scheduled);
     await arrive(R.id);
     const n3 = (await work(ptok.mgr, w1)).tasks.find(x => x.seriesId === R.id && x.status !== 'done');
     assert.equal(n3.title, 'Họp giao ban (mới)'); assert.deepEqual(n3.assigneeIds, [a]); assert.equal(n3.priority, 'low');
@@ -364,16 +365,15 @@ describe('API công việc', () => {
     assert.equal(await find(ptok.a), undefined);
   });
   test('Việc lặp lại theo ngày/tháng và ngày kết thúc', async () => {
-    const mk = async (rule) => (await call(ptok.mgr, 'saveRecurring', { recurring: REC({ rule }) })).result.spawned.id;
+    const mk = async (rule) => (await call(ptok.mgr, 'saveRecurring', { recurring: REC({ rule }) })).result;
     const dly = await mk({ type: 'daily' });
-    const r = await call(ptok.a, 'updateTask', { id: dly, patch: { status: 'done' } });               // đường cũ (báo cáo tuần) cũng kích hoạt
-    assert.equal(r.result.scheduled.due, plusDays(1)); assert.ok(!r.result.spawned, 'mai mới tới hạn thì hôm nay chưa tạo');
+    assert.equal(dly.scheduled.due, plusDays(1)); assert.ok(dly.spawned, 'việc đầu tiên tạo ngay');
+    const r = await call(ptok.a, 'updateTask', { id: dly.spawned.id, patch: { status: 'done' } });     // đường cũ (báo cáo tuần): Done không sinh gì thêm
+    assert.ok(!r.result.scheduled && !r.result.spawned);
     const mth = await mk({ type: 'monthly', monthDay: 31 });
-    const r2 = await call(ptok.a, 'moveTask', { id: mth, status: 'done' });
-    assert.match(r2.result.scheduled.due, /^\d{4}-\d{2}-(28|29|30|31)$/);
+    assert.match(mth.scheduled.due, /^\d{4}-\d{2}-(28|29|30|31)$/);
     const fin = await mk({ type: 'daily', end: todayISO() });
-    const r3 = await call(ptok.a, 'moveTask', { id: fin, status: 'done' });
-    assert.ok(!r3.result.spawned && !r3.result.scheduled, 'quá ngày kết thúc thì dừng');
+    assert.ok(fin.spawned && !fin.scheduled, 'quá ngày kết thúc thì không hẹn tiếp');
   });
   test('v9: việc lặp lại cũ (chưa có mẫu) được chuyển thành mẫu khi nâng cấp máy chủ', async () => {
     const db = new Client({ ...PGENV, host: PGENV.PGHOST, port: Number(PGENV.PGPORT), user: PGENV.PGUSER, password: PGENV.PGPASSWORD, database: DBNAME });
@@ -389,10 +389,11 @@ describe('API công việc', () => {
     const tpl = w.recurring.find(x => x.id === 'r_' + id);
     assert.ok(tpl, 'phải có mẫu'); assert.equal(tpl.title, 'Việc lặp kiểu cũ'); assert.equal(tpl.createdBy, mgr); assert.deepEqual([...tpl.assigneeIds].sort(), [a, b].sort());
     assert.equal(tpl.rule.interval, 2); assert.equal(tpl.subtasks[0].done, false); assert.equal(tpl.openCount, 1); assert.equal(tpl.canEdit, true);
+    assert.equal(tpl.pendingDue, plusDays(2), 'mẫu chuyển từ việc cũ được hẹn lần lặp kế tiếp ngay, dù việc cũ chưa xong');
     assert.equal(w.tasks.find(x => x.id === id).seriesId, 'r_' + id);
     await denied(ptok.mgr, 'saveTask', { task: { id, projectId: p1, title: 'Đổi' } }, /lặp lại/);        // việc cũ cũng bị khoá nội dung
-    const r = await call(ptok.a, 'moveTask', { id, status: 'done' });                                  // vẫn tự sinh việc kế tiếp
-    assert.equal(r.result.scheduled.due, plusDays(2)); assert.ok(!r.result.spawned);
+    const r = await call(ptok.a, 'moveTask', { id, status: 'done' });                                  // Done không sinh thêm (lịch đã hẹn sẵn)
+    assert.ok(!r.result.scheduled && !r.result.spawned);
     await stopServer(); await startServer();                                                          // chạy migrate lần nữa: không tạo mẫu trùng
     ptok.mgr = await login('mgr'); ptok.a = await login('a'); ptok.b = await login('b'); ptok.head = await login('head'); ptok.c = await login('c'); ptok.mgr2 = await login('mgr2'); dir = await login('admin');
     assert.equal((await work(ptok.mgr, w1)).recurring.filter(x => x.title === 'Việc lặp kiểu cũ').length, 1);
@@ -499,31 +500,60 @@ describe('API công việc', () => {
     await call(ptok.mgr, 'deleteRecurring', { id: R.id });
   });
 
-  test('v16: việc lặp lại chỉ xuất hiện khi ĐẾN NGÀY; ngày chưa tới thì khởi động lại cũng không tạo; ngày đã qua thì nhảy tới lần gần nhất', async () => {
+  test('v18: việc lặp lại chỉ xuất hiện khi ĐẾN NGÀY; ngày chưa tới thì khởi động lại cũng không tạo; ngày đã lỡ thì tạo bù đủ', async () => {
     const R = REC({ title: 'Lặp hẹn ngày', rule: { type: 'daily' } });
     const cr = await call(ptok.mgr, 'saveRecurring', { recurring: R });
-    const r = await call(ptok.a, 'moveTask', { id: cr.result.spawned.id, status: 'done' });
-    assert.equal(r.result.scheduled.due, plusDays(1));
+    assert.equal(cr.result.scheduled.due, plusDays(1));
     const count = async () => (await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R.id).length;
-    assert.equal(await count(), 1, 'vừa xong việc cũ: chưa có việc mới');
+    assert.equal(await count(), 1, 'vừa tạo mẫu: chỉ có việc đầu tiên');
     await stopServer(); await startServer();                                                          // mai mới tới: khởi động lại vẫn chưa tạo
     assert.equal(await count(), 1, 'chưa đến ngày thì chưa hiện');
     assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R.id).pendingDue, plusDays(1));
-    // ngày hẹn đã qua (máy chủ tắt lâu) → tạo việc ở lần gần nhất chưa qua, không tạo việc quá hạn
+    // ngày hẹn đã qua (máy chủ tắt lâu) → tạo bù đủ từng ngày bị lỡ (-4…hôm nay), rồi hẹn tiếp ngày mai
     await sqlRun('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [R.id, plusDays(-4)]);
     await stopServer(); await startServer();
     const ts = (await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R.id);
-    assert.equal(ts.length, 2); assert.equal(ts.find(x => x.status !== 'done').due, todayISO());
+    assert.equal(ts.length, 6, '1 việc đầu + 5 ngày bù');
+    for (const n of [-4, -3, -2, -1, 0]) assert.ok(ts.some(x => x.due === plusDays(n)), 'có việc hạn ' + plusDays(n));
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R.id).pendingDue, plusDays(1));
+    await stopServer(); await startServer();
+    assert.equal(await count(), 6, 'chạy lại không tạo trùng');
     // mẫu có ngày kết thúc: hẹn quá ngày kết thúc thì bị xoá hẹn, không tạo
     const R2 = REC({ title: 'Lặp sắp hết', rule: { type: 'daily', end: plusDays(1) } });
     const c2r = await call(ptok.mgr, 'saveRecurring', { recurring: R2 });
-    assert.equal((await call(ptok.a, 'moveTask', { id: c2r.result.spawned.id, status: 'done' })).result.scheduled.due, plusDays(1));
+    assert.equal(c2r.result.scheduled.due, plusDays(1));
     await sqlRun('UPDATE recurring_tasks SET rule=$2 WHERE id=$1', [R2.id, JSON.stringify({ type: 'daily', interval: 1, end: plusDays(-1) })]);
     await sqlRun('UPDATE recurring_tasks SET next_due=$2 WHERE id=$1', [R2.id, todayISO()]);
     await stopServer(); await startServer();
     assert.equal((await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R2.id).length, 1, 'quá ngày kết thúc thì không tạo');
     assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R2.id).pendingDue, '');
     await call(ptok.mgr, 'deleteRecurring', { id: R.id }); await call(ptok.mgr, 'deleteRecurring', { id: R2.id });
+  });
+
+  test('v18: việc cũ CHƯA xong thì hôm sau vẫn có việc mới; mẫu đang kẹt từ bản cũ được kích hoạt lại khi nâng cấp', async () => {
+    const R = REC({ title: 'Lặp không đợi xong', rule: { type: 'daily' } });
+    const cr = await call(ptok.mgr, 'saveRecurring', { recurring: R });
+    const first = cr.result.spawned.id;
+    const open = async () => (await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === R.id);
+    await sqlRun('UPDATE tasks SET due=$2 WHERE id=$1', [first, plusDays(-1)]);                       // việc của hôm qua, vẫn chưa làm
+    await arrive(R.id);                                                                                // sang ngày lặp kế tiếp
+    const ts = await open();
+    assert.equal(ts.length, 2, 'việc mới vẫn xuất hiện dù việc cũ chưa xong');
+    assert.equal(ts.find(x => x.id === first).status, 'todo', 'việc cũ giữ nguyên, không bị đóng'); assert.equal(ts.find(x => x.id === first).due, plusDays(-1));
+    assert.ok(ts.some(x => x.id !== first && x.due === todayISO() && x.status === 'todo'));
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === R.id).pendingDue, plusDays(1));
+    // mẫu "kẹt" của bản cũ: việc cũ chưa xong nên chưa có lần kế tiếp (next_due rỗng) → khởi động lại sẽ kích hoạt lại
+    const S = REC({ title: 'Lặp bị kẹt', rule: { type: 'daily' } });
+    const cs = await call(ptok.mgr, 'saveRecurring', { recurring: S });
+    await sqlRun(`UPDATE recurring_tasks SET next_due='' WHERE id=$1`, [S.id]);
+    await sqlRun('UPDATE tasks SET due=$2 WHERE id=$1', [cs.result.spawned.id, plusDays(-2)]);
+    await stopServer(); await startServer();
+    const st = (await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === S.id);
+    assert.equal(st.length, 2, 'mẫu kẹt sinh lại việc theo lịch gần nhất'); assert.ok(st.some(x => x.due === todayISO()));
+    assert.equal((await work(ptok.mgr, w1)).recurring.find(x => x.id === S.id).pendingDue, plusDays(1));
+    await stopServer(); await startServer();
+    assert.equal((await work(ptok.mgr, w1)).tasks.filter(x => x.seriesId === S.id).length, 2, 'khởi động lại không tạo trùng');
+    await call(ptok.mgr, 'deleteRecurring', { id: R.id }); await call(ptok.mgr, 'deleteRecurring', { id: S.id });
   });
 
   test('v16: ảnh dán vào mô tả: tải lên, xem bằng token, chỉ nhận ảnh thật, mô tả giữ mã ảnh và bỏ URL lạ', async () => {
@@ -771,7 +801,7 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
     await denied(tk.eb1, 'saveRecurring', { recurring: { ...R, followerIds: [] } }, /người tạo/);
     const openIn = async () => (await work(tk.mgrA, WS)).tasks.find(x => x.seriesId === R.id && x.status !== 'done');
     const r2 = await call(tk.ea1, 'moveTask', { id: first.id, status: 'done' });
-    assert.ok(r2.result.scheduled && !r2.result.spawned);
+    assert.ok(!r2.result.scheduled && !r2.result.spawned);
     await arrive(R.id);
     const next2 = await openIn();
     assert.deepEqual(next2.followerIds, [id.eb1], 'việc kế tiếp copy người theo dõi');
