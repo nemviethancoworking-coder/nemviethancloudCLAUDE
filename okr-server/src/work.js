@@ -234,6 +234,7 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS followers jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS next_due text NOT NULL DEFAULT '';
+ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS start_date text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
 CREATE TABLE IF NOT EXISTS inline_images (id text PRIMARY KEY, name text NOT NULL DEFAULT '', mime text NOT NULL DEFAULT '', size bigint NOT NULL DEFAULT 0,
   uploaded_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '');
@@ -279,6 +280,11 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const due = nextDue(rule, base, today);
       if (due) await pool.query(`UPDATE recurring_tasks SET next_due=$2 WHERE id=$1 AND next_due=''`, [s.id, due]);
     }
+    // v21: mẫu cũ chưa có ngày bắt đầu → lấy hạn của việc đầu tiên đã sinh, không có thì ngày tạo mẫu (giờ Việt Nam).
+    await pool.query(`UPDATE recurring_tasks r SET start_date = COALESCE(
+        (SELECT min(t.due) FROM tasks t WHERE t.series_id = r.id AND t.due ~ '^\\d{4}-\\d{2}-\\d{2}$'),
+        CASE WHEN r.created_at ~ '^\\d{4}-\\d{2}-\\d{2}T' THEN to_char(r.created_at::timestamptz AT TIME ZONE 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD') END, '')
+      WHERE r.start_date = ''`);
     try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) { console.error('Không tạo được thư mục tệp đính kèm ' + UPLOAD_DIR + ': ' + e.message); }
   }
 
@@ -446,7 +452,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const s = stat.get(r.id);
       return { id: r.id, projectId: r.project_id, title: r.title, description: r.description, priority: r.priority, tags: r.tags || [], subtasks: r.subtasks || [],
         assigneeIds: idList(r.assignees), followerIds: idList(r.followers), rule: r.rule, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
-        estHours: r.est_hours == null ? null : Number(r.est_hours), openCount: s ? s.open : 0, nextDue: s && s.next ? s.next : '', pendingDue: r.next_due || '', canEdit: canManageRecurring(c, r) };
+        estHours: r.est_hours == null ? null : Number(r.est_hours), openCount: s ? s.open : 0, nextDue: s && s.next ? s.next : '', pendingDue: r.next_due || '', startDate: r.start_date || '', canEdit: canManageRecurring(c, r) };
     });
   }
   /** Chi tiết 1 công việc: bình luận + tệp đính kèm (chỉ người xem được việc mới nhận). */
@@ -847,19 +853,35 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
       const followers = Array.isArray(r.followerIds) ? cleanFollowers(c, r.followerIds, ids, old ? idList(old.followers) : []) : (old ? idList(old.followers).filter(f => !ids.includes(f)) : []);
       // next_due = ngày của lần lặp kế tiếp chưa được tạo; luôn có giá trị khi lịch còn hiệu lực, không phụ thuộc việc cũ đã xong chưa.
       const today = todayISO();
-      let pendingDue;
+      // v21: "Ngày bắt đầu" của lịch lặp — việc đầu tiên là ngày đúng lịch đầu tiên tính từ ngày bắt đầu (kể cả chính ngày đó).
+      const firstOnOrAfter = d => nextDue(rule, isoOf(addDays(parseISO(d), -1)), d);
+      const startRaw = str(r.startDate).trim().slice(0, 10);
+      if (startRaw && !validISO(startRaw)) throw new AppError('Ngày bắt đầu không hợp lệ.');
+      const startChanged = !!startRaw && (!old || startRaw !== (old.start_date || ''));
+      if (startChanged && startRaw < today) throw new AppError('Ngày bắt đầu không được trước hôm nay.');
+      if (startRaw && rule.end && rule.end < startRaw) throw new AppError('Ngày kết thúc lặp lại phải sau ngày bắt đầu.');
+      let pendingDue, startDate;
       if (!old) {
-        pendingDue = normDue(r.firstDue) || today;                                          // việc đầu tiên: tạo ngay nếu đã đến ngày
-        if (rule.end && pendingDue > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.');
+        if (startRaw) {
+          startDate = startRaw;
+          pendingDue = firstOnOrAfter(startRaw);
+          if (!pendingDue) throw new AppError('Không có ngày nào đúng lịch trong khoảng từ ngày bắt đầu đến ngày kết thúc.');
+        } else {                                                                              // client cũ (trước v21): hạn việc đầu tiên = firstDue
+          pendingDue = normDue(r.firstDue) || today;
+          if (rule.end && pendingDue > rule.end) throw new AppError('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.');
+          startDate = pendingDue;
+        }
       } else {
-        const baseDay = old.next_due && old.next_due > today ? old.next_due : today;          // giữ ngày đã hẹn; đổi lịch thì lấy lần đầu tiên từ ngày đó trở đi
-        pendingDue = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
+        startDate = startRaw || old.start_date || '';
+        // đổi ngày bắt đầu → lần kế tiếp tính lại từ ngày đó; không đổi → giữ ngày đã hẹn, đổi lịch thì lấy lần đầu tiên từ ngày đó trở đi
+        const baseDay = startChanged ? startRaw : (old.next_due && old.next_due > today ? old.next_due : today);
+        pendingDue = startChanged ? firstOnOrAfter(baseDay) : nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
         if (!pendingDue) throw new AppError('Lịch lặp đã quá ngày kết thúc. Hãy chọn ngày kết thúc muộn hơn.');
       }
       const now = new Date().toISOString();
-      const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue];
-      if (old) await c.q.query('UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, updated_at=$13 WHERE id=$1', [...row, now]);
-      else await c.q.query('INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)', [...row, c.me.id, now]);
+      const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue, startDate];
+      if (old) await c.q.query('UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, start_date=$13, updated_at=$14 WHERE id=$1', [...row, now]);
+      else await c.q.query('INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,start_date,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)', [...row, c.me.id, now]);
       const result = {};
       if (pendingDue <= today) {                                                              // đến ngày rồi: tạo việc ngay (không đợi lượt chạy nền)
         const tpl = await one(c.q, 'SELECT * FROM recurring_tasks WHERE id=$1', [r.id]);

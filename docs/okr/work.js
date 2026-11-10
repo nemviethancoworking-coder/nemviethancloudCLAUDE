@@ -918,7 +918,7 @@ function tagDel(i){ S.draft.tags.splice(i, 1); modalDirty = true; paintTags(); }
 /* ----- Lặp lại ----- */
 function paintRecurrence(){
   const el = $('tk-rec'); if(!el) return; const r = ro(), rule = S.draft.recurrence, type = rule ? rule.type : '';
-  const nx = rule ? nextDueOf(rule, S.draft.due || today()) : null;
+  const nx = rule ? (S.draft.kind === 'recurring' ? recFirst() : nextDueOf(rule, S.draft.due || today())) : null;
   el.innerHTML = `
     <select class="input" ${r ? 'disabled' : ''} onchange="W.recType(this.value)">
       ${S.draft.kind === 'recurring' ? '' : `<option value="" ${!type ? 'selected' : ''}>Không lặp lại</option>`}<option value="daily" ${type === 'daily' ? 'selected' : ''}>Theo ngày</option><option value="weekly" ${type === 'weekly' ? 'selected' : ''}>Theo tuần</option><option value="monthly" ${type === 'monthly' ? 'selected' : ''}>Theo tháng</option>
@@ -927,7 +927,7 @@ function paintRecurrence(){
     ${type === 'weekly' ? `<div class="flex gap-1 mt-2">${[1, 2, 3, 4, 5, 6, 7].map(n => `<button type="button" ${r ? 'disabled' : ''} class="w-9 h-8 rounded-md text-[12.5px] font-medium border ${rule.weekdays.includes(n) ? 'bg-base-500 text-white border-base-500' : 'bg-white text-slate-600 border-gray-300 hover:bg-gray-50'}" onclick="W.recWd(${n})">${WD[n]}</button>`).join('')}</div>` : ''}
     ${type === 'monthly' ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Vào ngày <input type="number" min="1" max="31" class="input !w-20 !py-1" value="${rule.monthDay}" ${r ? 'disabled' : ''} onchange="W.recSet('monthDay',Math.max(1,Math.min(31,Number(this.value)||1)))"> hằng tháng</div><div class="text-[11.5px] text-gray-400 mt-1">Tháng không có ngày này sẽ lấy ngày cuối tháng.</div>` : ''}
     ${rule ? `<div class="flex items-center gap-2 mt-2 text-[13px] text-slate-600">Kết thúc <input type="date" class="input !w-40 !py-1" value="${esc(rule.end || '')}" ${r ? 'disabled' : ''} onchange="W.recSet('end',this.value)"><span class="text-[11.5px] text-gray-400">(tuỳ chọn)</span></div>
-      <div class="mt-2 text-[12.5px] ${nx ? 'text-indigo-700 bg-indigo-50' : 'text-amber-700 bg-amber-50'} rounded-lg px-2.5 py-2">${WI.repeat} ${nx ? `Việc mới sẽ <b>tự xuất hiện đúng lịch</b>, lần kế tiếp vào ngày <b>${fmt(nx)}</b> — dù việc trước đã hoàn thành hay chưa.` : 'Chưa có lần lặp kế tiếp (kiểm tra thứ trong tuần / ngày kết thúc).'}</div>` : ''}`;
+      <div class="mt-2 text-[12.5px] ${nx ? 'text-indigo-700 bg-indigo-50' : 'text-amber-700 bg-amber-50'} rounded-lg px-2.5 py-2">${WI.repeat} ${nx ? `Việc mới sẽ <b>tự xuất hiện đúng lịch</b>, ${S.draft.kind === 'recurring' && S.draft.isNew ? 'việc đầu tiên' : 'lần kế tiếp'} vào ngày <b>${fmt(nx)}</b> — dù việc trước đã hoàn thành hay chưa.` : 'Chưa có lần lặp kế tiếp (kiểm tra ngày bắt đầu / thứ trong tuần / ngày kết thúc).'}</div>` : ''}`;
 }
 function recType(v){
   if(!v) S.draft.recurrence = null;
@@ -937,6 +937,14 @@ function recType(v){
   if(v && !S.draft.due){ S.draft.due = today(); if(S.draft.isNew){ const di = document.querySelector('#modal input[type=date]'); if(di) di.value = S.draft.due; } }
   modalDirty = true; paintRecurrence();
 }
+/** Ngày đúng lịch đầu tiên (≥ ngày bắt đầu, ≥ hôm nay) của mẫu đang soạn — giống máy chủ. Sửa mẫu mà không đổi ngày bắt đầu: lần kế tiếp như cũ. */
+function recFirst(){
+  const t = S.draft, rule = t && t.recurrence; if(!rule) return null;
+  if(!t.isNew && t.startDate === t.origStart) return nextDueOf(rule, t.pendingDue && t.pendingDue > today() ? iso(dayAdd(pIso(t.pendingDue), -1)) : iso(dayAdd(pIso(today()), -1)));
+  const s = t.startDate && t.startDate > today() ? t.startDate : today();
+  return nextDueOf(rule, iso(dayAdd(pIso(s), -1)));
+}
+function recStart(v){ S.draft.startDate = v; modalDirty = true; paintRecurrence(); }
 function recSet(k, v){ S.draft.recurrence[k] = v; modalDirty = true; paintRecurrence(); }
 function recWd(n){
   const w = S.draft.recurrence.weekdays, i = w.indexOf(n);
@@ -1201,7 +1209,7 @@ function recView(){
             <div class="text-[12px] text-gray-400 mt-0.5">Tạo bởi ${esc(user(r.createdBy).name)}</div>${richPlain(r.description).trim() ? `<div class="text-[12.5px] text-gray-500 mt-0.5 truncate">${esc(richPlain(r.description).replace(/\s+/g, ' ').trim().slice(0, 140))}</div>` : ''}</td>
           ${multi ? `<td class="py-3 px-2 text-[12.5px] text-slate-600"><span class="inline-flex items-center gap-1.5 whitespace-nowrap">${projDot(p)}${esc(p ? p.name : '?')}</span></td>` : ''}
           <td class="py-3 px-2">${stack(r.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(r.priority)}</td>
-          <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
+          <td class="py-3 px-2 text-[12.5px] text-indigo-700"><span class="inline-flex items-center gap-1">${WI.repeat}${esc(recText(r.rule))}${r.startDate ? ` · từ ${fmt(r.startDate)}` : ''}${r.rule.end ? ` · đến ${fmt(r.rule.end)}` : ''}</span></td>
           <td class="py-3 px-2 text-[12.5px]">${[r.openCount ? `<div class="text-slate-700">Đang mở ${r.openCount} việc · hạn ${r.nextDue ? fmt(r.nextDue) : '—'}</div>` : '', r.pendingDue ? `<div class="text-indigo-700">Việc mới sẽ xuất hiện ngày ${fmt(r.pendingDue)}</div>` : (r.openCount ? '' : '<div class="text-amber-600">Chưa có (lịch đã kết thúc)</div>')].join('')}</td>
           <td class="mc-act py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${r.canEdit ? `<button class="btn btn-ghost btn-sm" onclick="W.openRecurring('${r.id}')">${I.edit} Sửa</button><button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteRecurring('${r.id}')">${I.trash}</button>` : '<span class="text-[12px] text-gray-400">Chỉ xem</span>'}</td>
         </tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${filtering && base.length ? 'Không có việc lặp lại nào khớp bộ lọc. <a class="text-base-600 underline cursor-pointer" onclick="W.clearRF()">Xoá lọc</a>' : 'Chưa có việc lặp lại nào. Bấm "Thêm việc lặp lại" để tạo.'}</td></tr>`}
@@ -1215,16 +1223,16 @@ function openRecurring(id){
     const ps = creatableProjects();
     if(!ps.length){ toast(canCreateProject() ? 'Hãy tạo dự án trước khi thêm việc lặp lại.' : 'Bạn chưa tham gia dự án nào để thêm việc.', 'error'); return; }
     const pid = S.project !== 'all' && ps.some(p => p.id === S.project) ? S.project : ps[0].id;
-    r = { id: newId('r'), projectId: pid, title: '', description: '', priority: 'medium', assigneeIds: [meId()], followerIds: [], due: today(), estHours: null, tags: [], subtasks: [], recurrence: { type: 'weekly', weekdays: [new Date().getDay() || 7], end: '' }, createdBy: meId(), canEdit: true };
+    r = { id: newId('r'), projectId: pid, title: '', description: '', priority: 'medium', assigneeIds: [meId()], followerIds: [], due: today(), startDate: today(), estHours: null, tags: [], subtasks: [], recurrence: { type: 'weekly', weekdays: [new Date().getDay() || 7], end: '' }, createdBy: meId(), canEdit: true };
   } else {
     const x = (S.data.recurring || []).find(y => y.id === id); if(!x) return;
     r = { id: x.id, projectId: x.projectId, title: x.title, description: x.description || '', priority: x.priority, assigneeIds: [...x.assigneeIds], followerIds: [...fids(x)].filter(id => !x.assigneeIds.includes(id)), due: x.nextDue || today(), tags: [...x.tags],
-      subtasks: JSON.parse(JSON.stringify(x.subtasks || [])), recurrence: JSON.parse(JSON.stringify(x.rule)), createdBy: x.createdBy, canEdit: x.canEdit, openDue: x.nextDue, pendingDue: x.pendingDue || '', estHours: x.estHours == null ? null : x.estHours };
+      subtasks: JSON.parse(JSON.stringify(x.subtasks || [])), recurrence: JSON.parse(JSON.stringify(x.rule)), createdBy: x.createdBy, canEdit: x.canEdit, openDue: x.nextDue, pendingDue: x.pendingDue || '', startDate: x.startDate || '', origStart: x.startDate || '', estHours: x.estHours == null ? null : x.estHours };
   }
   S.draft = r; S.draft.isNew = isNew; S.draft.kind = 'recurring'; S.draft.readOnly = !isNew && !r.canEdit; S.detail = null; S.mention = new Set();
   const p = projById(r.projectId), v = ro();
   openModal(`
-    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Tạo ngay việc đầu tiên; các lần sau tự xuất hiện đúng ngày theo lịch, không cần việc trước đã xong.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
+    ${modalHeader(isNew ? 'Thêm việc lặp lại' : (v ? 'Chi tiết việc lặp lại' : 'Sửa việc lặp lại'), isNew ? 'Việc đầu tiên xuất hiện vào ngày đúng lịch đầu tiên kể từ ngày bắt đầu; các lần sau tự xuất hiện đúng ngày, không cần việc trước đã xong.' : `Tạo bởi ${esc(user(r.createdBy).name)}. Sửa ở đây chỉ áp dụng cho các việc sinh sau; việc đã sinh ra giữ nguyên.`)}
     <div class="p-6 grid md:grid-cols-5 gap-6 m-form">
       <div class="md:col-span-3 space-y-5 min-w-0 m-col-main">
         <div><label class="label">Tên công việc <span class="text-red-500">*</span></label><input id="tk-title" class="input !text-[15px] !font-medium" value="${esc(r.title)}" maxlength="300" placeholder="VD: Báo cáo doanh số cuối ngày" ${v ? 'disabled' : ''} oninput="W.d('title',this.value)"></div>
@@ -1239,6 +1247,7 @@ function openRecurring(id){
         <div><label class="label">Người thực hiện</label><div id="tk-asg"></div></div>
         <div><label class="label">Người theo dõi</label><div id="tk-fol"></div></div>
         <div><label class="label">Nhãn (Tags)</label><div id="tk-tags"></div></div>
+        <div><label class="label">Ngày bắt đầu <span class="text-red-500">*</span></label><input id="tk-start" type="date" class="input" value="${esc(r.startDate || '')}" ${!r.startDate || r.startDate >= today() ? 'min="' + today() + '"' : ''} ${v ? 'disabled' : ''} onchange="W.recStart(this.value)"></div>
         <div><label class="label">Lịch lặp lại</label><div id="tk-rec"></div></div>
       </div>
     </div>
@@ -1253,14 +1262,16 @@ async function saveRecurring(){
   const t = S.draft; if(!t || t.readOnly || t.kind !== 'recurring') return;
   const title = t.title.trim(); if(!title){ toast('Nhập tên công việc.', 'error'); const el = $('tk-title'); if(el) el.focus(); return; }
   if(!t.recurrence){ toast('Chọn lịch lặp lại.', 'error'); return; }
-  if(t.isNew && t.recurrence.end && t.due && t.recurrence.end < t.due){ toast('Ngày kết thúc lặp lại phải sau hạn chót đầu tiên.', 'error'); return; }
+  if(!t.startDate){ toast('Chọn ngày bắt đầu của việc lặp lại.', 'error'); const el = $('tk-start'); if(el) el.focus(); return; }
+  if((t.isNew || t.startDate !== t.origStart) && t.startDate < today()){ toast('Ngày bắt đầu không được trước hôm nay.', 'error'); return; }
+  if(t.recurrence.end && t.recurrence.end < t.startDate){ toast('Ngày kết thúc lặp lại phải sau ngày bắt đầu.', 'error'); return; }
+  if(!recFirst()){ toast('Không có ngày nào đúng lịch trong khoảng từ ngày bắt đầu đến ngày kết thúc.', 'error'); return; }
   if(badHours(t.estHours)){ toast('Thời gian hoàn thành phải là số giờ lớn hơn 0 (VD: 2 hoặc 1.5).', 'error'); const el = $('tk-hours'); if(el) el.focus(); return; }
   const btn = $('tk-save'); if(btn){ btn.disabled = true; btn.textContent = 'Đang lưu...'; }
   const payload = { id: t.id, projectId: t.projectId, title, description: richGet('tk-desc'), priority: t.priority, assigneeIds: t.assigneeIds, followerIds: t.followerIds.filter(id => !t.assigneeIds.includes(id)), tags: t.tags,
-    estHours: hoursVal(t.estHours), subtasks: t.subtasks.filter(s => s.text.trim()), rule: t.recurrence };
-  if(t.isNew) payload.firstDue = t.due;
+    estHours: hoursVal(t.estHours), subtasks: t.subtasks.filter(s => s.text.trim()), rule: t.recurrence, startDate: t.startDate };
   const j = await act('saveRecurring', { recurring: payload });
-  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? 'Đã tạo việc lặp lại và việc đầu tiên.' : 'Đã lưu. Các việc đã sinh ra được giữ nguyên.'); if(j.result && j.result.scheduled) spawnNotice(j); }
+  if(j){ const isNew = t.isNew; A.closeModal(); S.draft = null; toast(isNew ? (j.result && j.result.spawned ? 'Đã tạo việc lặp lại và việc đầu tiên.' : 'Đã tạo việc lặp lại.') : 'Đã lưu. Các việc đã sinh ra được giữ nguyên.'); if(j.result && j.result.scheduled) spawnNotice(j); }
   else if(btn){ btn.disabled = false; btn.innerHTML = I.check + ' ' + (t.isNew ? 'Tạo việc lặp lại' : 'Lưu thay đổi'); }
 }
 async function deleteRecurring(id, fromModal){
@@ -1413,7 +1424,7 @@ window.W = {
   view, load, reload, reset, poll, repaint, active, dragging, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry, treeToggle,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, gotoTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
-  d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd,
+  d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd, recStart,
   pickFiles, delAttachment, cmInput, cmPick, cmKey, postComment, delComment,
   openWorkspace, saveWorkspace, deleteWorkspace, openDepartments, saveDept, delDept, openProject, saveProject, deleteProject, filterPick,
   _test: { tmRange, inRange, scopeTasks, nextDueOf, recText, recView, S, canEdit, canDelete, filtered, mineTasks, createdTasks, personalView, scopeNote, fmtComment },

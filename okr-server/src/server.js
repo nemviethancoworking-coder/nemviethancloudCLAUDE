@@ -33,7 +33,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 16;
+const VERSION = 21;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };

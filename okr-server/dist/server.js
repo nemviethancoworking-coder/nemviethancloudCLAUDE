@@ -20060,6 +20060,7 @@ CREATE TABLE IF NOT EXISTS recurring_tasks (id text PRIMARY KEY, project_id text
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS followers jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
 ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS next_due text NOT NULL DEFAULT '';
+ALTER TABLE recurring_tasks ADD COLUMN IF NOT EXISTS start_date text NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS est_hours double precision;
 CREATE TABLE IF NOT EXISTS inline_images (id text PRIMARY KEY, name text NOT NULL DEFAULT '', mime text NOT NULL DEFAULT '', size bigint NOT NULL DEFAULT 0,
   uploaded_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '');
@@ -20102,6 +20103,10 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           const due = nextDue(rule, base, today);
           if (due) await pool2.query(`UPDATE recurring_tasks SET next_due=$2 WHERE id=$1 AND next_due=''`, [s.id, due]);
         }
+        await pool2.query(`UPDATE recurring_tasks r SET start_date = COALESCE(
+        (SELECT min(t.due) FROM tasks t WHERE t.series_id = r.id AND t.due ~ '^\\d{4}-\\d{2}-\\d{2}$'),
+        CASE WHEN r.created_at ~ '^\\d{4}-\\d{2}-\\d{2}T' THEN to_char(r.created_at::timestamptz AT TIME ZONE 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD') END, '')
+      WHERE r.start_date = ''`);
         try {
           fs2.mkdirSync(UPLOAD_DIR, { recursive: true });
         } catch (e) {
@@ -20341,6 +20346,7 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
             openCount: s ? s.open : 0,
             nextDue: s && s.next ? s.next : "",
             pendingDue: r.next_due || "",
+            startDate: r.start_date || "",
             canEdit: canManageRecurring(c, r)
           };
         });
@@ -20791,19 +20797,33 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
           const estHours = r.estHours === void 0 && old ? old.est_hours == null ? null : Number(old.est_hours) : cleanHours(r.estHours);
           const followers = Array.isArray(r.followerIds) ? cleanFollowers(c, r.followerIds, ids, old ? idList(old.followers) : []) : old ? idList(old.followers).filter((f) => !ids.includes(f)) : [];
           const today = todayISO2();
-          let pendingDue;
+          const firstOnOrAfter = (d) => nextDue(rule, isoOf(addDays(parseISO(d), -1)), d);
+          const startRaw = str2(r.startDate).trim().slice(0, 10);
+          if (startRaw && !validISO(startRaw)) throw new AppError2("Ng\xE0y b\u1EAFt \u0111\u1EA7u kh\xF4ng h\u1EE3p l\u1EC7.");
+          const startChanged = !!startRaw && (!old || startRaw !== (old.start_date || ""));
+          if (startChanged && startRaw < today) throw new AppError2("Ng\xE0y b\u1EAFt \u0111\u1EA7u kh\xF4ng \u0111\u01B0\u1EE3c tr\u01B0\u1EDBc h\xF4m nay.");
+          if (startRaw && rule.end && rule.end < startRaw) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau ng\xE0y b\u1EAFt \u0111\u1EA7u.");
+          let pendingDue, startDate;
           if (!old) {
-            pendingDue = normDue(r.firstDue) || today;
-            if (rule.end && pendingDue > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t \u0111\u1EA7u ti\xEAn.");
+            if (startRaw) {
+              startDate = startRaw;
+              pendingDue = firstOnOrAfter(startRaw);
+              if (!pendingDue) throw new AppError2("Kh\xF4ng c\xF3 ng\xE0y n\xE0o \u0111\xFAng l\u1ECBch trong kho\u1EA3ng t\u1EEB ng\xE0y b\u1EAFt \u0111\u1EA7u \u0111\u1EBFn ng\xE0y k\u1EBFt th\xFAc.");
+            } else {
+              pendingDue = normDue(r.firstDue) || today;
+              if (rule.end && pendingDue > rule.end) throw new AppError2("Ng\xE0y k\u1EBFt th\xFAc l\u1EB7p l\u1EA1i ph\u1EA3i sau h\u1EA1n ch\xF3t \u0111\u1EA7u ti\xEAn.");
+              startDate = pendingDue;
+            }
           } else {
-            const baseDay = old.next_due && old.next_due > today ? old.next_due : today;
-            pendingDue = nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
+            startDate = startRaw || old.start_date || "";
+            const baseDay = startChanged ? startRaw : old.next_due && old.next_due > today ? old.next_due : today;
+            pendingDue = startChanged ? firstOnOrAfter(baseDay) : nextDue(rule, isoOf(addDays(parseISO(baseDay), -1)), today);
             if (!pendingDue) throw new AppError2("L\u1ECBch l\u1EB7p \u0111\xE3 qu\xE1 ng\xE0y k\u1EBFt th\xFAc. H\xE3y ch\u1ECDn ng\xE0y k\u1EBFt th\xFAc mu\u1ED9n h\u01A1n.");
           }
           const now = (/* @__PURE__ */ new Date()).toISOString();
-          const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue];
-          if (old) await c.q.query("UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, updated_at=$13 WHERE id=$1", [...row, now]);
-          else await c.q.query("INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)", [...row, c.me.id, now]);
+          const row = [r.id, projectId, title, desc, priority, JSON.stringify(tags), JSON.stringify(subtasks), JSON.stringify(ids), JSON.stringify(rule), JSON.stringify(followers), estHours, pendingDue, startDate];
+          if (old) await c.q.query("UPDATE recurring_tasks SET project_id=$2, title=$3, description=$4, priority=$5, tags=$6, subtasks=$7, assignees=$8, rule=$9, followers=$10, est_hours=$11, next_due=$12, start_date=$13, updated_at=$14 WHERE id=$1", [...row, now]);
+          else await c.q.query("INSERT INTO recurring_tasks(id,project_id,title,description,priority,tags,subtasks,assignees,rule,followers,est_hours,next_due,start_date,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)", [...row, c.me.id, now]);
           const result = {};
           if (pendingDue <= today) {
             const tpl = await one2(c.q, "SELECT * FROM recurring_tasks WHERE id=$1", [r.id]);
@@ -21029,7 +21049,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 16;
+var VERSION = 21;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
