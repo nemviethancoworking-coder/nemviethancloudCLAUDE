@@ -342,6 +342,32 @@ describe('API công việc', () => {
     const gone = await call(ptok.a, 'moveTask', { id: n3.id, status: 'done' }); assert.ok(!gone.result.spawned && !gone.result.scheduled);
     assert.ok((await work(ptok.mgr, w1)).tasks.some(x => x.id === n3.id));
   });
+  test('Việc lặp lại v21: ngày bắt đầu — việc đầu tiên là ngày đúng lịch đầu tiên từ ngày bắt đầu; đổi ngày bắt đầu tính lại', async () => {
+    const today = todayISO();
+    const wdOf = d => (new Date(d + 'T00:00:00Z').getUTCDay()) || 7;
+    // bắt đầu hôm nay, hằng ngày → tạo ngay
+    const R1 = REC({ title: 'BĐ hôm nay', firstDue: undefined, startDate: today, rule: { type: 'daily' } });
+    const c1 = await call(ptok.a, 'saveRecurring', { recurring: R1 });
+    assert.ok(c1.result.spawned && c1.result.spawned.due === today, 'bắt đầu hôm nay → có việc ngay');
+    // bắt đầu tương lai, hằng tuần đúng thứ của ngày bắt đầu + 2 → chưa tạo, hẹn đúng ngày đầu tiên ≥ ngày bắt đầu
+    const start = plusDays(5), target = plusDays(7);
+    const R2 = REC({ title: 'BĐ tương lai', firstDue: undefined, startDate: start, rule: { type: 'weekly', weekdays: [wdOf(target)] } });
+    const c2 = await call(ptok.a, 'saveRecurring', { recurring: R2 });
+    assert.ok(!c2.result.spawned, 'chưa đến ngày bắt đầu thì không tạo');
+    assert.equal(c2.result.scheduled.due, target);
+    let row = (await work(ptok.a, w1)).recurring.find(x => x.id === R2.id);
+    assert.equal(row.startDate, start); assert.equal(row.pendingDue, target);
+    // sửa nội dung, không đổi ngày bắt đầu → giữ lịch hẹn
+    await call(ptok.a, 'saveRecurring', { recurring: { ...R2, title: 'BĐ tương lai 2' } });
+    row = (await work(ptok.a, w1)).recurring.find(x => x.id === R2.id); assert.equal(row.pendingDue, target); assert.equal(row.startDate, start);
+    // đổi ngày bắt đầu về hôm nay với lịch hằng ngày → tạo ngay
+    const c3 = await call(ptok.a, 'saveRecurring', { recurring: { ...R2, startDate: today, rule: { type: 'daily' } } });
+    assert.ok(c3.result.spawned && c3.result.spawned.due === today);
+    // kiểm tra hợp lệ
+    await denied(ptok.a, 'saveRecurring', { recurring: REC({ firstDue: undefined, startDate: plusDays(-1), rule: { type: 'daily' } }) }, /trước hôm nay/);
+    await denied(ptok.a, 'saveRecurring', { recurring: REC({ firstDue: undefined, startDate: plusDays(5), rule: { type: 'daily', end: plusDays(2) } }) }, /sau ngày bắt đầu/);
+    await denied(ptok.a, 'saveRecurring', { recurring: REC({ firstDue: undefined, startDate: '2026-13-40', rule: { type: 'daily' } }) }, /không hợp lệ/);
+  });
   test('Việc lặp lại: ai cũng tạo được; sửa/xoá chỉ người tạo + cấp trên; danh sách đúng người xem', async () => {
     const R = REC({ title: 'Báo cáo ngày', assigneeIds: [b], rule: { type: 'daily' } });
     const cr = await call(ptok.a, 'saveRecurring', { recurring: R });                                // a là nhân viên, giao việc lặp cho b
@@ -888,8 +914,8 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
     assert.equal(await count(), before);
     const col = await pg.query("SELECT data_type FROM information_schema.columns WHERE table_name='recurring_tasks' AND column_name='followers'");
     assert.equal(col.rows[0].data_type, 'jsonb');
-    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 16);
-    assert.equal((await (await fetch(BASE + 'health')).json()).version, 16);
+    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 21);
+    assert.equal((await (await fetch(BASE + 'health')).json()).version, 21);
   });
 });
 
