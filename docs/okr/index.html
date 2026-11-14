@@ -207,6 +207,32 @@
     #fl-board > div { scroll-snap-align:start; }
     #fl-board [data-fcol] { max-height:none !important; }
   }
+
+  /* ---------- Hỏi đáp: máy tính = thẻ lớn (kiểu A); điện thoại = ô ghép một cột, ô đầu lớn hơn (kiểu C) ---------- */
+  .qa-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:20px; align-content:start; max-width:1100px; }
+  .qa-card { --c:#1f6fd6; position:relative; overflow:hidden; display:flex; flex-direction:column; gap:12px; min-height:300px; padding:26px; background:#fff; border:1px solid #e5e7eb; border-radius:12px; color:inherit; text-decoration:none; transition:transform .15s ease, border-color .15s ease; }
+  .qa-card:hover { transform:translateY(-3px); border-color:var(--c); }
+  .qa-card:focus-visible { outline:3px solid var(--c); outline-offset:3px; }
+  .qa-card.k2 { --c:#0f8f6f; } .qa-card.k3 { --c:#c2571a; }
+  .qa-card > * { position:relative; z-index:1; }
+  .qa-chip { width:56px; height:56px; border-radius:12px; display:grid; place-items:center; color:var(--c); background:color-mix(in srgb, var(--c) 14%, transparent); }
+  .qa-chip svg { width:28px; height:28px; }
+  .qa-card h2 { margin:6px 0 0; font-size:20px; font-weight:800; line-height:1.2; color:#0f172a; }
+  .qa-card p { margin:0; flex:1; font-size:14px; color:#5a6779; }
+  .qa-go { display:inline-flex; align-items:center; gap:8px; font-weight:600; color:var(--c); }
+  .qa-go svg { width:18px; height:18px; }
+  @media (max-width:767px){
+    .qa-grid { grid-template-columns:1fr; gap:14px; }
+    .qa-card { min-height:160px; padding:22px; gap:10px; border-radius:16px; }
+    .qa-card::after { content:""; position:absolute; right:-44px; bottom:-44px; width:160px; height:160px; border-radius:50%; background:color-mix(in srgb, var(--c) 16%, transparent); }
+    .qa-card:hover { transform:none; }
+    .qa-chip { width:48px; height:48px; border-radius:50%; background:var(--c); color:#fff; }
+    .qa-card.k1 { min-height:280px; padding:26px; justify-content:space-between; }
+    .qa-card.k1 h2 { font-size:30px; letter-spacing:-.01em; }
+    .qa-card.k1 p { flex:0; }
+    .qa-go { min-height:44px; }
+  }
+  @media (prefers-reduced-motion:reduce){ .qa-card { transition:none; } .qa-card:hover { transform:none; } }
 </style>
 </head>
 <body class="bg-[#f4f5f7] text-slate-800 text-sm">
@@ -1035,6 +1061,7 @@ const progressBar = (pct, bar='bg-base-500', h='h-2') => `<div class="w-full ${h
 
 /* ---------- Icons ---------- */
 const I = {
+  qa:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H10l-4 4v-4H4z"/><path d="M9 10l2 2 4-4"/></svg>',
   bell:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>',
   dash:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
   report:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
@@ -1087,8 +1114,8 @@ function render(){
   buildIndex();
   if(!session() || !me()){ document.body.classList.remove('menu-open'); app.innerHTML = viewLogin(); return; }
   if(state.view === 'people' && !isDir()) state.view = 'dashboard';
-  const views = { dashboard: viewDashboard, okrs: viewOKRs, checkin: viewCheckin, tasks: viewTasks, flow: () => Fl.view(), people: viewPeople };
-  const titles = { dashboard:'Tổng quan OKRs', okrs:'Quản lý OKR', checkin:'Báo cáo tuần', tasks:'Quản lý công việc', flow:'Quy trình', people:'Nhân sự & phân quyền' };
+  const views = { dashboard: viewDashboard, okrs: viewOKRs, checkin: viewCheckin, tasks: viewTasks, flow: () => Fl.view(), qa: viewQA, people: viewPeople };
+  const titles = { dashboard:'Tổng quan OKRs', okrs:'Quản lý OKR', checkin:'Báo cáo tuần', tasks:'Quản lý công việc', flow:'Quy trình', qa:'Hỏi đáp', people:'Nhân sự & phân quyền' };
   if(!curCycle()) { DB.cycles.push({ id:uid(), name:'Chu kỳ mới', start:toISO(new Date()), end:toISO(addDays(new Date(), 90)), active:true }); save(); }
   state.cycleId = curCycle().id;
   const u = me(), cyc = curCycle(), ci = cycleInfo(cyc), pc = pendingCount(), oc = okrPendingCount();
@@ -1112,6 +1139,7 @@ function render(){
         ${navItem('checkin', I.report, 'Báo cáo tuần', pc)}
         ${navItem('tasks', I.task, 'Quản lý công việc')}
         ${navItem('flow', I.flow, 'Quy trình')}
+        ${navItem('qa', I.qa, 'Hỏi đáp')}
         ${isDir() ? navItem('people', I.users, 'Nhân sự & phân quyền') : ''}
         <div class="pt-4">
           <div class="section-title px-3 pb-2 flex items-center justify-between">Chu kỳ đang xem ${isDir() ? `<a class="normal-case font-medium text-base-600 hover:underline cursor-pointer" onclick="A.openCycles()">Quản lý</a>` : ''}</div>
@@ -1605,6 +1633,29 @@ function orgNode(u, depth, seen){
     ${kids.map(k => orgNode(k, depth + 1, seen)).join('')}
   </div>`;
 }
+/* ---------- Hỏi đáp: mở sổ ghi chú NotebookLM của từng module ở tab mới ---------- */
+const QA_MODULES = [
+  { cls:'k1', name:'FASTWORK', desc:'Hỏi đáp về cách sử dụng Fastwork và quy trình làm việc trên Fastwork.',
+    url:'https://notebook.google.com/notebook/cde8d8a2-d555-4804-a3b2-6f7eb53218fb/preview',
+    icon:'<rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="m8 9 1.6 1.6L12.5 7.7"/><path d="M8 15h8"/><path d="M14 10h2.5"/>' },
+  { cls:'k2', name:'FUNDIN', desc:'Hỏi đáp các thông tin liên quan đến Fundin.',
+    url:'https://notebook.google.com/notebook/519775fa-c066-48f9-a55d-099fe3709368/preview',
+    icon:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/>' },
+  { cls:'k3', name:'KỸ NĂNG BÁN HÀNG', desc:'Hỏi đáp về kỹ năng tư vấn, xử lý từ chối và chốt đơn.',
+    url:'https://notebook.google.com/notebook/09594363-16f8-4089-9d97-e3c02e94c84c/preview',
+    icon:'<path d="M4 5h16v10H10l-4 4v-4H4z"/><path d="m9 10 2 2 4-4"/>' }
+];
+function viewQA(){
+  const svg = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+  return `<div class="qa-grid" aria-label="Các module hỏi đáp">${QA_MODULES.map(m => `
+    <a class="qa-card ${m.cls}" href="${m.url}" target="_blank" rel="noopener">
+      <span class="qa-chip">${svg(m.icon)}</span>
+      <h2>${m.name}</h2>
+      <p>${m.desc}</p>
+      <span class="qa-go">Mở hỏi đáp ${svg('<path d="M7 17 17 7"/><path d="M8 7h9v9"/>')}</span>
+    </a>`).join('')}</div>`;
+}
+
 function viewPeople(){
   const seen = new Set();
   const roots = DB.users.filter(u => u.role === 'director');
