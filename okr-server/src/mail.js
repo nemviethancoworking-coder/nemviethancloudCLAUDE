@@ -53,6 +53,16 @@ ${extraHtml || ''}
     if (note.kind === 'assigned') return { subject: '[OKR Weekly] Bạn được giao việc: ' + t.title, html: layout(who + ' vừa giao việc cho bạn', taskLines) };
     if (note.kind === 'reassigned') return { subject: '[OKR Weekly] Bạn được giao lại việc: ' + t.title, html: layout(who + ' vừa giao lại một công việc cho bạn', taskLines) };
     if (note.kind === 'taskComment') return { subject: '[OKR Weekly] Bình luận mới: ' + t.title, html: layout(who + ' vừa bình luận trong một công việc', [['Công việc', t.title]], quote(note.text)) };
+    if (note.kind.startsWith('wf')) {                                                              // v22 — module Quy trình
+      const j = note.job || {};
+      const info = [['Job', j.title], ['Quy trình', j.wfName], ['Giai đoạn', j.stage], ['Người thực hiện hành động', who], ['Hạn chót', fmtDate(j.due)], ['Ưu tiên', PRIORITY[j.priority] || '']];
+      if (note.kind === 'wfAssigned') return { subject: '[OKR Weekly] Bạn được giao job: ' + j.title, html: layout(who + ' vừa giao một job trong quy trình "' + (j.wfName || '') + '" cho bạn', info) };
+      if (note.kind === 'wfTodo') return { subject: '[OKR Weekly] Bạn được giao todo trong job: ' + j.title, html: layout(who + ' vừa giao todo cho bạn', [['Job', j.title], ['Quy trình', j.wfName]], quote(note.text)) };
+      if (note.kind === 'wfComment') return { subject: '[OKR Weekly] Bình luận mới trong job: ' + j.title, html: layout(who + ' vừa bình luận trong một job', [['Job', j.title], ['Quy trình', j.wfName]], quote(note.text)) };
+      if (note.kind === 'wfDone') return { subject: '[OKR Weekly] Job đã Hoàn thành: ' + j.title, html: layout('Job "' + (j.title || '') + '" đã Hoàn thành', [['Quy trình', j.wfName], ['Người đóng job', who]]) };
+      if (note.kind === 'wfFailed') return { subject: '[OKR Weekly] Job Thất bại: ' + j.title, html: layout('Job "' + (j.title || '') + '" đã bị đánh dấu Thất bại', [['Quy trình', j.wfName], ['Giai đoạn', j.stage], ['Người đóng job', who]], quote(note.text ? 'Lý do: ' + note.text : '')) };
+      return null;                                                                                   // wfOverdue chỉ báo chuông, không gửi email
+    }
     if (note.kind === 'reportFeedback') {
       const r = note.report || {};
       return { subject: '[OKR Weekly] ' + who + ' đã phản hồi báo cáo tuần ' + r.week + '/' + r.year,

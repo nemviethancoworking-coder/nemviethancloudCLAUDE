@@ -5,8 +5,9 @@
  *
  * Mỗi dòng là dữ liệu có cấu trúc; câu chữ hiển thị do app ghép từ kind + tên người thực hiện:
  *   kind     assigned · reassigned · taskComment · follower · reportFeedback · okrApproved · okrRejected · okrPending
- *   refType  task | report | okr   (đích khi bấm vào thông báo)      refId  mã của đối tượng đó
- *   refWs    workspace chứa công việc (để mở đúng workspace)           subject  tên việc / OKR / báo cáo      detail  trích bình luận / nhận xét
+ *            v22 (module Quy trình): wfAssigned · wfTodo · wfComment · wfDone · wfFailed · wfOverdue
+ *   refType  task | report | okr | flow   (đích khi bấm vào thông báo)      refId  mã của đối tượng đó (flow: mã job)
+ *   refWs    workspace chứa công việc (để mở đúng workspace; flow: mã quy trình)   subject  tên việc / OKR / báo cáo / job      detail  trích bình luận / nhận xét
  */
 'use strict';
 const crypto = require('crypto');
@@ -14,6 +15,7 @@ const crypto = require('crypto');
 const KINDS = {
   assigned: 'task', reassigned: 'task', taskComment: 'task', follower: 'task',
   reportFeedback: 'report', okrApproved: 'okr', okrRejected: 'okr', okrPending: 'okr',
+  wfAssigned: 'flow', wfTodo: 'flow', wfComment: 'flow', wfDone: 'flow', wfFailed: 'flow', wfOverdue: 'flow',
 };
 const KEEP = 200;            // mỗi người giữ tối đa 200 thông báo mới nhất
 const LIST_LIMIT = 60;       // app tải tối đa 60 thông báo gần nhất
@@ -23,13 +25,14 @@ const newId = () => 'n' + crypto.randomBytes(8).toString('hex');
 /** Chủ đề (subject) của thông báo theo loại. */
 function subjectOf(note) {
   if (KINDS[note.kind] === 'task') return clip(note.task && note.task.title, 200);
+  if (KINDS[note.kind] === 'flow') return clip(note.job && note.job.title, 200);
   if (note.kind === 'reportFeedback') {
     const r = note.report || {};
     return clip('Báo cáo tuần ' + r.week + '/' + r.year + (r.okrTitle ? ' · ' + r.okrTitle : ''), 200);
   }
   return clip(note.okr && note.okr.title, 200);
 }
-const refIdOf = note => KINDS[note.kind] === 'task' ? (note.task && note.task.id) : note.kind === 'reportFeedback' ? (note.report && note.report.id) : (note.okr && note.okr.id);
+const refIdOf = note => KINDS[note.kind] === 'task' ? (note.task && note.task.id) : KINDS[note.kind] === 'flow' ? (note.job && note.job.id) : note.kind === 'reportFeedback' ? (note.report && note.report.id) : (note.okr && note.okr.id);
 
 /**
  * Lưu thông báo cho từng người nhận (bỏ người thực hiện, người không tồn tại hoặc đã khoá).
@@ -47,7 +50,7 @@ async function save(q, notes, byId) {
   for (const note of notes || []) {
     const refType = KINDS[note.kind]; if (!refType) continue;
     const refId = refIdOf(note); if (!refId) continue;
-    const refWs = refType === 'task' ? await wsOf(refId) : '';
+    const refWs = refType === 'task' ? await wsOf(refId) : refType === 'flow' ? String((note.job && note.job.wfId) || '') : '';
     const detail = clip(note.text || (note.okr && note.okr.note), 600);
     const subject = subjectOf(note), when = new Date().toISOString();
     for (const to of [...new Set(note.to || [])]) {

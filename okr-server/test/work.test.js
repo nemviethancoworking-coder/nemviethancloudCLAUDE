@@ -914,8 +914,8 @@ describe('v11: người theo dõi, quyền xem/sửa/xoá việc, rich text', ()
     assert.equal(await count(), before);
     const col = await pg.query("SELECT data_type FROM information_schema.columns WHERE table_name='recurring_tasks' AND column_name='followers'");
     assert.equal(col.rows[0].data_type, 'jsonb');
-    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 21);
-    assert.equal((await (await fetch(BASE + 'health')).json()).version, 21);
+    const ping = await (await fetch(BASE + '?ping=1')).json(); assert.equal(ping.version, 22);
+    assert.equal((await (await fetch(BASE + 'health')).json()).version, 22);
   });
 });
 

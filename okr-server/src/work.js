@@ -1015,7 +1015,8 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
   }
 
   return { SCHEMA, migrate, actions, loadWork, loadTaskDetail, upload, uploadInline, download, spawnDueRecurring, removeTaskFiles, STATUSES, DEFAULT_PROJECT,
-    loadPeople, filterVisibleTasks, visibleToViewer, isTopRole, cleanRich, cleanText, plainOf };
+    loadPeople, filterVisibleTasks, visibleToViewer, isTopRole, cleanRich, cleanText, plainOf,
+    files: { MIME, INLINE_EXT, MAX_FILE, UPLOAD_DIR, cleanFileName, extOf, safeId } };       // v22: module Quy trình dùng chung cách lưu/đặt tên tệp
 };
 module.exports.recurrence = { cleanRule, nextAfter, nextDue, validISO };
 module.exports.cleanRich = cleanRich;

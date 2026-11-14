@@ -410,6 +410,9 @@ function emptyWorkspace(){
    ============================================================ */
 function kanban(list){
   const ts = list || filtered({ kanban: true }), multi = S.project === 'all';
+  const fl = list && S.mode === 'mine' && window.Fl ? window.Fl : null;                 // Việc của tôi: kèm todo của module Quy trình (nhãn "Quy trình · tên job")
+  const flCards = k => fl && (k === 'todo' || k === 'done') ? fl.todoCards(k) : '';
+  const flCount = k => fl && (k === 'todo' || k === 'done') ? fl.myTodos().filter(t => k === 'done' ? t.done : !t.done).length : 0;
   // Thẻ tự xếp theo thời gian: cột chưa xong → hạn gần nhất ở trên (không hạn xuống cuối); cột Hoàn thành → mới hoàn thành ở trên. Bằng nhau giữ thứ tự cũ.
   const cols = STATUS_KEYS.map(k => ({ k, items: ts.filter(t => t.status === k).sort(k === 'done' ? (a, b) => (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || '') : (a, b) => (a.due || '9999').localeCompare(b.due || '9999')) }));
   return `
@@ -419,11 +422,11 @@ function kanban(list){
       return `
       <div class="rounded-xl bg-gray-100/80 border border-gray-200 p-2.5 min-h-[160px]" data-status="${c.k}" ondragover="W.colOver(event,'${c.k}')" ondragleave="W.colLeave(event)" ondrop="W.drop(event,'${c.k}')">
         <div class="flex items-center justify-between px-1 pb-2">
-          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full" style="background:${STATUS[c.k].dot}"></span><span class="font-semibold text-slate-800">${STATUS[c.k].t}</span><span class="text-[12px] text-gray-500 bg-white rounded-full px-2 border border-gray-200">${c.items.length}</span></div>
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full" style="background:${STATUS[c.k].dot}"></span><span class="font-semibold text-slate-800">${STATUS[c.k].t}</span><span class="text-[12px] text-gray-500 bg-white rounded-full px-2 border border-gray-200">${c.items.length + flCount(c.k)}</span></div>
           <button class="text-gray-400 hover:text-base-600" title="Thêm công việc vào cột này" onclick="W.openTask('', '${c.k}')">${I.plus}</button>
         </div>
         <div class="space-y-2" data-col="${c.k}" style="max-height:calc(100vh - 290px);overflow-y:auto">
-          ${shown.map(t => card(t, multi)).join('') || `<div class="text-center text-[12.5px] text-gray-400 py-6 border border-dashed border-gray-300 rounded-lg">Kéo công việc vào đây</div>`}
+          ${shown.map(t => card(t, multi)).join('')}${flCards(c.k)}${!shown.length && !flCount(c.k) ? `<div class="text-center text-[12.5px] text-gray-400 py-6 border border-dashed border-gray-300 rounded-lg">Kéo công việc vào đây</div>` : ''}
           ${c.k === 'done' && c.items.length > shown.length ? `<button class="btn btn-ghost btn-sm w-full justify-center" onclick="W.moreDone()">Xem thêm ${Math.min(DONE_SHOW, c.items.length - shown.length)} việc (còn ${c.items.length - shown.length})</button>` : ''}
         </div>
       </div>`;
@@ -1114,25 +1117,27 @@ function byUrgency(a, b){
 }
 /** Việc của tôi: chuyển giữa dạng Kanban (mặc định) và Danh sách. Kanban chỉ gồm việc tôi là người thực hiện, theo dự án đang chọn. */
 function mineBoard(){
+  if(window.Fl) Fl.ensureTodos();
   const v = S.mineView === 'list' ? 'list' : 'kanban';
   const btn = (k, ic, label) => `<button class="btn btn-sm ${v === k ? 'btn-primary' : 'btn-ghost'}" onclick="W.setMineView('${k}')">${ic} ${label}</button>`;
   const sw = `<div class="flex items-center gap-2 mb-3"><span class="text-[12.5px] text-gray-500">Xem dạng:</span>${btn('kanban', WI.kanban, 'Kanban')}${btn('list', WI.list, 'Danh sách')}</div>`;
   if(v === 'list') return sw + personalView('mine');
   const q = S.f.q.trim().toLowerCase();
   const ts = mineTasks().filter(t => !q || t.title.toLowerCase().includes(q) || richPlain(t.description).toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q)));
-  const note = mineTasks({ time: false }).length ? '' : '<div class="card p-4 mb-3 text-[13px] text-gray-500">Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.</div>';
+  const note = mineTasks({ time: false }).length || (window.Fl && Fl.todoCount('all') > 0) ? '' : '<div class="card p-4 mb-3 text-[13px] text-gray-500">Bạn chưa được giao công việc nào. Bấm "Thêm công việc" để tạo việc cho chính mình.</div>';
   return sw + note + kanban(ts);
 }
 function setMineView(v){ S.mineView = v === 'list' ? 'list' : 'kanban'; lsSet('okr_work_mine_view', S.mineView); repaint(); }
 function personalView(kind){
+  if(kind === 'mine' && window.Fl) Fl.ensureTodos();
   const mine = kind === 'mine', q = S.f.q.trim().toLowerCase(), tab = S.tabs[kind], lb = TAB_LABEL[kind];
   const all = mine ? mineTasks() : createdTasks();
   const inTab = (t, k) => k === 'all' ? true : k === 'open' ? isOpen(t) : !isOpen(t);
-  const cnt = k => all.filter(t => inTab(t, k)).length;
+  const cnt = k => all.filter(t => inTab(t, k)).length + (mine && window.Fl ? Fl.todoCount(k) : 0);
   const ts = all.filter(t => inTab(t, tab) && (!q || t.title.toLowerCase().includes(q) || richPlain(t.description).toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q))))
     .sort(byUrgency);
   const tabBtn = k => `<span class="chip ${tab === k ? 'active' : ''}" onclick="W.setTab('${kind}','${k}')">${lb[k]} <span class="opacity-70">${cnt(k)}</span></span>`;
-  const multi = S.project === 'all', th = (label, cls = 'px-2') => `<th class="text-left font-medium py-2.5 ${cls}">${label}</th>`;
+  const multi = S.project === 'all', fRows = mine && window.Fl ? Fl.todoRows(tab, S.f.q, multi) : '', th = (label, cls = 'px-2') => `<th class="text-left font-medium py-2.5 ${cls}">${label}</th>`;
   const giver = t => !t.createdBy ? '<span class="text-gray-400">—</span>'
     : t.createdBy === meId() ? '<span class="text-[12.5px] text-slate-600 whitespace-nowrap">Tôi</span>'
     : `<span class="inline-flex items-center gap-1.5 text-[12.5px] text-slate-700 whitespace-nowrap">${avatar(user(t.createdBy), 'w-5 h-5 text-[9px]')}${esc(user(t.createdBy).name)}</span>`;
@@ -1153,7 +1158,7 @@ function personalView(kind){
         ${th('Công việc', 'px-3')}${multi ? th('Dự án') : ''}${th(mine ? 'Người giao' : 'Người thực hiện')}${th('Ưu tiên')}${th('Hạn')}${th('Trạng thái', 'px-2 w-36')}<th class="w-44"></th>
       </tr></thead>
       <tbody class="divide-y divide-gray-100">
-        ${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId); return `
+        ${fRows}${ts.length ? ts.slice(0, S.listLimit).map(t => { const p = projById(t.projectId); return `
         <tr class="hover:bg-gray-50 cursor-pointer ${t.status === 'done' ? 'opacity-70' : ''}" onclick="W.openTask('${t.id}')">
           <td class="mc-title py-3 px-3 max-w-md"><div class="font-medium text-slate-900 ${t.status === 'done' ? 'line-through text-gray-400' : ''}">${esc(t.title)}</div>
             ${krRef(t) || subProg(t) || folBadge(t) ? `<div class="mt-1 flex items-center gap-2 flex-wrap">${krChip(t)}${subProg(t)}${folBadge(t)}</div>` : ''}
@@ -1162,7 +1167,7 @@ function personalView(kind){
           <td class="py-3 px-2">${mine ? giver(t) : stack(t.assigneeIds, 4)}</td><td class="py-3 px-2">${prioBadge(t.priority)}</td><td class="py-3 px-2 text-[12.5px]">${dueHtml(t)}</td>
           <td class="mc-st py-3 px-2" ${mine ? 'onclick="event.stopPropagation()"' : ''}>${mine ? statusCell(t) : statusBadge(t.status)}</td>
           <td class="mc-act py-3 px-2 text-right whitespace-nowrap" onclick="event.stopPropagation()">${canEditContent(t) ? `<button class="btn btn-ghost btn-sm" onclick="W.openTaskForm('${t.id}')">${I.edit} Sửa nội dung</button>` : ''}${canDelete(t) ? `<button class="text-gray-400 hover:text-red-600 p-1 ml-1" title="Xoá" onclick="W.deleteTask('${t.id}')">${I.trash}</button>` : ''}</td>
-        </tr>`; }).join('') + (ts.length > S.listLimit ? `<tr><td colspan="7" class="p-3 text-center"><button class="btn btn-ghost btn-sm" onclick="W.moreList()">Xem thêm ${Math.min(200, ts.length - S.listLimit)} việc (còn ${ts.length - S.listLimit})</button></td></tr>` : '') : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${empty}</td></tr>`}
+        </tr>`; }).join('') + (ts.length > S.listLimit ? `<tr><td colspan="7" class="p-3 text-center"><button class="btn btn-ghost btn-sm" onclick="W.moreList()">Xem thêm ${Math.min(200, ts.length - S.listLimit)} việc (còn ${ts.length - S.listLimit})</button></td></tr>` : '') : (fRows ? '' : `<tr><td colspan="7" class="p-10 text-center text-gray-400">${empty}</td></tr>`)}
       </tbody>
     </table>
   </div>`;

@@ -1,5 +1,7 @@
 /**
  * OKR Weekly — API máy chủ (Node.js + PostgreSQL), thay cho Apps Script (Code.gs v4).
+ * v22: module Quy trình kiểu Base Workflow (src/flow.js): quy trình → giai đoạn → job, SLA, todo bắt buộc, trường tuỳ chỉnh, chuyển tiếp giữa quy trình, báo cáo.
+ *      GET ?flow=list|wf|job|mine|activity|report, POST /flow-upload (tệp đính kèm job), 6 loại thông báo mới (wf*), quét quá hạn SLA nền.
  * v14: hộp thông báo trong app (chuông ở đầu trang): bảng notifications, GET ?notif=1 (kèm nv=<dấu phiên bản> để bỏ qua khi chưa có gì mới), hành động notifMark / notifRemove (không làm đổi phiên bản dữ liệu chung). Xem src/notify.js.
  * v12: ngày bắt đầu của công việc (bắt buộc, không sau hạn), tệp đính kèm khi tạo việc (tối đa 10MB/tệp), thông báo email (Gmail SMTP) khi giao việc / giao lại / phản hồi báo cáo tuần / bình luận; nhãn trạng thái "Cần làm" đổi thành "Chưa thực hiện".
  * v11: người theo dõi (chỉ xem + bình luận), quy tắc xem/sửa/xoá việc theo người tạo/người nhận/chuỗi quản lý (bỏ share_all), rich text được làm sạch ở máy chủ.
@@ -33,7 +35,7 @@ const PORT = Number(process.env.PORT || 3100);
 const TOKEN_SECRET = process.env.TOKEN_SECRET || '';
 const TOKEN_DAYS = 30;
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const VERSION = 21;
+const VERSION = 22;
 const ROLES = ['director', 'head', 'manager', 'employee'];
 const PARENT_ROLE = { head: 'director', manager: 'head', employee: 'manager' };
 const ROLE_NAME = { director: 'Giám đốc', head: 'Trưởng phòng', manager: 'Quản lý', employee: 'Nhân viên' };
@@ -72,6 +74,7 @@ async function migrate() {
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true');   // v6: khoá tài khoản
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''");          // v12: email nhận thông báo
   await W.migrate();                                                                                       // v8: workspace, dự án, việc nhiều người làm, tệp đính kèm
+  await F.migrate();                                                                                       // v22: quy trình, giai đoạn, job, todo
 }
 
 /* ---------------- Tiện ích ---------------- */
@@ -249,6 +252,8 @@ async function tx(fn) {
 const one = async (q, sql, args) => (await q.query(sql, args)).rows[0];
 /* Module quản lý công việc (workspace → phòng ban → dự án → công việc): src/work.js */
 const W = require('./work')({ pool, AppError, deny, str, num, one, canManage, todayISO, ctxFor });
+/* Module Quy trình (v22): quy trình → giai đoạn → job. Xem src/flow.js. */
+const F = require('./flow')({ pool, AppError, deny, str, num, one, canManage, todayISO, W });
 /* Thông báo email (v12): hành động ghi vào c.notes, gửi ở nền sau khi giao dịch thành công. Xem src/mail.js. */
 const M = makeMail({ pool });
 
@@ -480,10 +485,13 @@ const A = {
     if (c.users.some(x => x.managerId === u.id)) throw new AppError(u.name + ' còn người trực thuộc, không thể xoá.');
     const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
       + (SELECT count(*) FROM tasks WHERE assignee_id=$1 OR created_by=$1) + (SELECT count(*) FROM task_assignees WHERE user_id=$1)
-      + (SELECT count(*) FROM task_followers WHERE user_id=$1) + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+      + (SELECT count(*) FROM task_followers WHERE user_id=$1) + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1)
+      + (SELECT count(*) FROM wf_jobs WHERE created_by=$1) + (SELECT count(*) FROM wf_job_assignees WHERE user_id=$1) + (SELECT count(*) FROM wf_job_followers WHERE user_id=$1)
+      + (SELECT count(*) FROM wf_comments WHERE author_id=$1 AND NOT is_system) + (SELECT count(*) FROM wf_members WHERE user_id=$1 AND is_owner) AS n`, [u.id]);
     if (Number(used.n)) throw new AppError(u.name + ' đã có OKR, báo cáo, công việc hoặc phản hồi trong hệ thống nên không xoá được. Hãy dùng "Khoá tài khoản" để giữ lại lịch sử.');
     await c.q.query('DELETE FROM workspace_members WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM project_members WHERE user_id=$1', [u.id]);
+    await c.q.query('DELETE FROM wf_members WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM notifications WHERE user_id=$1', [u.id]);
     await c.q.query('DELETE FROM users WHERE id=$1', [u.id]);
   },
@@ -509,6 +517,7 @@ const BOOT = Date.now().toString(36); let notifSeq = 0; const notifStamps = new 
 const touchNotif = ids => { for (const id of ids) notifStamps.set(id, BOOT + '.' + (++notifSeq)); };
 const stampOf = id => notifStamps.get(id) || BOOT + '.0';
 Object.assign(A, W.actions);          // v8: thay thế addTask/updateTask/deleteTask/ghi chú bằng bản theo dự án + thêm các hành động mới
+Object.assign(A, F.actions);          // v22: hành động của module Quy trình (tiền tố wf)
 /** Giải pháp trong báo cáo tuần → KR nguồn (giải pháp nằm trong khối của KR nào thì thuộc KR đó). Máy chủ tự suy ra, không tin mã KR client gửi kèm việc; KR phải thuộc đúng OKR của báo cáo. */
 async function solutionKrMap(q, okrId, krUpdates) {
   const valid = new Set((await q.query('SELECT id FROM krs WHERE okr_id=$1', [okrId])).rows.map(x => x.id));
@@ -568,13 +577,23 @@ async function handle(req, res) {
       if (url.searchParams.get('ping')) return send(res, { ok: true, ping: 'pong', version: VERSION, backend: 'postgres', time: new Date().toISOString() });
       const tok = url.searchParams.get('token');
       const fileM = url.pathname.match(/\/file\/([A-Za-z0-9_-]+)$/);
-      if (fileM) return await W.download(await ctx(await verifyToken(tok)), res, fileM[1]);            // tải / xem tệp đính kèm (token trên URL để dùng được với <img>, <a>)
+      if (fileM) {                                                                                     // tải / xem tệp đính kèm (token trên URL để dùng được với <img>, <a>)
+        const fc = await ctx(await verifyToken(tok));
+        return await (fileM[1].startsWith('wf') ? F.download(fc, res, fileM[1]) : W.download(fc, res, fileM[1]));   // mã tệp của Quy trình bắt đầu bằng "wf"
+      }
       const viewer = tok ? await verifyToken(tok) : null;
       if (url.searchParams.get('notif')) {                                                             // hộp thông báo của người xem (nv = dấu phiên bản app đang có)
         if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
         const nv = stampOf(viewer.id);
         if (url.searchParams.get('nv') === nv) return send(res, { ok: true, unchanged: true, nv });
         return send(res, { ok: true, nv, ...(await N.list(pool, viewer.id)) }, 200, req);
+      }
+      if (url.searchParams.get('flow')) {                                                              // module Quy trình (v22): danh sách / chi tiết quy trình / job / của tôi / báo cáo
+        if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
+        const fp = Object.fromEntries(url.searchParams.entries());
+        if (fp.v && fp.v === dataVersion && fp.flow !== 'report') return send(res, { ok: true, unchanged: true, version: dataVersion });
+        const v = dataVersion;
+        return send(res, { ok: true, version: v, ...(await F.load(await ctx(viewer), str(fp.flow), fp)) }, 200, req);
       }
       if (url.searchParams.get('work')) {                                                              // màn Công việc: dữ liệu theo workspace đang chọn
         if (!viewer) throw authError('Vui lòng đăng nhập lại để tiếp tục.');
@@ -590,6 +609,13 @@ async function handle(req, res) {
       return send(res, await dbResponse(viewer), 200, req);
     }
     if (req.method !== 'POST') return send(res, { ok: false, error: 'Method not allowed' }, 405);
+    if (url.pathname.endsWith('/flow-upload')) {                                                       // tệp đính kèm job của Quy trình: thân yêu cầu là dữ liệu thô, token ở header
+      const viewer = await verifyToken(req.headers['x-okr-token']);
+      const c = await ctx(viewer);
+      const file = await F.upload(c, req, { jobId: url.searchParams.get('jobId'), name: url.searchParams.get('name'), fieldId: url.searchParams.get('fieldId') });
+      bumpVersion();
+      return send(res, { ok: true, version: dataVersion, attachment: file });
+    }
     if (url.pathname.endsWith('/upload-inline')) {                                                    // ảnh dán vào ô mô tả (chưa gắn với việc nào)
       const viewer = await verifyToken(req.headers['x-okr-token']);
       const file = await W.uploadInline(await ctx(viewer), req, { name: url.searchParams.get('name') });
@@ -643,6 +669,25 @@ async function runDueRecurring() {
     if (made) bumpVersion();
   } catch (e) { console.error(new Date().toISOString(), 'Tạo việc lặp lại đến ngày lỗi:', e.message || e); }
   finally { dueRunning = false; }
+}
+
+/** Quét job quá hạn SLA của module Quy trình: báo chuông một lần cho người thực hiện + owner (không email). Chạy khi khởi động và mỗi 5 phút. */
+let slaRunning = false;
+async function runFlowSla() {
+  if (slaRunning) return;
+  slaRunning = true;
+  try {
+    let recipients = [];
+    const n = await tx(async client => {
+      const users = await getUsers(client), byId = {}; users.forEach(u => { byId[u.id] = u; });
+      const notes = [];
+      const made = await F.scanSla({ q: client, me: { id: '' }, users, byId, notes });
+      if (made) recipients = await N.save(client, notes, byId);
+      return made;
+    });
+    if (n) { touchNotif(recipients); bumpVersion(); }
+  } catch (e) { console.error(new Date().toISOString(), 'Quét quá hạn SLA của Quy trình lỗi:', e.message || e); }
+  finally { slaRunning = false; }
 }
 
 /* ---------------- Nhập dữ liệu ---------------- */
@@ -714,5 +759,6 @@ async function main() {
   if (!TOKEN_SECRET || TOKEN_SECRET.length < 32) throw new Error('TOKEN_SECRET chưa được đặt (>= 32 ký tự).');
   http.createServer((req, res) => { handle(req, res); }).listen(PORT, () => console.log('OKR API v' + VERSION + ' listening on ' + PORT));
   runDueRecurring(); setInterval(runDueRecurring, 5 * 60e3).unref();                                    // việc lặp lại đến ngày thì tự xuất hiện
+  runFlowSla(); setInterval(runFlowSla, 5 * 60e3).unref();                                               // job quá hạn SLA thì báo chuông (v22)
 }
 main().catch(e => { console.error(e.message || e); process.exit(1); });

@@ -19689,6 +19689,16 @@ ${extraHtml || ""}
         if (note.kind === "assigned") return { subject: "[OKR Weekly] B\u1EA1n \u0111\u01B0\u1EE3c giao vi\u1EC7c: " + t.title, html: layout(who + " v\u1EEBa giao vi\u1EC7c cho b\u1EA1n", taskLines) };
         if (note.kind === "reassigned") return { subject: "[OKR Weekly] B\u1EA1n \u0111\u01B0\u1EE3c giao l\u1EA1i vi\u1EC7c: " + t.title, html: layout(who + " v\u1EEBa giao l\u1EA1i m\u1ED9t c\xF4ng vi\u1EC7c cho b\u1EA1n", taskLines) };
         if (note.kind === "taskComment") return { subject: "[OKR Weekly] B\xECnh lu\u1EADn m\u1EDBi: " + t.title, html: layout(who + " v\u1EEBa b\xECnh lu\u1EADn trong m\u1ED9t c\xF4ng vi\u1EC7c", [["C\xF4ng vi\u1EC7c", t.title]], quote(note.text)) };
+        if (note.kind.startsWith("wf")) {
+          const j = note.job || {};
+          const info = [["Job", j.title], ["Quy tr\xECnh", j.wfName], ["Giai \u0111o\u1EA1n", j.stage], ["Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n h\xE0nh \u0111\u1ED9ng", who], ["H\u1EA1n ch\xF3t", fmtDate(j.due)], ["\u01AFu ti\xEAn", PRIORITY[j.priority] || ""]];
+          if (note.kind === "wfAssigned") return { subject: "[OKR Weekly] B\u1EA1n \u0111\u01B0\u1EE3c giao job: " + j.title, html: layout(who + ' v\u1EEBa giao m\u1ED9t job trong quy tr\xECnh "' + (j.wfName || "") + '" cho b\u1EA1n', info) };
+          if (note.kind === "wfTodo") return { subject: "[OKR Weekly] B\u1EA1n \u0111\u01B0\u1EE3c giao todo trong job: " + j.title, html: layout(who + " v\u1EEBa giao todo cho b\u1EA1n", [["Job", j.title], ["Quy tr\xECnh", j.wfName]], quote(note.text)) };
+          if (note.kind === "wfComment") return { subject: "[OKR Weekly] B\xECnh lu\u1EADn m\u1EDBi trong job: " + j.title, html: layout(who + " v\u1EEBa b\xECnh lu\u1EADn trong m\u1ED9t job", [["Job", j.title], ["Quy tr\xECnh", j.wfName]], quote(note.text)) };
+          if (note.kind === "wfDone") return { subject: "[OKR Weekly] Job \u0111\xE3 Ho\xE0n th\xE0nh: " + j.title, html: layout('Job "' + (j.title || "") + '" \u0111\xE3 Ho\xE0n th\xE0nh', [["Quy tr\xECnh", j.wfName], ["Ng\u01B0\u1EDDi \u0111\xF3ng job", who]]) };
+          if (note.kind === "wfFailed") return { subject: "[OKR Weekly] Job Th\u1EA5t b\u1EA1i: " + j.title, html: layout('Job "' + (j.title || "") + '" \u0111\xE3 b\u1ECB \u0111\xE1nh d\u1EA5u Th\u1EA5t b\u1EA1i', [["Quy tr\xECnh", j.wfName], ["Giai \u0111o\u1EA1n", j.stage], ["Ng\u01B0\u1EDDi \u0111\xF3ng job", who]], quote(note.text ? "L\xFD do: " + note.text : "")) };
+          return null;
+        }
         if (note.kind === "reportFeedback") {
           const r = note.report || {};
           return {
@@ -19747,7 +19757,13 @@ var require_notify = __commonJS({
       reportFeedback: "report",
       okrApproved: "okr",
       okrRejected: "okr",
-      okrPending: "okr"
+      okrPending: "okr",
+      wfAssigned: "flow",
+      wfTodo: "flow",
+      wfComment: "flow",
+      wfDone: "flow",
+      wfFailed: "flow",
+      wfOverdue: "flow"
     };
     var KEEP = 200;
     var LIST_LIMIT = 60;
@@ -19755,13 +19771,14 @@ var require_notify = __commonJS({
     var newId = () => "n" + crypto2.randomBytes(8).toString("hex");
     function subjectOf(note) {
       if (KINDS[note.kind] === "task") return clip(note.task && note.task.title, 200);
+      if (KINDS[note.kind] === "flow") return clip(note.job && note.job.title, 200);
       if (note.kind === "reportFeedback") {
         const r = note.report || {};
         return clip("B\xE1o c\xE1o tu\u1EA7n " + r.week + "/" + r.year + (r.okrTitle ? " \xB7 " + r.okrTitle : ""), 200);
       }
       return clip(note.okr && note.okr.title, 200);
     }
-    var refIdOf = (note) => KINDS[note.kind] === "task" ? note.task && note.task.id : note.kind === "reportFeedback" ? note.report && note.report.id : note.okr && note.okr.id;
+    var refIdOf = (note) => KINDS[note.kind] === "task" ? note.task && note.task.id : KINDS[note.kind] === "flow" ? note.job && note.job.id : note.kind === "reportFeedback" ? note.report && note.report.id : note.okr && note.okr.id;
     async function save(q, notes, byId) {
       const recipients = /* @__PURE__ */ new Set(), wsCache = /* @__PURE__ */ new Map();
       const wsOf = async (taskId) => {
@@ -19776,7 +19793,7 @@ var require_notify = __commonJS({
         if (!refType) continue;
         const refId = refIdOf(note);
         if (!refId) continue;
-        const refWs = refType === "task" ? await wsOf(refId) : "";
+        const refWs = refType === "task" ? await wsOf(refId) : refType === "flow" ? String(note.job && note.job.wfId || "") : "";
         const detail = clip(note.text || note.okr && note.okr.note, 600);
         const subject = subjectOf(note), when = (/* @__PURE__ */ new Date()).toISOString();
         for (const to of [...new Set(note.to || [])]) {
@@ -21024,13 +21041,1248 @@ CREATE INDEX IF NOT EXISTS task_followers_user ON task_followers(user_id);
         isTopRole,
         cleanRich,
         cleanText,
-        plainOf
+        plainOf,
+        files: { MIME, INLINE_EXT, MAX_FILE, UPLOAD_DIR, cleanFileName, extOf, safeId }
       };
     };
     module2.exports.recurrence = { cleanRule, nextAfter, nextDue, validISO };
     module2.exports.cleanRich = cleanRich;
     module2.exports.plainOf = plainOf;
     module2.exports.RT = RT;
+  }
+});
+
+// src/flow.js
+var require_flow = __commonJS({
+  "src/flow.js"(exports2, module2) {
+    "use strict";
+    var crypto2 = require("crypto");
+    var fs2 = require("fs");
+    var path = require("path");
+    var { pipeline } = require("stream/promises");
+    var { Transform } = require("stream");
+    var PRIORITIES = ["low", "medium", "high", "urgent"];
+    var FIELD_TYPES = ["text", "textarea", "number", "money", "date", "select", "multiselect", "user", "checkbox", "link", "file"];
+    var LIM = { stages: 20, todos: 30, fields: 30, reasons: 30, rules: 20, members: 300, tags: 10, files: 30, options: 50 };
+    var MAX_CHAIN = 8;
+    var TEMPLATES = {
+      blank: {
+        name: "Quy tr\xECnh tr\u1ED1ng",
+        description: "Hai giai \u0111o\u1EA1n c\u01A1 b\u1EA3n, b\u1EA1n t\u1EF1 th\xEAm/s\u1EEDa trong C\xE0i \u0111\u1EB7t.",
+        stages: [{ name: "Ti\u1EBFp nh\u1EADn", sla: 24, todos: [] }, { name: "X\u1EED l\xFD", sla: 48, todos: [] }],
+        fields: [],
+        reasons: []
+      },
+      recruit: {
+        name: "Tuy\u1EC3n d\u1EE5ng",
+        description: "T\u1EEB ti\u1EBFp nh\u1EADn h\u1ED3 s\u01A1 \u1EE9ng vi\xEAn \u0111\u1EBFn nh\u1EADn vi\u1EC7c.",
+        stages: [
+          { name: "Ti\u1EBFp nh\u1EADn h\u1ED3 s\u01A1", sla: 24, todos: [["Ki\u1EC3m tra h\u1ED3 s\u01A1 \u0111\u1EE7", true]] },
+          { name: "S\xE0ng l\u1ECDc CV", sla: 48, todos: [["\u0110\xE1nh gi\xE1 CV theo m\xF4 t\u1EA3 c\xF4ng vi\u1EC7c (JD)", true], ["G\u1ECDi \u0111i\u1EC7n s\u01A1 b\u1ED9", false]] },
+          { name: "Ph\u1ECFng v\u1EA5n v\xF2ng 1", sla: 72, todos: [["X\u1EBFp l\u1ECBch ph\u1ECFng v\u1EA5n", true], ["\u0110i\u1EC1n phi\u1EBFu \u0111\xE1nh gi\xE1 ph\u1ECFng v\u1EA5n", true]] },
+          { name: "Ph\u1ECFng v\u1EA5n v\xF2ng 2", sla: 72, todos: [["\u0110i\u1EC1n phi\u1EBFu \u0111\xE1nh gi\xE1 ph\u1ECFng v\u1EA5n", true]] },
+          { name: "\u0110\u1EC1 ngh\u1ECB (offer)", sla: 48, todos: [["So\u1EA1n th\u01B0 m\u1EDDi nh\u1EADn vi\u1EC7c", true], ["Tho\u1EA3 thu\u1EADn l\u01B0\u01A1ng v\xE0 ng\xE0y nh\u1EADn vi\u1EC7c", false]] },
+          { name: "Nh\u1EADn vi\u1EC7c", sla: 120, todos: [["K\xFD h\u1EE3p \u0111\u1ED3ng", true], ["B\xE0n giao thi\u1EBFt b\u1ECB, t\xE0i kho\u1EA3n", false]] }
+        ],
+        fields: [
+          { name: "V\u1ECB tr\xED \u1EE9ng tuy\u1EC3n", type: "select", options: ["Nh\xE2n vi\xEAn kinh doanh", "Nh\xE2n vi\xEAn marketing", "K\u1EBF to\xE1n", "Kh\xE1c"], required: true },
+          { name: "Ngu\u1ED3n h\u1ED3 s\u01A1", type: "select", options: ["Facebook", "Zalo", "Website tuy\u1EC3n d\u1EE5ng", "Ng\u01B0\u1EDDi gi\u1EDBi thi\u1EC7u", "Kh\xE1c"] },
+          { name: "S\u1ED1 \u0111i\u1EC7n tho\u1EA1i", type: "text" },
+          { name: "Email", type: "text" },
+          { name: "Link CV", type: "link" },
+          { name: "File CV", type: "file" },
+          { name: "M\u1EE9c l\u01B0\u01A1ng mong mu\u1ED1n", type: "money" },
+          { name: "Ng\xE0y c\xF3 th\u1EC3 \u0111i l\xE0m", type: "date" },
+          { name: "Ng\u01B0\u1EDDi gi\u1EDBi thi\u1EC7u", type: "user" }
+        ],
+        reasons: ["Kh\xF4ng \u0111\u1EA1t CV", "Kh\xF4ng \u0111\u1EA1t ph\u1ECFng v\u1EA5n", "\u1EE8ng vi\xEAn t\u1EEB ch\u1ED1i offer", "\u1EE8ng vi\xEAn kh\xF4ng ph\u1EA3n h\u1ED3i", "H\u1EBFt nhu c\u1EA7u tuy\u1EC3n"]
+      }
+    };
+    module2.exports = function makeFlow(D) {
+      const { pool: pool2, AppError: AppError2, deny: deny2, str: str2, num: num2, one: one2, W: W2 } = D;
+      const { MIME, INLINE_EXT, MAX_FILE, UPLOAD_DIR, cleanFileName, extOf, safeId } = W2.files;
+      const newId = (p) => p + crypto2.randomBytes(6).toString("hex");
+      const uniq = (a) => [...new Set(a)];
+      const idList = (v) => uniq((Array.isArray(v) ? v : []).map(str2).filter(Boolean));
+      const nowISO = () => (/* @__PURE__ */ new Date()).toISOString();
+      const todayISO2 = D.todayISO;
+      const clipText = (s, n) => str2(s).replace(/\s+/g, " ").trim().slice(0, n);
+      const validISO = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) && !isNaN((/* @__PURE__ */ new Date(s + "T00:00:00Z")).getTime()) && (/* @__PURE__ */ new Date(s + "T00:00:00Z")).toISOString().slice(0, 10) === s;
+      const isDirector = (c) => c.me.role === "director";
+      const canCreateWorkflow = (c) => c.me.role === "director" || c.me.role === "head";
+      const fileRoot = () => path.join(UPLOAD_DIR, "wf");
+      const jobDir = (id) => path.join(fileRoot(), id);
+      const SCHEMA2 = `
+CREATE TABLE IF NOT EXISTS wf_workflows (id text PRIMARY KEY, name text NOT NULL, description text NOT NULL DEFAULT '', category text NOT NULL DEFAULT '', color text NOT NULL DEFAULT '#2f6fed',
+  archived boolean NOT NULL DEFAULT false, created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE TABLE IF NOT EXISTS wf_members (workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, user_id text NOT NULL, is_owner boolean NOT NULL DEFAULT false,
+  pinned boolean NOT NULL DEFAULT false, PRIMARY KEY (workflow_id, user_id));
+CREATE INDEX IF NOT EXISTS wf_members_user ON wf_members(user_id);
+CREATE TABLE IF NOT EXISTS wf_stages (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, name text NOT NULL, pos int NOT NULL DEFAULT 0,
+  sla_hours double precision, assignees jsonb NOT NULL DEFAULT '[]');
+CREATE INDEX IF NOT EXISTS wf_stages_wf ON wf_stages(workflow_id);
+CREATE TABLE IF NOT EXISTS wf_stage_todos (id text PRIMARY KEY, stage_id text NOT NULL REFERENCES wf_stages(id) ON DELETE CASCADE, title text NOT NULL, required boolean NOT NULL DEFAULT false, pos int NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS wf_fields (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, name text NOT NULL, type text NOT NULL,
+  options jsonb NOT NULL DEFAULT '[]', required boolean NOT NULL DEFAULT false, pos int NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS wf_fields_wf ON wf_fields(workflow_id);
+CREATE TABLE IF NOT EXISTS wf_fail_reasons (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, text text NOT NULL, pos int NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS wf_forward_rules (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, stage_id text NOT NULL DEFAULT '',
+  target_workflow_id text NOT NULL, mode text NOT NULL DEFAULT 'manual', field_map jsonb NOT NULL DEFAULT '{}', seq bigserial);
+CREATE TABLE IF NOT EXISTS wf_jobs (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, title text NOT NULL, description text NOT NULL DEFAULT '',
+  priority text NOT NULL DEFAULT 'medium', due text NOT NULL DEFAULT '', tags jsonb NOT NULL DEFAULT '[]', stage_id text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'open',
+  fail_reason text NOT NULL DEFAULT '', field_values jsonb NOT NULL DEFAULT '{}', created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '',
+  stage_entered_at text NOT NULL DEFAULT '', sla_due_at text NOT NULL DEFAULT '', sla_notified text NOT NULL DEFAULT '', closed_at text NOT NULL DEFAULT '',
+  archived boolean NOT NULL DEFAULT false, forwarded_from text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS wf_jobs_wf ON wf_jobs(workflow_id);
+CREATE TABLE IF NOT EXISTS wf_job_assignees (job_id text NOT NULL REFERENCES wf_jobs(id) ON DELETE CASCADE, user_id text NOT NULL, seq bigserial, PRIMARY KEY (job_id, user_id));
+CREATE INDEX IF NOT EXISTS wf_job_assignees_user ON wf_job_assignees(user_id);
+CREATE TABLE IF NOT EXISTS wf_job_followers (job_id text NOT NULL REFERENCES wf_jobs(id) ON DELETE CASCADE, user_id text NOT NULL, PRIMARY KEY (job_id, user_id));
+CREATE INDEX IF NOT EXISTS wf_job_followers_user ON wf_job_followers(user_id);
+CREATE TABLE IF NOT EXISTS wf_todos (id text PRIMARY KEY, job_id text NOT NULL REFERENCES wf_jobs(id) ON DELETE CASCADE, stage_id text NOT NULL DEFAULT '', tpl_id text NOT NULL DEFAULT '',
+  title text NOT NULL, required boolean NOT NULL DEFAULT false, assignee_id text NOT NULL DEFAULT '', done boolean NOT NULL DEFAULT false, done_by text NOT NULL DEFAULT '',
+  done_at text NOT NULL DEFAULT '', created_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS wf_todos_job ON wf_todos(job_id);
+CREATE INDEX IF NOT EXISTS wf_todos_assignee ON wf_todos(assignee_id);
+CREATE TABLE IF NOT EXISTS wf_comments (id text PRIMARY KEY, job_id text NOT NULL REFERENCES wf_jobs(id) ON DELETE CASCADE, author_id text NOT NULL DEFAULT '', text text NOT NULL,
+  created_at text NOT NULL DEFAULT '', is_system boolean NOT NULL DEFAULT false, mentions jsonb NOT NULL DEFAULT '[]', seq bigserial);
+CREATE INDEX IF NOT EXISTS wf_comments_job ON wf_comments(job_id);
+CREATE TABLE IF NOT EXISTS wf_files (id text PRIMARY KEY, job_id text NOT NULL REFERENCES wf_jobs(id) ON DELETE CASCADE, field_id text NOT NULL DEFAULT '', name text NOT NULL,
+  mime text NOT NULL DEFAULT '', size bigint NOT NULL DEFAULT 0, uploaded_by text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS wf_files_job ON wf_files(job_id);
+CREATE TABLE IF NOT EXISTS wf_activity (id text PRIMARY KEY, workflow_id text NOT NULL, job_id text NOT NULL DEFAULT '', actor_id text NOT NULL DEFAULT '', kind text NOT NULL,
+  detail text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS wf_activity_wf ON wf_activity(workflow_id, seq DESC);
+CREATE INDEX IF NOT EXISTS wf_activity_job ON wf_activity(job_id);
+CREATE TABLE IF NOT EXISTS wf_stage_log (seq bigserial PRIMARY KEY, job_id text NOT NULL REFERENCES wf_jobs(id) ON DELETE CASCADE, stage_id text NOT NULL, entered_at text NOT NULL, left_at text NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS wf_stage_log_job ON wf_stage_log(job_id);
+CREATE TABLE IF NOT EXISTS wf_forward_log (id text PRIMARY KEY, rule_id text NOT NULL DEFAULT '', from_job_id text NOT NULL, to_job_id text NOT NULL, from_workflow_id text NOT NULL,
+  to_workflow_id text NOT NULL, mode text NOT NULL DEFAULT 'manual', actor_id text NOT NULL DEFAULT '', created_at text NOT NULL DEFAULT '', seq bigserial);
+CREATE INDEX IF NOT EXISTS wf_forward_log_from ON wf_forward_log(from_job_id);
+CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
+`;
+      async function migrate2() {
+        await pool2.query(SCHEMA2);
+        try {
+          fs2.mkdirSync(fileRoot(), { recursive: true });
+        } catch (e) {
+          console.error("Kh\xF4ng t\u1EA1o \u0111\u01B0\u1EE3c th\u01B0 m\u1EE5c t\u1EC7p Quy tr\xECnh " + fileRoot() + ": " + e.message);
+        }
+      }
+      async function wfCtx(c, id) {
+        const w = await one2(c.q, "SELECT * FROM wf_workflows WHERE id=$1", [id]);
+        if (!w) return null;
+        const rows = (await c.q.query("SELECT user_id, is_owner, pinned FROM wf_members WHERE workflow_id=$1", [id])).rows;
+        const members = new Map(rows.map((r) => [r.user_id, r]));
+        const mine = members.get(c.me.id), dir = isDirector(c);
+        return { w, members, isMember: !!mine, isOwner: !!(mine && mine.is_owner), canView: dir || !!mine, canManage: dir || !!(mine && mine.is_owner) };
+      }
+      async function jobCtx(c, jobId) {
+        const j = await one2(c.q, "SELECT * FROM wf_jobs WHERE id=$1", [jobId]);
+        if (!j) return null;
+        const wc = await wfCtx(c, j.workflow_id);
+        const assignees = (await c.q.query("SELECT user_id FROM wf_job_assignees WHERE job_id=$1 ORDER BY seq", [jobId])).rows.map((r) => r.user_id);
+        const followers = (await c.q.query("SELECT user_id FROM wf_job_followers WHERE job_id=$1", [jobId])).rows.map((r) => r.user_id);
+        const me = c.me.id;
+        return {
+          j,
+          wc,
+          assignees,
+          followers,
+          canView: !!(wc && wc.canView),
+          canEdit: !!(wc && (wc.canManage || j.created_by === me || assignees.includes(me))),
+          canMove: !!(wc && (wc.canManage || assignees.includes(me)))
+        };
+      }
+      const needView = (jc, msg) => {
+        if (!jc || !jc.canView) deny2(msg || "B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y.");
+      };
+      async function loadConfig(q, wfId) {
+        const [st, td, fl, rs, ru] = await Promise.all([
+          q.query("SELECT * FROM wf_stages WHERE workflow_id=$1 ORDER BY pos", [wfId]),
+          q.query("SELECT t.* FROM wf_stage_todos t JOIN wf_stages s ON s.id = t.stage_id WHERE s.workflow_id=$1 ORDER BY t.pos", [wfId]),
+          q.query("SELECT * FROM wf_fields WHERE workflow_id=$1 ORDER BY pos", [wfId]),
+          q.query("SELECT * FROM wf_fail_reasons WHERE workflow_id=$1 ORDER BY pos", [wfId]),
+          q.query("SELECT * FROM wf_forward_rules WHERE workflow_id=$1 ORDER BY seq", [wfId])
+        ]);
+        const todosBy = {};
+        td.rows.forEach((t) => {
+          (todosBy[t.stage_id] = todosBy[t.stage_id] || []).push({ id: t.id, title: t.title, required: t.required });
+        });
+        return {
+          stages: st.rows.map((s) => ({ id: s.id, name: s.name, pos: s.pos, slaHours: s.sla_hours === null ? null : Number(s.sla_hours), assigneeIds: idList(s.assignees), todos: todosBy[s.id] || [] })),
+          fields: fl.rows.map((f) => ({ id: f.id, name: f.name, type: f.type, options: Array.isArray(f.options) ? f.options : [], required: f.required })),
+          failReasons: rs.rows.map((r) => ({ id: r.id, text: r.text })),
+          forwardRules: ru.rows.map((r) => ({ id: r.id, stageId: r.stage_id, targetWorkflowId: r.target_workflow_id, mode: r.mode, fieldMap: r.field_map || {} }))
+        };
+      }
+      const slaDue = (enteredISO, hours) => hours && hours > 0 ? new Date(new Date(enteredISO).getTime() + hours * 36e5).toISOString() : "";
+      const emptyVal = (f, v, fileCount) => {
+        if (f.type === "checkbox") return v !== true;
+        if (f.type === "file") return !fileCount;
+        if (f.type === "multiselect") return !Array.isArray(v) || !v.length;
+        return v === void 0 || v === null || String(v).trim() === "";
+      };
+      function cleanFieldValues(c, fields, input) {
+        const src = input && typeof input === "object" ? input : {}, out = {};
+        for (const f of fields) {
+          if (f.type === "file" || !(f.id in src)) continue;
+          const v = src[f.id];
+          switch (f.type) {
+            case "text": {
+              const s = clipText(v, 500);
+              if (s) out[f.id] = s;
+              break;
+            }
+            case "textarea": {
+              const s = W2.cleanText(v, 5e3);
+              if (W2.plainOf(s).trim()) out[f.id] = s;
+              break;
+            }
+            case "number":
+            case "money": {
+              if (v === "" || v === null || v === void 0) break;
+              const n = Number(v);
+              if (!Number.isFinite(n)) throw new AppError2('Tr\u01B0\u1EDDng "' + f.name + '" c\u1EA7n nh\u1EADp s\u1ED1.');
+              out[f.id] = n;
+              break;
+            }
+            case "date": {
+              if (!v) break;
+              if (!validISO(v)) throw new AppError2('Tr\u01B0\u1EDDng "' + f.name + '" c\u1EA7n nh\u1EADp ng\xE0y h\u1EE3p l\u1EC7.');
+              out[f.id] = v;
+              break;
+            }
+            case "select": {
+              if (!v) break;
+              if (!f.options.includes(v)) throw new AppError2('Gi\xE1 tr\u1ECB "' + clipText(v, 40) + '" kh\xF4ng n\u1EB1m trong danh s\xE1ch c\u1EE7a tr\u01B0\u1EDDng "' + f.name + '".');
+              out[f.id] = v;
+              break;
+            }
+            case "multiselect": {
+              const a = uniq((Array.isArray(v) ? v : []).map(str2)).filter((x) => f.options.includes(x));
+              if (a.length) out[f.id] = a;
+              break;
+            }
+            case "user": {
+              if (!v) break;
+              if (!c.byId[v]) throw new AppError2('Tr\u01B0\u1EDDng "' + f.name + '": ng\u01B0\u1EDDi \u0111\u01B0\u1EE3c ch\u1ECDn kh\xF4ng t\u1ED3n t\u1EA1i.');
+              out[f.id] = str2(v);
+              break;
+            }
+            case "checkbox": {
+              if (v === true) out[f.id] = true;
+              break;
+            }
+            case "link": {
+              const s = str2(v).trim().slice(0, 500);
+              if (!s) break;
+              if (!/^https?:\/\/[^\s<>"']+$/i.test(s)) throw new AppError2('Tr\u01B0\u1EDDng "' + f.name + '" c\u1EA7n l\xE0 \u0111\u01B0\u1EDDng link b\u1EAFt \u0111\u1EA7u b\u1EB1ng http:// ho\u1EB7c https://.');
+              out[f.id] = s;
+              break;
+            }
+            default:
+              break;
+          }
+        }
+        return out;
+      }
+      async function checkRequiredFields(c, fields, values, jobId) {
+        const files = jobId ? (await c.q.query("SELECT field_id, count(*)::int AS n FROM wf_files WHERE job_id=$1 GROUP BY field_id", [jobId])).rows : [];
+        const cnt = {};
+        files.forEach((r) => {
+          cnt[r.field_id] = r.n;
+        });
+        const miss = fields.filter((f) => f.required && emptyVal(f, values[f.id], cnt[f.id]));
+        if (miss.length) throw new AppError2("C\xF2n tr\u01B0\u1EDDng b\u1EAFt bu\u1ED9c ch\u01B0a nh\u1EADp: " + miss.slice(0, 4).map((f) => f.name).join(", ") + (miss.length > 4 ? "\u2026" : "") + ".");
+      }
+      function cleanTags(v) {
+        return uniq((Array.isArray(v) ? v : []).map((t) => clipText(t, 30)).filter(Boolean)).slice(0, LIM.tags);
+      }
+      async function logAct(c, wfId, jobId, kind, detail) {
+        await c.q.query(
+          "INSERT INTO wf_activity(id,workflow_id,job_id,actor_id,kind,detail,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)",
+          [newId("wa"), wfId, jobId || "", c.me.id, kind, JSON.stringify(detail || {}), nowISO()]
+        );
+      }
+      async function sysComment(c, jobId, text) {
+        await c.q.query("INSERT INTO wf_comments(id,job_id,author_id,text,created_at,is_system) VALUES($1,$2,$3,$4,$5,true)", [newId("wc"), jobId, c.me.id, text, nowISO()]);
+      }
+      const noteJob = (j, wf, stageName, extra) => ({ id: j.id, title: j.title, wfId: j.workflow_id || wf && wf.id || "", wfName: wf ? wf.name : "", stage: stageName || "", ...extra || {} });
+      function checkPeople(c, wc, ids, what) {
+        for (const id of ids) {
+          const u = c.byId[id];
+          if (!u) throw new AppError2(what + " kh\xF4ng t\u1ED3n t\u1EA1i.");
+          if (u.active === false) throw new AppError2(u.name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n, kh\xF4ng ch\u1ECDn l\xE0m " + what.toLowerCase() + " \u0111\u01B0\u1EE3c.");
+          if (!wc.members.has(id) && u.role !== "director") throw new AppError2(u.name + " ch\u01B0a l\xE0 th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh. H\xE3y th\xEAm v\xE0o tab Th\xE0nh vi\xEAn tr\u01B0\u1EDBc.");
+        }
+      }
+      async function writeAssignees(c, jobId, ids) {
+        await c.q.query("DELETE FROM wf_job_assignees WHERE job_id=$1", [jobId]);
+        for (const id of ids) await c.q.query("INSERT INTO wf_job_assignees(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [jobId, id]);
+      }
+      async function writeFollowers(c, jobId, ids) {
+        await c.q.query("DELETE FROM wf_job_followers WHERE job_id=$1", [jobId]);
+        for (const id of ids) await c.q.query("INSERT INTO wf_job_followers(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [jobId, id]);
+      }
+      async function ensureStageTodos(c, jobId, stage, assigneeId, now) {
+        const tpls = (await c.q.query("SELECT * FROM wf_stage_todos WHERE stage_id=$1 ORDER BY pos", [stage.id])).rows;
+        for (const t of tpls) {
+          const ex = await one2(c.q, "SELECT 1 FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND tpl_id=$3", [jobId, stage.id, t.id]);
+          if (ex) continue;
+          await c.q.query(
+            "INSERT INTO wf_todos(id,job_id,stage_id,tpl_id,title,required,assignee_id,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            [newId("wt"), jobId, stage.id, t.id, t.title, t.required, assigneeId || "", c.me.id, now]
+          );
+        }
+      }
+      async function enterStage(c, j, stage, assigneeIds, now) {
+        await c.q.query("UPDATE wf_stage_log SET left_at=$2 WHERE job_id=$1 AND left_at=''", [j.id, now]);
+        await c.q.query("INSERT INTO wf_stage_log(job_id,stage_id,entered_at) VALUES($1,$2,$3)", [j.id, stage.id, now]);
+        await c.q.query(
+          "UPDATE wf_jobs SET stage_id=$2, stage_entered_at=$3, sla_due_at=$4, sla_notified='', status='open', fail_reason='', closed_at='' WHERE id=$1",
+          [j.id, stage.id, now, slaDue(now, stage.slaHours)]
+        );
+        await ensureStageTodos(c, j.id, stage, assigneeIds[0], now);
+      }
+      const stageAssignees = (c, wc, stage, fallback) => {
+        const ok = idList(stage.assigneeIds).filter((id) => c.byId[id] && c.byId[id].active !== false && (wc.members.has(id) || c.byId[id].role === "director"));
+        return ok.length ? ok : fallback;
+      };
+      async function chainLength(q, jobId) {
+        let n = 0, id = jobId;
+        while (id && n <= MAX_CHAIN + 1) {
+          const r = await one2(q, "SELECT forwarded_from FROM wf_jobs WHERE id=$1", [id]);
+          id = r ? r.forwarded_from : "";
+          if (id) n++;
+        }
+        return n;
+      }
+      async function forwardJob(c, src, srcStageName, rule, mode) {
+        const twc = await wfCtx(c, rule.target_workflow_id);
+        if (!twc || twc.w.archived) return null;
+        if (await chainLength(c.q, src.id) >= MAX_CHAIN) return null;
+        const tcfg = await loadConfig(c.q, twc.w.id);
+        if (!tcfg.stages.length) return null;
+        const scfg = await loadConfig(c.q, src.workflow_id);
+        const first = tcfg.stages[0], now = nowISO(), id = newId("wj");
+        const sv = src.field_values || {}, tv = {}, map = rule.field_map || {};
+        for (const tf of tcfg.fields) {
+          if (tf.type === "file") continue;
+          let sf = scfg.fields.find((f) => f.id === map[tf.id]);
+          if (!sf) sf = scfg.fields.find((f) => f.type === tf.type && f.name.trim().toLowerCase() === tf.name.trim().toLowerCase());
+          if (!sf || sf.type !== tf.type || !(sf.id in sv)) continue;
+          let v = sv[sf.id];
+          if (tf.type === "select" && !tf.options.includes(v)) continue;
+          if (tf.type === "multiselect") {
+            v = (Array.isArray(v) ? v : []).filter((x) => tf.options.includes(x));
+            if (!v.length) continue;
+          }
+          tv[tf.id] = v;
+        }
+        const assignees = stageAssignees(c, twc, first, twc.members.has(c.me.id) || isDirector(c) ? [c.me.id] : []);
+        const srcFollowers = (await c.q.query("SELECT user_id FROM wf_job_followers WHERE job_id=$1", [src.id])).rows.map((r) => r.user_id).filter((u) => twc.members.has(u) && !assignees.includes(u) && c.byId[u] && c.byId[u].active !== false);
+        await c.q.query(
+          `INSERT INTO wf_jobs(id,workflow_id,title,description,priority,due,tags,stage_id,status,field_values,created_by,created_at,stage_entered_at,sla_due_at,forwarded_from)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$11,$12,$13)`,
+          [id, twc.w.id, src.title, src.description, src.priority, src.due, JSON.stringify(src.tags || []), first.id, JSON.stringify(tv), c.me.id, now, slaDue(now, first.slaHours), src.id]
+        );
+        await c.q.query("INSERT INTO wf_stage_log(job_id,stage_id,entered_at) VALUES($1,$2,$3)", [id, first.id, now]);
+        await writeAssignees(c, id, assignees);
+        await writeFollowers(c, id, srcFollowers);
+        await ensureStageTodos(c, id, first, assignees[0], now);
+        await c.q.query(
+          "INSERT INTO wf_forward_log(id,rule_id,from_job_id,to_job_id,from_workflow_id,to_workflow_id,mode,actor_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+          [newId("wl"), rule.id, src.id, id, src.workflow_id, twc.w.id, mode, c.me.id, now]
+        );
+        const srcWf = await one2(c.q, "SELECT name FROM wf_workflows WHERE id=$1", [src.workflow_id]);
+        await sysComment(c, src.id, '\u0110\xE3 chuy\u1EC3n ti\u1EBFp sang quy tr\xECnh "' + twc.w.name + '" (' + (mode === "auto" ? "t\u1EF1 \u0111\u1ED9ng" : "th\u1EE7 c\xF4ng") + ").");
+        await sysComment(c, id, '\u0110\u01B0\u1EE3c chuy\u1EC3n ti\u1EBFp t\u1EEB quy tr\xECnh "' + (srcWf ? srcWf.name : "") + '"' + (srcStageName ? " (giai \u0111o\u1EA1n " + srcStageName + ")" : "") + ".");
+        await logAct(c, src.workflow_id, src.id, "job.forward", { to: id, toWorkflow: twc.w.name, mode });
+        await logAct(c, twc.w.id, id, "job.create", { from: src.id, fromWorkflow: srcWf ? srcWf.name : "", forward: true });
+        const nj = { id, title: src.title, workflow_id: twc.w.id };
+        if (c.notes && assignees.length) c.notes.push({ kind: "wfAssigned", to: assignees.filter((u) => u !== c.me.id), actorId: c.me.id, job: noteJob(nj, twc.w, first.name, { priority: src.priority, due: src.due, fromForward: true }) });
+        return nj;
+      }
+      async function runAutoForward(c, jobId, stageId, stageName) {
+        const src = await one2(c.q, "SELECT * FROM wf_jobs WHERE id=$1", [jobId]);
+        const rules = (await c.q.query("SELECT * FROM wf_forward_rules WHERE workflow_id=$1 AND stage_id=$2 AND mode='auto' ORDER BY seq", [src.workflow_id, stageId])).rows;
+        const made = [];
+        for (const r of rules) {
+          if (await one2(c.q, "SELECT 1 FROM wf_forward_log WHERE from_job_id=$1 AND rule_id=$2", [jobId, r.id])) continue;
+          const nj = await forwardJob(c, src, stageName, r, "auto");
+          if (nj) made.push(nj);
+        }
+        return made;
+      }
+      function jobJson(j, ex) {
+        ex = ex || {};
+        return {
+          id: j.id,
+          workflowId: j.workflow_id,
+          title: j.title,
+          priority: j.priority,
+          due: j.due,
+          tags: Array.isArray(j.tags) ? j.tags : [],
+          stageId: j.stage_id,
+          status: j.status,
+          failReason: j.fail_reason,
+          assigneeIds: ex.assignees || [],
+          followerIds: ex.followers || [],
+          createdBy: j.created_by,
+          createdAt: j.created_at,
+          stageEnteredAt: j.stage_entered_at,
+          slaDueAt: j.sla_due_at,
+          closedAt: j.closed_at,
+          archived: j.archived,
+          forwardedFrom: j.forwarded_from,
+          fieldValues: j.field_values || {},
+          todoTotal: ex.todoTotal || 0,
+          todoDone: ex.todoDone || 0,
+          todoReqOpen: ex.todoReqOpen || 0,
+          commentCount: ex.commentCount || 0,
+          fileCount: ex.fileCount || 0,
+          fwd: ex.fwd || 0
+        };
+      }
+      async function jobExtras(q, jobRows) {
+        const ids = jobRows.map((j) => j.id), by = {};
+        const get = (id) => by[id] = by[id] || { assignees: [], followers: [] };
+        if (!ids.length) return by;
+        const [as, fo, td, cm, fl, fw] = await Promise.all([
+          q.query("SELECT job_id, user_id FROM wf_job_assignees WHERE job_id = ANY($1) ORDER BY seq", [ids]),
+          q.query("SELECT job_id, user_id FROM wf_job_followers WHERE job_id = ANY($1)", [ids]),
+          q.query(`SELECT t.job_id, count(*)::int AS total, count(*) FILTER (WHERE t.done)::int AS done, count(*) FILTER (WHERE t.required AND NOT t.done)::int AS req_open
+        FROM wf_todos t JOIN wf_jobs j ON j.id = t.job_id AND t.stage_id = j.stage_id WHERE t.job_id = ANY($1) GROUP BY t.job_id`, [ids]),
+          q.query("SELECT job_id, count(*)::int AS n FROM wf_comments WHERE job_id = ANY($1) AND NOT is_system GROUP BY job_id", [ids]),
+          q.query("SELECT job_id, count(*)::int AS n FROM wf_files WHERE job_id = ANY($1) GROUP BY job_id", [ids]),
+          q.query("SELECT from_job_id AS job_id, count(*)::int AS n FROM wf_forward_log WHERE from_job_id = ANY($1) GROUP BY from_job_id", [ids])
+        ]);
+        as.rows.forEach((r) => get(r.job_id).assignees.push(r.user_id));
+        fo.rows.forEach((r) => get(r.job_id).followers.push(r.user_id));
+        td.rows.forEach((r) => {
+          const e = get(r.job_id);
+          e.todoTotal = r.total;
+          e.todoDone = r.done;
+          e.todoReqOpen = r.req_open;
+        });
+        cm.rows.forEach((r) => {
+          get(r.job_id).commentCount = r.n;
+        });
+        fl.rows.forEach((r) => {
+          get(r.job_id).fileCount = r.n;
+        });
+        fw.rows.forEach((r) => {
+          get(r.job_id).fwd = r.n;
+        });
+        return by;
+      }
+      async function loadList(c) {
+        const dir = isDirector(c);
+        const wfs = (await c.q.query(`SELECT w.* FROM wf_workflows w ${dir ? "" : "WHERE EXISTS (SELECT 1 FROM wf_members m WHERE m.workflow_id = w.id AND m.user_id = $1)"} ORDER BY w.seq`, dir ? [] : [c.me.id])).rows;
+        const ids = wfs.map((w) => w.id);
+        const [mem, cnt, stg] = await Promise.all([
+          c.q.query("SELECT workflow_id, user_id, is_owner, pinned FROM wf_members WHERE workflow_id = ANY($1)", [ids]),
+          c.q.query(`SELECT workflow_id, count(*) FILTER (WHERE status='open' AND NOT archived)::int AS open,
+          count(*) FILTER (WHERE status='open' AND NOT archived AND ((sla_due_at <> '' AND sla_due_at < $2) OR (due <> '' AND due < $3)))::int AS overdue,
+          count(*) FILTER (WHERE status='done' AND NOT archived)::int AS done, count(*) FILTER (WHERE status='failed' AND NOT archived)::int AS failed
+        FROM wf_jobs WHERE workflow_id = ANY($1) GROUP BY workflow_id`, [ids, nowISO(), todayISO2()]),
+          c.q.query("SELECT workflow_id, count(*)::int AS n FROM wf_stages WHERE workflow_id = ANY($1) GROUP BY workflow_id", [ids])
+        ]);
+        const cb = {};
+        cnt.rows.forEach((r) => {
+          cb[r.workflow_id] = r;
+        });
+        const sb = {};
+        stg.rows.forEach((r) => {
+          sb[r.workflow_id] = r.n;
+        });
+        const mb = {};
+        mem.rows.forEach((r) => {
+          (mb[r.workflow_id] = mb[r.workflow_id] || []).push(r);
+        });
+        return {
+          workflows: wfs.map((w) => {
+            const ms = mb[w.id] || [], mine = ms.find((m) => m.user_id === c.me.id), k = cb[w.id] || {};
+            return {
+              id: w.id,
+              name: w.name,
+              description: w.description,
+              category: w.category,
+              color: w.color,
+              archived: w.archived,
+              createdBy: w.created_by,
+              createdAt: w.created_at,
+              ownerIds: ms.filter((m) => m.is_owner).map((m) => m.user_id),
+              memberCount: ms.length,
+              stageCount: sb[w.id] || 0,
+              pinned: !!(mine && mine.pinned),
+              isMember: !!mine,
+              canManage: dir || !!(mine && mine.is_owner),
+              counts: { open: k.open || 0, overdue: k.overdue || 0, done: k.done || 0, failed: k.failed || 0 }
+            };
+          }),
+          canCreate: canCreateWorkflow(c),
+          templates: Object.entries(TEMPLATES).map(([key, t]) => ({ key, name: t.name, description: t.description, stages: t.stages.length }))
+        };
+      }
+      async function loadWorkflow(c, id, archived) {
+        const wc = await wfCtx(c, id);
+        if (!wc || !wc.canView) deny2(wc ? "B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y." : "Quy tr\xECnh kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        const cfg = await loadConfig(c.q, id);
+        const jobs = (await c.q.query("SELECT * FROM wf_jobs WHERE workflow_id=$1 AND archived=$2 ORDER BY seq DESC LIMIT 2000", [id, !!archived])).rows;
+        const ex = await jobExtras(c.q, jobs);
+        const w = wc.w;
+        return {
+          workflow: {
+            id: w.id,
+            name: w.name,
+            description: w.description,
+            category: w.category,
+            color: w.color,
+            archived: w.archived,
+            createdBy: w.created_by,
+            createdAt: w.created_at,
+            members: [...wc.members.values()].map((m) => ({ userId: m.user_id, owner: m.is_owner })),
+            pinned: !!(wc.members.get(c.me.id) || {}).pinned,
+            isMember: wc.isMember,
+            isOwner: wc.isOwner,
+            canManage: wc.canManage
+          },
+          ...cfg,
+          jobs: jobs.map((j) => jobJson(j, ex[j.id])),
+          archivedView: !!archived
+        };
+      }
+      async function loadJob(c, id) {
+        const jc = await jobCtx(c, id);
+        if (!jc || !jc.canView) deny2(jc ? "B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y." : "Job kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        const j = jc.j;
+        const [td, cm, fl, ac, fw, ex] = await Promise.all([
+          c.q.query("SELECT * FROM wf_todos WHERE job_id=$1 ORDER BY seq", [id]),
+          c.q.query("SELECT * FROM wf_comments WHERE job_id=$1 ORDER BY seq", [id]),
+          c.q.query("SELECT * FROM wf_files WHERE job_id=$1 ORDER BY seq", [id]),
+          c.q.query("SELECT * FROM wf_activity WHERE job_id=$1 ORDER BY seq DESC LIMIT 100", [id]),
+          c.q.query(`SELECT l.*, fj.title AS from_title, tj.title AS to_title, fw.name AS from_wf, tw.name AS to_wf FROM wf_forward_log l
+        LEFT JOIN wf_jobs fj ON fj.id = l.from_job_id LEFT JOIN wf_jobs tj ON tj.id = l.to_job_id
+        LEFT JOIN wf_workflows fw ON fw.id = l.from_workflow_id LEFT JOIN wf_workflows tw ON tw.id = l.to_workflow_id
+        WHERE l.from_job_id=$1 OR l.to_job_id=$1 ORDER BY l.seq`, [id]),
+          jobExtras(c.q, [j])
+        ]);
+        const out = jobJson(j, ex[j.id]);
+        out.description = j.description;
+        out.todos = td.rows.map((t) => ({ id: t.id, stageId: t.stage_id, title: t.title, required: t.required, assigneeId: t.assignee_id, done: t.done, doneBy: t.done_by, doneAt: t.done_at, createdAt: t.created_at }));
+        out.comments = cm.rows.map((m) => ({ id: m.id, authorId: m.author_id, text: m.text, createdAt: m.created_at, system: m.is_system, mentions: idList(m.mentions) }));
+        out.files = fl.rows.map((f) => ({ id: f.id, fieldId: f.field_id, name: f.name, mime: f.mime, size: Number(f.size), uploadedBy: f.uploaded_by, createdAt: f.created_at }));
+        out.history = ac.rows.map((a) => {
+          let d = {};
+          try {
+            d = JSON.parse(a.detail || "{}");
+          } catch (e) {
+          }
+          return { id: a.id, kind: a.kind, actorId: a.actor_id, detail: d, createdAt: a.created_at };
+        });
+        out.forwardLog = fw.rows.map((l) => ({
+          id: l.id,
+          fromJobId: l.from_job_id,
+          toJobId: l.to_job_id,
+          fromTitle: l.from_title || "",
+          toTitle: l.to_title || "",
+          fromWorkflow: l.from_wf || "",
+          toWorkflow: l.to_wf || "",
+          fromWorkflowId: l.from_workflow_id,
+          toWorkflowId: l.to_workflow_id,
+          ruleId: l.rule_id,
+          mode: l.mode,
+          actorId: l.actor_id,
+          createdAt: l.created_at
+        }));
+        out.canEdit = jc.canEdit;
+        out.canMove = jc.canMove;
+        out.canManage = jc.wc.canManage;
+        return { job: out };
+      }
+      async function loadMine(c) {
+        const me = c.me.id, dir = isDirector(c);
+        const vis = dir ? "" : "AND EXISTS (SELECT 1 FROM wf_members m WHERE m.workflow_id = j.workflow_id AND m.user_id = $1)";
+        const team = c.me.role === "employee" ? [] : c.users.filter((u) => u.id !== me && D.canManage(c, u.id)).map((u) => u.id);
+        const rows = (await c.q.query(`SELECT j.*, w.name AS wf_name, w.color AS wf_color, s.name AS stage_name FROM wf_jobs j JOIN wf_workflows w ON w.id = j.workflow_id LEFT JOIN wf_stages s ON s.id = j.stage_id
+      WHERE NOT j.archived AND NOT w.archived ${vis} AND (j.status = 'open' OR j.closed_at >= $3) AND (
+        j.created_by = $1 OR EXISTS (SELECT 1 FROM wf_job_assignees a WHERE a.job_id = j.id AND (a.user_id = $1 OR a.user_id = ANY($2)))
+        OR EXISTS (SELECT 1 FROM wf_job_followers f WHERE f.job_id = j.id AND f.user_id = $1))
+      ORDER BY j.seq DESC LIMIT 500`, [me, team, new Date(Date.now() - 30 * 864e5).toISOString()])).rows;
+        const ex = await jobExtras(c.q, rows);
+        const jobs = rows.map((j) => ({ ...jobJson(j, ex[j.id]), wfName: j.wf_name, wfColor: j.wf_color, stageName: j.stage_name || "" }));
+        const todoRows = (await c.q.query(
+          `SELECT t.*, j.title AS job_title, j.workflow_id, w.name AS wf_name, w.color AS wf_color, s.name AS stage_name FROM wf_todos t
+      JOIN wf_jobs j ON j.id = t.job_id JOIN wf_workflows w ON w.id = j.workflow_id LEFT JOIN wf_stages s ON s.id = t.stage_id
+      WHERE t.assignee_id = $1 AND j.status = 'open' AND NOT j.archived AND NOT w.archived ${vis} AND (NOT t.done OR t.done_at >= $2) ORDER BY t.done, t.seq LIMIT 300`,
+          [me, new Date(Date.now() - 14 * 864e5).toISOString()]
+        )).rows;
+        return { jobs, todos: todoRows.map((t) => ({
+          id: t.id,
+          jobId: t.job_id,
+          jobTitle: t.job_title,
+          workflowId: t.workflow_id,
+          wfName: t.wf_name,
+          wfColor: t.wf_color,
+          stageName: t.stage_name || "",
+          title: t.title,
+          required: t.required,
+          done: t.done,
+          doneAt: t.done_at,
+          createdAt: t.created_at
+        })) };
+      }
+      async function loadActivity(c, id) {
+        const wc = await wfCtx(c, id);
+        if (!wc || !wc.canView) deny2(wc ? "B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y." : "Quy tr\xECnh kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        const rows = (await c.q.query("SELECT a.*, j.title AS job_title FROM wf_activity a LEFT JOIN wf_jobs j ON j.id = a.job_id WHERE a.workflow_id=$1 ORDER BY a.seq DESC LIMIT 200", [id])).rows;
+        return { activity: rows.map((a) => {
+          let d = {};
+          try {
+            d = JSON.parse(a.detail || "{}");
+          } catch (e) {
+          }
+          return { id: a.id, kind: a.kind, jobId: a.job_id, jobTitle: a.job_title || "", actorId: a.actor_id, detail: d, createdAt: a.created_at };
+        }) };
+      }
+      async function loadReport(c, id, from, to) {
+        const wc = await wfCtx(c, id);
+        if (!wc || !wc.canView) deny2(wc ? "B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y." : "Quy tr\xECnh kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        const cfg = await loadConfig(c.q, id), now = nowISO(), today = todayISO2();
+        const lo = validISO(from) ? (/* @__PURE__ */ new Date(from + "T00:00:00+07:00")).toISOString() : "", hi = validISO(to) ? (/* @__PURE__ */ new Date(to + "T23:59:59.999+07:00")).toISOString() : "9999";
+        const jobs = (await c.q.query("SELECT * FROM wf_jobs WHERE workflow_id=$1 AND created_at >= $2 AND created_at <= $3", [id, lo, hi])).rows;
+        const jobIds = jobs.map((j) => j.id), ex = await jobExtras(c.q, jobs);
+        const logs = jobIds.length ? (await c.q.query("SELECT * FROM wf_stage_log WHERE job_id = ANY($1)", [jobIds])).rows : [];
+        const isOver = (j) => j.status === "open" && (j.sla_due_at && j.sla_due_at < now || j.due && j.due < today);
+        const totals = { total: jobs.length, open: 0, overdue: 0, done: 0, failed: 0 };
+        jobs.forEach((j) => {
+          if (j.status === "open") {
+            totals.open++;
+            if (isOver(j)) totals.overdue++;
+          } else if (j.status === "done") totals.done++;
+          else if (j.status === "failed") totals.failed++;
+        });
+        const closed = totals.done + totals.failed;
+        totals.doneRate = closed ? totals.done / closed : null;
+        const doneJobs = jobs.filter((j) => j.status === "done" && j.closed_at);
+        totals.avgCycleHours = doneJobs.length ? doneJobs.reduce((s, j) => s + (new Date(j.closed_at) - new Date(j.created_at)) / 36e5, 0) / doneJobs.length : null;
+        const byStage = cfg.stages.map((s) => {
+          const rows = logs.filter((l) => l.stage_id === s.id && l.left_at);
+          const durs = rows.map((l) => (new Date(l.left_at) - new Date(l.entered_at)) / 36e5);
+          const met = s.slaHours ? durs.filter((d) => d <= s.slaHours).length : 0;
+          const openJobs = jobs.filter((j) => j.status === "open" && j.stage_id === s.id);
+          return {
+            stageId: s.id,
+            name: s.name,
+            slaHours: s.slaHours,
+            open: openJobs.length,
+            overdue: openJobs.filter(isOver).length,
+            passed: durs.length,
+            avgHours: durs.length ? durs.reduce((a, b) => a + b, 0) / durs.length : null,
+            slaMetRate: s.slaHours && durs.length ? met / durs.length : null
+          };
+        });
+        const asg = {};
+        jobs.forEach((j) => ((ex[j.id] || {}).assignees || []).forEach((u) => {
+          const e = asg[u] = asg[u] || { userId: u, open: 0, overdue: 0, done: 0, failed: 0 };
+          if (j.status === "open") {
+            e.open++;
+            if (isOver(j)) e.overdue++;
+          } else if (j.status === "done") e.done++;
+          else if (j.status === "failed") e.failed++;
+        }));
+        const rs = {};
+        jobs.filter((j) => j.status === "failed").forEach((j) => {
+          const k = j.fail_reason || "(Kh\xF4ng ghi l\xFD do)";
+          rs[k] = (rs[k] || 0) + 1;
+        });
+        return { report: {
+          from: validISO(from) ? from : "",
+          to: validISO(to) ? to : "",
+          totals,
+          byStage,
+          byAssignee: Object.values(asg).sort((a, b) => b.open - a.open),
+          failReasons: Object.entries(rs).map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count)
+        } };
+      }
+      async function load(c, kind, p) {
+        switch (kind) {
+          case "list":
+            return loadList(c);
+          case "wf":
+            return loadWorkflow(c, str2(p.id), p.archived === "1");
+          case "job":
+            return loadJob(c, str2(p.id));
+          case "mine":
+            return loadMine(c);
+          case "activity":
+            return loadActivity(c, str2(p.id));
+          case "report":
+            return loadReport(c, str2(p.id), str2(p.from), str2(p.to));
+          default:
+            throw new AppError2("Y\xEAu c\u1EA7u kh\xF4ng h\u1EE3p l\u1EC7.");
+        }
+      }
+      async function scanSla(c) {
+        const now = nowISO();
+        const rows = (await c.q.query(`SELECT j.*, w.name AS wf_name, s.name AS stage_name FROM wf_jobs j JOIN wf_workflows w ON w.id = j.workflow_id LEFT JOIN wf_stages s ON s.id = j.stage_id
+      WHERE j.status = 'open' AND NOT j.archived AND NOT w.archived AND j.sla_due_at <> '' AND j.sla_due_at < $1 AND j.sla_notified <> j.stage_entered_at`, [now])).rows;
+        for (const j of rows) {
+          const as = (await c.q.query("SELECT user_id FROM wf_job_assignees WHERE job_id=$1", [j.id])).rows.map((r) => r.user_id);
+          const ow = (await c.q.query("SELECT user_id FROM wf_members WHERE workflow_id=$1 AND is_owner", [j.workflow_id])).rows.map((r) => r.user_id);
+          c.notes.push({ kind: "wfOverdue", to: uniq([...as, ...ow]), actorId: "", job: noteJob(j, { id: j.workflow_id, name: j.wf_name }, j.stage_name || "", { slaDueAt: j.sla_due_at }) });
+          await c.q.query("UPDATE wf_jobs SET sla_notified = stage_entered_at WHERE id=$1", [j.id]);
+        }
+        return rows.length;
+      }
+      async function getWc(c, id) {
+        const wc = await wfCtx(c, id);
+        if (!wc) throw new AppError2("Quy tr\xECnh kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        return wc;
+      }
+      async function getJc(c, id) {
+        const jc = await jobCtx(c, id);
+        if (!jc || !jc.wc) throw new AppError2("Job kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        needView(jc);
+        return jc;
+      }
+      async function stageOf(q, id) {
+        return one2(q, "SELECT * FROM wf_stages WHERE id=$1", [id]);
+      }
+      const stageJson = (s) => ({ id: s.id, name: s.name, slaHours: s.sla_hours === null ? null : Number(s.sla_hours), assigneeIds: idList(s.assignees) });
+      async function seedConfig(c, wfId, spec) {
+        const idMap = {};
+        for (let i = 0; i < spec.stages.length; i++) {
+          const s = spec.stages[i], sid = newId("ws");
+          await c.q.query("INSERT INTO wf_stages(id,workflow_id,name,pos,sla_hours,assignees) VALUES($1,$2,$3,$4,$5,$6)", [sid, wfId, s.name, i, s.sla || null, JSON.stringify(s.assignees || [])]);
+          for (let k = 0; k < (s.todos || []).length; k++) await c.q.query("INSERT INTO wf_stage_todos(id,stage_id,title,required,pos) VALUES($1,$2,$3,$4,$5)", [newId("wp"), sid, s.todos[k][0], !!s.todos[k][1], k]);
+          if (s.oldId) idMap[s.oldId] = sid;
+        }
+        for (let i = 0; i < (spec.fields || []).length; i++) {
+          const f = spec.fields[i];
+          await c.q.query("INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos) VALUES($1,$2,$3,$4,$5,$6,$7)", [newId("wf"), wfId, f.name, f.type, JSON.stringify(f.options || []), !!f.required, i]);
+        }
+        for (let i = 0; i < (spec.reasons || []).length; i++) await c.q.query("INSERT INTO wf_fail_reasons(id,workflow_id,text,pos) VALUES($1,$2,$3,$4)", [newId("wr"), wfId, spec.reasons[i], i]);
+      }
+      const actions = {
+        /* ----- Quy trình ----- */
+        async wfSaveWorkflow(c, p) {
+          const w = p.workflow || {};
+          if (!safeId(w.id)) throw new AppError2("Thi\u1EBFu m\xE3 quy tr\xECnh.");
+          const name = clipText(w.name, 100);
+          if (!name) throw new AppError2("Nh\u1EADp t\xEAn quy tr\xECnh.");
+          const row = [w.id, name, W2.cleanText(w.description, 1e3), clipText(w.category, 40), /^#[0-9a-fA-F]{6}$/.test(str2(w.color)) ? w.color : "#2f6fed"];
+          const old = await one2(c.q, "SELECT * FROM wf_workflows WHERE id=$1", [w.id]);
+          if (old) {
+            const wc = await getWc(c, w.id);
+            if (!wc.canManage) deny2("Ch\u1EC9 owner c\u1EE7a quy tr\xECnh ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa quy tr\xECnh.");
+            await c.q.query("UPDATE wf_workflows SET name=$2, description=$3, category=$4, color=$5, archived=$6 WHERE id=$1", [...row, w.archived === void 0 ? old.archived : !!w.archived]);
+            await logAct(c, w.id, "", "workflow.edit", { name });
+            return;
+          }
+          if (!canCreateWorkflow(c)) deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c ho\u1EB7c Tr\u01B0\u1EDFng ph\xF2ng \u0111\u01B0\u1EE3c t\u1EA1o quy tr\xECnh.");
+          let spec;
+          if (p.cloneFromId) {
+            const src = await getWc(c, str2(p.cloneFromId));
+            if (!src.canView) deny2("B\u1EA1n kh\xF4ng xem \u0111\u01B0\u1EE3c quy tr\xECnh c\u1EA7n nh\xE2n b\u1EA3n.");
+            const cfg = await loadConfig(c.q, src.w.id);
+            spec = {
+              stages: cfg.stages.map((s) => ({ name: s.name, sla: s.slaHours, assignees: [], todos: s.todos.map((t) => [t.title, t.required]) })),
+              fields: cfg.fields,
+              reasons: cfg.failReasons.map((r) => r.text)
+            };
+          } else {
+            const t = TEMPLATES[str2(p.templateKey) || "blank"];
+            if (!t) throw new AppError2("M\u1EABu quy tr\xECnh kh\xF4ng t\u1ED3n t\u1EA1i.");
+            spec = t;
+          }
+          await c.q.query("INSERT INTO wf_workflows(id,name,description,category,color,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)", [...row, c.me.id, nowISO()]);
+          await c.q.query("INSERT INTO wf_members(workflow_id,user_id,is_owner) VALUES($1,$2,true)", [w.id, c.me.id]);
+          await seedConfig(c, w.id, spec);
+          await logAct(c, w.id, "", "workflow.create", { name, template: p.cloneFromId ? "clone" : str2(p.templateKey) || "blank" });
+        },
+        async wfDeleteWorkflow(c, p) {
+          const wc = await wfCtx(c, str2(p.id));
+          if (!wc) return;
+          if (!wc.canManage) deny2("Ch\u1EC9 owner c\u1EE7a quy tr\xECnh ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 quy tr\xECnh.");
+          const n = await one2(c.q, "SELECT count(*)::int AS n FROM wf_jobs WHERE workflow_id=$1", [wc.w.id]);
+          if (n.n) throw new AppError2("Quy tr\xECnh c\xF2n " + n.n + " job n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y L\u01B0u tr\u1EEF quy tr\xECnh \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.");
+          await c.q.query("DELETE FROM wf_forward_rules WHERE target_workflow_id=$1", [wc.w.id]);
+          await c.q.query("DELETE FROM wf_activity WHERE workflow_id=$1", [wc.w.id]);
+          await c.q.query("DELETE FROM wf_workflows WHERE id=$1", [wc.w.id]);
+        },
+        async wfPin(c, p) {
+          const r = await c.q.query("UPDATE wf_members SET pinned=$3 WHERE workflow_id=$1 AND user_id=$2", [str2(p.workflowId), c.me.id, !!p.pinned]);
+          if (!r.rowCount) throw new AppError2("B\u1EA1n ch\u01B0a l\xE0 th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y.");
+        },
+        /** Đặt lại danh sách thành viên: members = [{ userId, owner }]. Owner phải là Giám đốc/Trưởng phòng; người còn job đang làm luôn được giữ lại. */
+        async wfSetMembers(c, p) {
+          const wc = await getWc(c, str2(p.workflowId));
+          if (!wc.canManage) deny2("Ch\u1EC9 owner c\u1EE7a quy tr\xECnh ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c qu\u1EA3n l\xFD th\xE0nh vi\xEAn.");
+          const list = (Array.isArray(p.members) ? p.members : []).filter((m) => m && c.byId[m.userId]);
+          const map = /* @__PURE__ */ new Map();
+          for (const m of list) map.set(m.userId, !!m.owner);
+          for (const [uid, owner] of map) {
+            const u = c.byId[uid], had = wc.members.has(uid);
+            if (u.active === false && !had) throw new AppError2(u.name + " \u0111\xE3 b\u1ECB kho\xE1 t\xE0i kho\u1EA3n.");
+            if (owner && u.role !== "director" && u.role !== "head") throw new AppError2(u.name + " kh\xF4ng th\u1EC3 l\xE0m owner: owner ph\u1EA3i l\xE0 Gi\xE1m \u0111\u1ED1c ho\u1EB7c Tr\u01B0\u1EDFng ph\xF2ng.");
+          }
+          const keep = (await c.q.query(`SELECT a.user_id FROM wf_job_assignees a JOIN wf_jobs j ON j.id = a.job_id WHERE j.workflow_id=$1 AND j.status='open' AND NOT j.archived
+        UNION SELECT f.user_id FROM wf_job_followers f JOIN wf_jobs j ON j.id = f.job_id WHERE j.workflow_id=$1 AND j.status='open' AND NOT j.archived`, [wc.w.id])).rows.map((r) => r.user_id);
+          const kept = [];
+          for (const uid of keep) if (!map.has(uid) && wc.members.has(uid)) {
+            map.set(uid, false);
+            kept.push((c.byId[uid] || {}).name || uid);
+          }
+          if (![...map.values()].some(Boolean)) throw new AppError2("Quy tr\xECnh c\u1EA7n \xEDt nh\u1EA5t m\u1ED9t owner.");
+          if (map.size > LIM.members) throw new AppError2("Quy tr\xECnh t\u1ED1i \u0111a " + LIM.members + " th\xE0nh vi\xEAn.");
+          const pins = new Map([...wc.members.values()].map((m) => [m.user_id, m.pinned]));
+          await c.q.query("DELETE FROM wf_members WHERE workflow_id=$1", [wc.w.id]);
+          for (const [uid, owner] of map) await c.q.query("INSERT INTO wf_members(workflow_id,user_id,is_owner,pinned) VALUES($1,$2,$3,$4)", [wc.w.id, uid, owner, !!pins.get(uid)]);
+          await logAct(c, wc.w.id, "", "members.set", { count: map.size, owners: [...map].filter(([, o]) => o).map(([u]) => (c.byId[u] || {}).name || u) });
+          return { kept };
+        },
+        /** Lưu cấu hình: gửi phần nào thì thay phần đó (stages / fields / failReasons / forwardRules). */
+        async wfSaveConfig(c, p) {
+          const wc = await getWc(c, str2(p.workflowId));
+          if (!wc.canManage) deny2("Ch\u1EC9 owner c\u1EE7a quy tr\xECnh ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa c\u1EA5u h\xECnh.");
+          const wfId = wc.w.id, cfg = await loadConfig(c.q, wfId);
+          if (Array.isArray(p.stages)) {
+            const stages = p.stages;
+            if (!stages.length) throw new AppError2("Quy tr\xECnh c\u1EA7n \xEDt nh\u1EA5t 1 giai \u0111o\u1EA1n.");
+            if (stages.length > LIM.stages) throw new AppError2("T\u1ED1i \u0111a " + LIM.stages + " giai \u0111o\u1EA1n.");
+            const seen = /* @__PURE__ */ new Set();
+            for (const s of stages) {
+              if (!safeId(s.id) || seen.has(s.id)) throw new AppError2("M\xE3 giai \u0111o\u1EA1n kh\xF4ng h\u1EE3p l\u1EC7.");
+              seen.add(s.id);
+              if (!clipText(s.name, 80)) throw new AppError2("Nh\u1EADp t\xEAn cho m\u1ECDi giai \u0111o\u1EA1n.");
+              const other = await one2(c.q, "SELECT workflow_id FROM wf_stages WHERE id=$1", [s.id]);
+              if (other && other.workflow_id !== wfId) throw new AppError2("M\xE3 giai \u0111o\u1EA1n b\u1ECB tr\xF9ng.");
+              const sla = s.slaHours === null || s.slaHours === void 0 || s.slaHours === "" ? null : Number(s.slaHours);
+              if (sla !== null && !(sla > 0 && sla <= 24 * 365)) throw new AppError2('H\u1EA1n x\u1EED l\xFD (SLA) c\u1EE7a giai \u0111o\u1EA1n "' + clipText(s.name, 40) + '" kh\xF4ng h\u1EE3p l\u1EC7.');
+              s._sla = sla;
+              s._assignees = idList(s.assigneeIds);
+              checkPeople(c, wc, s._assignees, "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n m\u1EB7c \u0111\u1ECBnh");
+              if ((s.todos || []).length > LIM.todos) throw new AppError2("M\u1ED7i giai \u0111o\u1EA1n t\u1ED1i \u0111a " + LIM.todos + " todo m\u1EABu.");
+            }
+            for (const old of cfg.stages) {
+              if (seen.has(old.id)) continue;
+              const open = await one2(c.q, "SELECT count(*)::int AS n FROM wf_jobs WHERE stage_id=$1 AND status='open'", [old.id]);
+              if (open.n) throw new AppError2('Giai \u0111o\u1EA1n "' + old.name + '" c\xF2n ' + open.n + " job \u0111ang l\xE0m, h\xE3y chuy\u1EC3n ch\xFAng \u0111i tr\u01B0\u1EDBc khi xo\xE1 giai \u0111o\u1EA1n.");
+              await c.q.query("DELETE FROM wf_stages WHERE id=$1", [old.id]);
+              await c.q.query("DELETE FROM wf_forward_rules WHERE workflow_id=$1 AND stage_id=$2", [wfId, old.id]);
+            }
+            for (let i = 0; i < stages.length; i++) {
+              const s = stages[i], exists = cfg.stages.some((o) => o.id === s.id);
+              if (exists) await c.q.query("UPDATE wf_stages SET name=$2, pos=$3, sla_hours=$4, assignees=$5 WHERE id=$1", [s.id, clipText(s.name, 80), i, s._sla, JSON.stringify(s._assignees)]);
+              else await c.q.query("INSERT INTO wf_stages(id,workflow_id,name,pos,sla_hours,assignees) VALUES($1,$2,$3,$4,$5,$6)", [s.id, wfId, clipText(s.name, 80), i, s._sla, JSON.stringify(s._assignees)]);
+              await c.q.query("DELETE FROM wf_stage_todos WHERE stage_id=$1", [s.id]);
+              const tseen = /* @__PURE__ */ new Set();
+              for (let k = 0; k < (s.todos || []).length; k++) {
+                const t = s.todos[k], title = clipText(t.title, 200);
+                if (!title) continue;
+                const tid = safeId(t.id) && !tseen.has(t.id) ? t.id : newId("wp");
+                tseen.add(tid);
+                const clash = await one2(c.q, "SELECT stage_id FROM wf_stage_todos WHERE id=$1", [tid]);
+                await c.q.query("INSERT INTO wf_stage_todos(id,stage_id,title,required,pos) VALUES($1,$2,$3,$4,$5)", [clash ? newId("wp") : tid, s.id, title, !!t.required, k]);
+              }
+            }
+          }
+          if (Array.isArray(p.fields)) {
+            if (p.fields.length > LIM.fields) throw new AppError2("T\u1ED1i \u0111a " + LIM.fields + " tr\u01B0\u1EDDng tu\u1EF3 ch\u1EC9nh.");
+            const seen = /* @__PURE__ */ new Set();
+            for (const f of p.fields) {
+              if (!safeId(f.id) || seen.has(f.id)) throw new AppError2("M\xE3 tr\u01B0\u1EDDng kh\xF4ng h\u1EE3p l\u1EC7.");
+              seen.add(f.id);
+              if (!clipText(f.name, 80)) throw new AppError2("Nh\u1EADp t\xEAn cho m\u1ECDi tr\u01B0\u1EDDng.");
+              if (!FIELD_TYPES.includes(f.type)) throw new AppError2("Ki\u1EC3u tr\u01B0\u1EDDng kh\xF4ng h\u1EE3p l\u1EC7.");
+              const other = await one2(c.q, "SELECT workflow_id FROM wf_fields WHERE id=$1", [f.id]);
+              if (other && other.workflow_id !== wfId) throw new AppError2("M\xE3 tr\u01B0\u1EDDng b\u1ECB tr\xF9ng.");
+              const prev = cfg.fields.find((o) => o.id === f.id);
+              if (prev && prev.type !== f.type) throw new AppError2('Kh\xF4ng \u0111\u1ED5i \u0111\u01B0\u1EE3c ki\u1EC3u c\u1EE7a tr\u01B0\u1EDDng "' + prev.name + '". H\xE3y t\u1EA1o tr\u01B0\u1EDDng m\u1EDBi.');
+              if (f.type === "select" || f.type === "multiselect") {
+                f._options = uniq((Array.isArray(f.options) ? f.options : []).map((o) => clipText(o, 100)).filter(Boolean)).slice(0, LIM.options);
+                if (!f._options.length) throw new AppError2('Tr\u01B0\u1EDDng "' + clipText(f.name, 40) + '" c\u1EA7n \xEDt nh\u1EA5t 1 l\u1EF1a ch\u1ECDn.');
+              } else f._options = [];
+            }
+            for (const old of cfg.fields) if (!seen.has(old.id)) {
+              await c.q.query("DELETE FROM wf_fields WHERE id=$1", [old.id]);
+              const files = (await c.q.query("SELECT id, job_id FROM wf_files WHERE field_id=$1", [old.id])).rows;
+              for (const f of files) {
+                try {
+                  fs2.rmSync(path.join(jobDir(f.job_id), f.id), { force: true });
+                } catch (e) {
+                }
+              }
+              await c.q.query("DELETE FROM wf_files WHERE field_id=$1", [old.id]);
+            }
+            for (let i = 0; i < p.fields.length; i++) {
+              const f = p.fields[i], exists = cfg.fields.some((o) => o.id === f.id);
+              if (exists) await c.q.query("UPDATE wf_fields SET name=$2, options=$3, required=$4, pos=$5 WHERE id=$1", [f.id, clipText(f.name, 80), JSON.stringify(f._options), !!f.required, i]);
+              else await c.q.query("INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos) VALUES($1,$2,$3,$4,$5,$6,$7)", [f.id, wfId, clipText(f.name, 80), f.type, JSON.stringify(f._options), !!f.required, i]);
+            }
+          }
+          if (Array.isArray(p.failReasons)) {
+            if (p.failReasons.length > LIM.reasons) throw new AppError2("T\u1ED1i \u0111a " + LIM.reasons + " l\xFD do th\u1EA5t b\u1EA1i.");
+            await c.q.query("DELETE FROM wf_fail_reasons WHERE workflow_id=$1", [wfId]);
+            const texts = uniq(p.failReasons.map((r) => clipText(r && typeof r === "object" ? r.text : r, 120)).filter(Boolean));
+            for (let i = 0; i < texts.length; i++) await c.q.query("INSERT INTO wf_fail_reasons(id,workflow_id,text,pos) VALUES($1,$2,$3,$4)", [newId("wr"), wfId, texts[i], i]);
+          }
+          if (Array.isArray(p.forwardRules)) {
+            if (p.forwardRules.length > LIM.rules) throw new AppError2("T\u1ED1i \u0111a " + LIM.rules + " lu\u1EADt chuy\u1EC3n ti\u1EBFp.");
+            const cur = await loadConfig(c.q, wfId);
+            const stageIds = new Set(cur.stages.map((s) => s.id)), fieldIds = new Set(cur.fields.map((f) => f.id));
+            const rules = [];
+            for (const r of p.forwardRules) {
+              const sid = str2(r.stageId);
+              if (sid && !stageIds.has(sid)) throw new AppError2("Lu\u1EADt chuy\u1EC3n ti\u1EBFp: giai \u0111o\u1EA1n ngu\u1ED3n kh\xF4ng h\u1EE3p l\u1EC7.");
+              const twc = await wfCtx(c, str2(r.targetWorkflowId));
+              if (!twc) throw new AppError2("Lu\u1EADt chuy\u1EC3n ti\u1EBFp: quy tr\xECnh \u0111\xEDch kh\xF4ng t\u1ED3n t\u1EA1i.");
+              if (twc.w.id === wfId) throw new AppError2("Lu\u1EADt chuy\u1EC3n ti\u1EBFp: kh\xF4ng chuy\u1EC3n ti\u1EBFp sang ch\xEDnh quy tr\xECnh n\xE0y.");
+              if (!twc.canView) deny2('B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh \u0111\xEDch "' + twc.w.name + '".');
+              const tcfg = await loadConfig(c.q, twc.w.id), tfIds = new Set(tcfg.fields.map((f) => f.id));
+              const fm = {};
+              const src = r.fieldMap && typeof r.fieldMap === "object" ? r.fieldMap : {};
+              for (const [tf, sf] of Object.entries(src)) if (tfIds.has(tf) && fieldIds.has(str2(sf))) fm[tf] = str2(sf);
+              rules.push({ id: safeId(r.id) ? r.id : newId("wu"), stageId: sid, target: twc.w.id, mode: r.mode === "auto" ? "auto" : "manual", fm });
+            }
+            const keep = new Set(rules.map((r) => r.id));
+            for (const old of cur.forwardRules) if (!keep.has(old.id)) await c.q.query("DELETE FROM wf_forward_rules WHERE id=$1", [old.id]);
+            for (const r of rules) {
+              const ex = await one2(c.q, "SELECT workflow_id FROM wf_forward_rules WHERE id=$1", [r.id]);
+              if (ex && ex.workflow_id !== wfId) throw new AppError2("M\xE3 lu\u1EADt chuy\u1EC3n ti\u1EBFp b\u1ECB tr\xF9ng.");
+              if (ex) await c.q.query("UPDATE wf_forward_rules SET stage_id=$2, target_workflow_id=$3, mode=$4, field_map=$5 WHERE id=$1", [r.id, r.stageId, r.target, r.mode, JSON.stringify(r.fm)]);
+              else await c.q.query("INSERT INTO wf_forward_rules(id,workflow_id,stage_id,target_workflow_id,mode,field_map) VALUES($1,$2,$3,$4,$5,$6)", [r.id, wfId, r.stageId, r.target, r.mode, JSON.stringify(r.fm)]);
+            }
+          }
+          await logAct(c, wfId, "", "config.save", { parts: ["stages", "fields", "failReasons", "forwardRules"].filter((k) => Array.isArray(p[k])) });
+        },
+        /* ----- Job ----- */
+        async wfSaveJob(c, p) {
+          const t = p.job || {};
+          if (!safeId(t.id)) throw new AppError2("Thi\u1EBFu m\xE3 job.");
+          const old = await jobCtx(c, t.id);
+          const wfId = old ? old.j.workflow_id : str2(t.workflowId);
+          const wc = old ? old.wc : await getWc(c, wfId);
+          if (!wc || !wc.canView) deny2("B\u1EA1n kh\xF4ng ph\u1EA3i th\xE0nh vi\xEAn c\u1EE7a quy tr\xECnh n\xE0y.");
+          if (wc.w.archived) throw new AppError2("Quy tr\xECnh \u0111\xE3 l\u01B0u tr\u1EEF.");
+          if (old && !old.canEdit) deny2("Ch\u1EC9 ng\u01B0\u1EDDi t\u1EA1o, ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa job n\xE0y.");
+          const title = clipText(t.title, 300);
+          if (!title) throw new AppError2("Nh\u1EADp t\xEAn job.");
+          const cfg = await loadConfig(c.q, wfId);
+          if (!cfg.stages.length) throw new AppError2("Quy tr\xECnh ch\u01B0a c\xF3 giai \u0111o\u1EA1n n\xE0o.");
+          const due = str2(t.due);
+          if (due && !validISO(due)) throw new AppError2("H\u1EA1n ch\xF3t kh\xF4ng h\u1EE3p l\u1EC7.");
+          const priority = PRIORITIES.includes(t.priority) ? t.priority : old ? old.j.priority : "medium";
+          const desc = W2.cleanText(t.description, 3e4), tags = cleanTags(t.tags);
+          const values = cleanFieldValues(c, cfg.fields, t.fieldValues);
+          const followersIn = idList(t.followerIds);
+          if (old) {
+            if (old.j.status !== "open" && !wc.canManage) throw new AppError2("Job \u0111\xE3 \u0111\xF3ng, ch\u1EC9 owner m\u1EDF l\u1EA1i \u0111\u01B0\u1EE3c.");
+            const merged = { ...old.j.field_values || {}, ...values };
+            for (const f of cfg.fields) if (f.id in (t.fieldValues || {}) && !(f.id in values)) delete merged[f.id];
+            const assignees2 = Array.isArray(t.assigneeIds) ? idList(t.assigneeIds) : old.assignees;
+            if (Array.isArray(t.assigneeIds)) checkPeople(c, wc, assignees2, "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n");
+            const followers2 = Array.isArray(t.followerIds) ? followersIn.filter((u) => !assignees2.includes(u)) : old.followers;
+            if (Array.isArray(t.followerIds)) checkPeople(c, wc, followers2, "Ng\u01B0\u1EDDi theo d\xF5i");
+            await c.q.query("UPDATE wf_jobs SET title=$2, description=$3, priority=$4, due=$5, tags=$6, field_values=$7 WHERE id=$1", [old.j.id, title, desc, priority, due, JSON.stringify(tags), JSON.stringify(merged)]);
+            const newcomers = assignees2.filter((u) => !old.assignees.includes(u) && u !== c.me.id);
+            if (Array.isArray(t.assigneeIds)) {
+              if (!assignees2.length && old.j.status === "open") throw new AppError2("Job c\u1EA7n \xEDt nh\u1EA5t 1 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n.");
+              await writeAssignees(c, old.j.id, assignees2);
+            }
+            if (Array.isArray(t.followerIds)) await writeFollowers(c, old.j.id, followers2.filter((u) => !assignees2.includes(u)));
+            if (newcomers.length && c.notes) c.notes.push({ kind: "wfAssigned", to: newcomers, actorId: c.me.id, job: noteJob(old.j, wc.w, (cfg.stages.find((s) => s.id === old.j.stage_id) || {}).name, { priority, due }) });
+            await logAct(c, wfId, old.j.id, "job.edit", {});
+            return;
+          }
+          await checkRequiredFields(c, cfg.fields.filter((f) => f.type !== "file"), values, null);
+          const first = cfg.stages[0], now = nowISO();
+          let assignees = Array.isArray(t.assigneeIds) ? idList(t.assigneeIds) : [];
+          if (assignees.length) checkPeople(c, wc, assignees, "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n");
+          else assignees = stageAssignees(c, wc, first, [c.me.id]);
+          const followers = followersIn.filter((u) => !assignees.includes(u));
+          checkPeople(c, wc, followers, "Ng\u01B0\u1EDDi theo d\xF5i");
+          await c.q.query(
+            `INSERT INTO wf_jobs(id,workflow_id,title,description,priority,due,tags,stage_id,status,field_values,created_by,created_at,stage_entered_at,sla_due_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$11,$12)`,
+            [t.id, wfId, title, desc, priority, due, JSON.stringify(tags), first.id, JSON.stringify(values), c.me.id, now, slaDue(now, first.slaHours)]
+          );
+          await c.q.query("INSERT INTO wf_stage_log(job_id,stage_id,entered_at) VALUES($1,$2,$3)", [t.id, first.id, now]);
+          await writeAssignees(c, t.id, assignees);
+          await writeFollowers(c, t.id, followers);
+          await ensureStageTodos(c, t.id, first, assignees[0], now);
+          await logAct(c, wfId, t.id, "job.create", { title });
+          const nj = { id: t.id, title, workflow_id: wfId };
+          if (c.notes) c.notes.push({ kind: "wfAssigned", to: assignees.filter((u) => u !== c.me.id), actorId: c.me.id, job: noteJob(nj, wc.w, first.name, { priority, due }) });
+          await runAutoForward(c, t.id, first.id, first.name);
+        },
+        /** Chuyển giai đoạn tuần tự: dir = 'next' | 'prev'. assigneeIds (tuỳ chọn) = người thực hiện ở giai đoạn mới. */
+        async wfMoveJob(c, p) {
+          const jc = await getJc(c, str2(p.id)), j = jc.j;
+          if (!jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c chuy\u1EC3n giai \u0111o\u1EA1n.");
+          if (jc.wc.w.archived) throw new AppError2("Quy tr\xECnh \u0111\xE3 l\u01B0u tr\u1EEF.");
+          if (j.status !== "open") throw new AppError2("Job \u0111\xE3 \u0111\xF3ng, h\xE3y m\u1EDF l\u1EA1i tr\u01B0\u1EDBc khi chuy\u1EC3n giai \u0111o\u1EA1n.");
+          const dir = p.dir === "prev" ? "prev" : p.dir === "next" ? "next" : "";
+          if (!dir) throw new AppError2("H\u01B0\u1EDBng chuy\u1EC3n kh\xF4ng h\u1EE3p l\u1EC7.");
+          const cfg = await loadConfig(c.q, j.workflow_id);
+          const idx = cfg.stages.findIndex((s) => s.id === j.stage_id);
+          if (idx < 0) throw new AppError2("Giai \u0111o\u1EA1n hi\u1EC7n t\u1EA1i kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i, h\xE3y nh\u1EDD owner ki\u1EC3m tra c\u1EA5u h\xECnh.");
+          const to = cfg.stages[idx + (dir === "next" ? 1 : -1)];
+          if (!to) throw new AppError2(dir === "next" ? "\u0110\xE2y l\xE0 giai \u0111o\u1EA1n cu\u1ED1i. H\xE3y b\u1EA5m Ho\xE0n th\xE0nh." : "\u0110\xE2y l\xE0 giai \u0111o\u1EA1n \u0111\u1EA7u ti\xEAn.");
+          if (dir === "next") {
+            const open = (await c.q.query("SELECT title FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND required AND NOT done ORDER BY seq", [j.id, j.stage_id])).rows;
+            if (open.length) throw new AppError2("C\xF2n " + open.length + " todo b\u1EAFt bu\u1ED9c ch\u01B0a xong: " + open.slice(0, 3).map((t) => '"' + t.title + '"').join(", ") + (open.length > 3 ? "\u2026" : "") + ".");
+            await checkRequiredFields(c, cfg.fields, j.field_values || {}, j.id);
+          }
+          const now = nowISO(), cur = cfg.stages[idx];
+          let assignees = idList(p.assigneeIds);
+          if (assignees.length) checkPeople(c, jc.wc, assignees, "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n");
+          else assignees = stageAssignees(c, jc.wc, to, jc.assignees);
+          await writeAssignees(c, j.id, assignees);
+          await writeFollowers(c, j.id, jc.followers.filter((u) => !assignees.includes(u)));
+          await enterStage(c, j, to, assignees, now);
+          await sysComment(c, j.id, (dir === "next" ? "Chuy\u1EC3n ti\u1EBFp" : "Tr\u1EA3 l\u1EA1i") + ' t\u1EEB giai \u0111o\u1EA1n "' + cur.name + '" sang "' + to.name + '".');
+          await logAct(c, j.workflow_id, j.id, "job.move", { from: cur.name, to: to.name, dir });
+          if (c.notes) c.notes.push({ kind: "wfAssigned", to: assignees.filter((u) => u !== c.me.id), actorId: c.me.id, job: noteJob(j, jc.wc.w, to.name, { priority: j.priority, due: j.due }) });
+          await runAutoForward(c, j.id, to.id, to.name);
+        },
+        /** Đóng job: status = 'done' (chỉ ở giai đoạn cuối) | 'failed' (mọi giai đoạn, kèm lý do từ danh sách của owner). */
+        async wfCloseJob(c, p) {
+          const jc = await getJc(c, str2(p.id)), j = jc.j;
+          if (!jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c \u0111\xF3ng job.");
+          if (j.status !== "open") throw new AppError2("Job \u0111\xE3 \u0111\xF3ng r\u1ED3i.");
+          const status = p.status === "failed" ? "failed" : p.status === "done" ? "done" : "";
+          if (!status) throw new AppError2("Tr\u1EA1ng th\xE1i kh\xF4ng h\u1EE3p l\u1EC7.");
+          const cfg = await loadConfig(c.q, j.workflow_id);
+          const cur = cfg.stages.find((s) => s.id === j.stage_id), isLast = cfg.stages.length && cfg.stages[cfg.stages.length - 1].id === j.stage_id;
+          let reason = "";
+          if (status === "done") {
+            if (!isLast) throw new AppError2("Ch\u1EC9 b\u1EA5m Ho\xE0n th\xE0nh \u0111\u01B0\u1EE3c \u1EDF giai \u0111o\u1EA1n cu\u1ED1i. N\u1EBFu job kh\xF4ng \u0111i ti\u1EBFp, h\xE3y \u0111\xE1nh d\u1EA5u Th\u1EA5t b\u1EA1i.");
+            const open = (await c.q.query("SELECT title FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND required AND NOT done", [j.id, j.stage_id])).rows;
+            if (open.length) throw new AppError2("C\xF2n " + open.length + " todo b\u1EAFt bu\u1ED9c ch\u01B0a xong: " + open.slice(0, 3).map((t) => '"' + t.title + '"').join(", ") + ".");
+            await checkRequiredFields(c, cfg.fields, j.field_values || {}, j.id);
+          } else {
+            reason = clipText(p.reason, 200);
+            if (cfg.failReasons.length && !cfg.failReasons.some((r) => r.text === reason)) throw new AppError2("H\xE3y ch\u1ECDn m\u1ED9t l\xFD do th\u1EA5t b\u1EA1i trong danh s\xE1ch.");
+          }
+          const now = nowISO();
+          await c.q.query("UPDATE wf_stage_log SET left_at=$2 WHERE job_id=$1 AND left_at=''", [j.id, now]);
+          await c.q.query("UPDATE wf_jobs SET status=$2, fail_reason=$3, closed_at=$4 WHERE id=$1", [j.id, status, reason, now]);
+          await sysComment(c, j.id, status === "done" ? "\u0110\xE3 \u0111\xE1nh d\u1EA5u Ho\xE0n th\xE0nh." : "\u0110\xE3 \u0111\xE1nh d\u1EA5u Th\u1EA5t b\u1EA1i" + (reason ? ": " + reason : "") + ".");
+          await logAct(c, j.workflow_id, j.id, status === "done" ? "job.done" : "job.failed", { reason, stage: cur ? cur.name : "" });
+          const owners = [...jc.wc.members.values()].filter((m) => m.is_owner).map((m) => m.user_id);
+          const to = uniq([j.created_by, ...jc.followers, ...owners]).filter((u) => u && u !== c.me.id);
+          if (c.notes && to.length) c.notes.push({ kind: status === "done" ? "wfDone" : "wfFailed", to, actorId: c.me.id, job: noteJob(j, jc.wc.w, cur ? cur.name : ""), text: reason });
+          if (status === "done") await runAutoForward(c, j.id, "", "Ho\xE0n th\xE0nh");
+        },
+        async wfReopenJob(c, p) {
+          const jc = await getJc(c, str2(p.id)), j = jc.j;
+          if (!jc.wc.canManage) deny2("Ch\u1EC9 owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c m\u1EDF l\u1EA1i job \u0111\xE3 \u0111\xF3ng.");
+          if (j.status === "open") return;
+          if (jc.wc.w.archived) throw new AppError2("Quy tr\xECnh \u0111\xE3 l\u01B0u tr\u1EEF.");
+          const cfg = await loadConfig(c.q, j.workflow_id);
+          const stage = cfg.stages.find((s) => s.id === j.stage_id) || cfg.stages[cfg.stages.length - 1];
+          if (!stage) throw new AppError2("Quy tr\xECnh ch\u01B0a c\xF3 giai \u0111o\u1EA1n n\xE0o.");
+          const was = j.status;
+          await c.q.query("UPDATE wf_jobs SET archived=false WHERE id=$1", [j.id]);
+          await enterStage(c, j, stage, jc.assignees, nowISO());
+          await sysComment(c, j.id, "\u0110\xE3 m\u1EDF l\u1EA1i job (tr\u01B0\u1EDBc \u0111\xF3: " + (was === "done" ? "Ho\xE0n th\xE0nh" : "Th\u1EA5t b\u1EA1i") + ') \u1EDF giai \u0111o\u1EA1n "' + stage.name + '".');
+          await logAct(c, j.workflow_id, j.id, "job.reopen", { stage: stage.name });
+        },
+        async wfArchiveJob(c, p) {
+          const jc = await getJc(c, str2(p.id));
+          if (!jc.wc.canManage) deny2("Ch\u1EC9 owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c l\u01B0u tr\u1EEF job.");
+          const archived = p.archived !== false;
+          if (archived && jc.j.status === "open") throw new AppError2("Ch\u1EC9 l\u01B0u tr\u1EEF \u0111\u01B0\u1EE3c job \u0111\xE3 Ho\xE0n th\xE0nh ho\u1EB7c Th\u1EA5t b\u1EA1i.");
+          await c.q.query("UPDATE wf_jobs SET archived=$2 WHERE id=$1", [jc.j.id, archived]);
+          await logAct(c, jc.j.workflow_id, jc.j.id, archived ? "job.archive" : "job.unarchive", {});
+        },
+        async wfDeleteJob(c, p) {
+          const jc = await jobCtx(c, str2(p.id));
+          if (!jc) return;
+          if (!isDirector(c)) deny2("Ch\u1EC9 Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 h\u1EB3n job. Owner c\xF3 th\u1EC3 L\u01B0u tr\u1EEF job \u0111\xE3 \u0111\xF3ng.");
+          const wf = jc.j.workflow_id;
+          await c.q.query("DELETE FROM wf_jobs WHERE id=$1", [jc.j.id]);
+          try {
+            fs2.rmSync(jobDir(jc.j.id), { recursive: true, force: true });
+          } catch (e) {
+            console.error("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c t\u1EC7p c\u1EE7a job " + jc.j.id + ": " + e.message);
+          }
+          await logAct(c, wf, "", "job.delete", { title: jc.j.title });
+        },
+        async wfSetFollowers(c, p) {
+          const jc = await getJc(c, str2(p.jobId));
+          if (!jc.canEdit) deny2("Ch\u1EC9 ng\u01B0\u1EDDi t\u1EA1o, ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c th\xEAm/b\u1EDBt ng\u01B0\u1EDDi theo d\xF5i.");
+          const ids = idList(p.followerIds).filter((u) => !jc.assignees.includes(u));
+          checkPeople(c, jc.wc, ids, "Ng\u01B0\u1EDDi theo d\xF5i");
+          await writeFollowers(c, jc.j.id, ids);
+          await logAct(c, jc.j.workflow_id, jc.j.id, "job.followers", { count: ids.length });
+        },
+        /** Chuyển tiếp thủ công theo một luật: luật ở giai đoạn X dùng được khi job đang ở X; luật "Hoàn thành" dùng được khi job đã Hoàn thành. */
+        async wfForwardJob(c, p) {
+          const jc = await getJc(c, str2(p.id)), j = jc.j;
+          if (!jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c chuy\u1EC3n ti\u1EBFp job.");
+          const rule = await one2(c.q, "SELECT * FROM wf_forward_rules WHERE id=$1 AND workflow_id=$2", [str2(p.ruleId), j.workflow_id]);
+          if (!rule) throw new AppError2("Lu\u1EADt chuy\u1EC3n ti\u1EBFp kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+          const okState = rule.stage_id ? j.status === "open" && j.stage_id === rule.stage_id : j.status === "done";
+          if (!okState) throw new AppError2(rule.stage_id ? "Lu\u1EADt n\xE0y ch\u1EC9 d\xF9ng \u0111\u01B0\u1EE3c khi job \u0111ang \u1EDF giai \u0111o\u1EA1n t\u01B0\u01A1ng \u1EE9ng." : "Lu\u1EADt n\xE0y ch\u1EC9 d\xF9ng \u0111\u01B0\u1EE3c khi job \u0111\xE3 Ho\xE0n th\xE0nh.");
+          if (await one2(c.q, "SELECT 1 FROM wf_forward_log WHERE from_job_id=$1 AND rule_id=$2", [j.id, rule.id])) throw new AppError2("Job n\xE0y \u0111\xE3 \u0111\u01B0\u1EE3c chuy\u1EC3n ti\u1EBFp theo lu\u1EADt n\xE0y r\u1ED3i.");
+          const cfg = await loadConfig(c.q, j.workflow_id);
+          const nj = await forwardJob(c, j, (cfg.stages.find((s) => s.id === j.stage_id) || {}).name || "", rule, "manual");
+          if (!nj) throw new AppError2("Kh\xF4ng chuy\u1EC3n ti\u1EBFp \u0111\u01B0\u1EE3c (quy tr\xECnh \u0111\xEDch \u0111\xE3 l\u01B0u tr\u1EEF, ch\u01B0a c\xF3 giai \u0111o\u1EA1n, ho\u1EB7c chu\u1ED7i chuy\u1EC3n ti\u1EBFp qu\xE1 d\xE0i).");
+          return { forwarded: { id: nj.id, workflowId: nj.workflow_id } };
+        },
+        /* ----- Todo ----- */
+        async wfAddTodo(c, p) {
+          const t = p.todo || {};
+          if (!safeId(t.id)) throw new AppError2("Thi\u1EBFu m\xE3 todo.");
+          const jc = await getJc(c, str2(t.jobId));
+          if (!jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c th\xEAm todo.");
+          if (jc.j.status !== "open") throw new AppError2("Job \u0111\xE3 \u0111\xF3ng.");
+          const title = clipText(t.title, 200);
+          if (!title) throw new AppError2("Nh\u1EADp n\u1ED9i dung todo.");
+          const n = await one2(c.q, "SELECT count(*)::int AS n FROM wf_todos WHERE job_id=$1 AND stage_id=$2", [jc.j.id, jc.j.stage_id]);
+          if (n.n >= 60) throw new AppError2("M\u1ED7i giai \u0111o\u1EA1n t\u1ED1i \u0111a 60 todo.");
+          const who = str2(t.assigneeId) || jc.assignees[0] || c.me.id;
+          checkPeople(c, jc.wc, [who], "Ng\u01B0\u1EDDi \u0111\u01B0\u1EE3c giao todo");
+          await c.q.query("INSERT INTO wf_todos(id,job_id,stage_id,title,required,assignee_id,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [t.id, jc.j.id, jc.j.stage_id, title, !!t.required, who, c.me.id, nowISO()]);
+          await logAct(c, jc.j.workflow_id, jc.j.id, "todo.add", { title });
+          if (c.notes && who !== c.me.id) c.notes.push({ kind: "wfTodo", to: [who], actorId: c.me.id, job: noteJob(jc.j, jc.wc.w, ""), text: title });
+        },
+        /** Tick xong/chưa xong (người được giao todo cũng tick được), đổi tên / người được giao / bắt buộc (người thực hiện job, owner, Giám đốc). */
+        async wfSetTodo(c, p) {
+          const td = await one2(c.q, "SELECT * FROM wf_todos WHERE id=$1", [str2(p.id)]);
+          if (!td) throw new AppError2("Todo kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+          const jc = await getJc(c, td.job_id);
+          const isMine = td.assignee_id === c.me.id;
+          if (p.done !== void 0) {
+            if (!isMine && !jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi \u0111\u01B0\u1EE3c giao todo, ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n job, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c tick todo.");
+            if (jc.j.status !== "open") throw new AppError2("Job \u0111\xE3 \u0111\xF3ng.");
+            const done = !!p.done;
+            await c.q.query("UPDATE wf_todos SET done=$2, done_by=$3, done_at=$4 WHERE id=$1", [td.id, done, done ? c.me.id : "", done ? nowISO() : ""]);
+            await logAct(c, jc.j.workflow_id, jc.j.id, done ? "todo.done" : "todo.undo", { title: td.title });
+          }
+          if (p.title !== void 0 || p.assigneeId !== void 0 || p.required !== void 0) {
+            if (!jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa todo.");
+            const title = p.title !== void 0 ? clipText(p.title, 200) : td.title;
+            if (!title) throw new AppError2("Nh\u1EADp n\u1ED9i dung todo.");
+            const who = p.assigneeId !== void 0 ? str2(p.assigneeId) : td.assignee_id;
+            if (who && who !== td.assignee_id) checkPeople(c, jc.wc, [who], "Ng\u01B0\u1EDDi \u0111\u01B0\u1EE3c giao todo");
+            await c.q.query("UPDATE wf_todos SET title=$2, assignee_id=$3, required=$4 WHERE id=$1", [td.id, title, who, p.required !== void 0 ? !!p.required : td.required]);
+            if (c.notes && who && who !== td.assignee_id && who !== c.me.id) c.notes.push({ kind: "wfTodo", to: [who], actorId: c.me.id, job: noteJob(jc.j, jc.wc.w, ""), text: title });
+          }
+        },
+        async wfDeleteTodo(c, p) {
+          const td = await one2(c.q, "SELECT * FROM wf_todos WHERE id=$1", [str2(p.id)]);
+          if (!td) return;
+          const jc = await getJc(c, td.job_id);
+          if (!jc.canMove) deny2("Ch\u1EC9 ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n, owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 todo.");
+          if (jc.j.status !== "open") throw new AppError2("Job \u0111\xE3 \u0111\xF3ng.");
+          await c.q.query("DELETE FROM wf_todos WHERE id=$1", [td.id]);
+        },
+        /* ----- Bình luận & tệp ----- */
+        async wfAddComment(c, p) {
+          const cm = p.comment || {};
+          if (!safeId(cm.id) || !safeId(cm.jobId)) throw new AppError2("Thi\u1EBFu n\u1ED9i dung b\xECnh lu\u1EADn.");
+          const text = W2.cleanText(cm.text, 12e3);
+          if (!W2.plainOf(text).trim()) throw new AppError2("Thi\u1EBFu n\u1ED9i dung b\xECnh lu\u1EADn.");
+          const jc = await getJc(c, cm.jobId);
+          const mentions = idList(cm.mentions).filter((id) => c.byId[id]).slice(0, 20);
+          await c.q.query("INSERT INTO wf_comments(id,job_id,author_id,text,created_at,mentions) VALUES($1,$2,$3,$4,$5,$6)", [cm.id, jc.j.id, c.me.id, text, nowISO(), JSON.stringify(mentions)]);
+          const to = uniq([jc.j.created_by, ...jc.assignees, ...jc.followers, ...mentions]).filter((u) => u && u !== c.me.id);
+          if (c.notes && to.length) c.notes.push({ kind: "wfComment", to, actorId: c.me.id, job: noteJob(jc.j, jc.wc.w, ""), text: W2.plainOf(text).trim().slice(0, 600) });
+        },
+        async wfDeleteComment(c, p) {
+          const row = await one2(c.q, "SELECT * FROM wf_comments WHERE id=$1", [str2(p.id)]);
+          if (!row) return;
+          await getJc(c, row.job_id);
+          if (row.is_system) throw new AppError2("Kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c ghi ch\xFA c\u1EE7a h\u1EC7 th\u1ED1ng.");
+          if (row.author_id !== c.me.id && !isDirector(c)) deny2("Ch\u1EC9 ng\u01B0\u1EDDi vi\u1EBFt ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c xo\xE1 b\xECnh lu\u1EADn n\xE0y.");
+          await c.q.query("DELETE FROM wf_comments WHERE id=$1", [row.id]);
+        },
+        async wfDeleteFile(c, p) {
+          const f = await one2(c.q, "SELECT * FROM wf_files WHERE id=$1", [str2(p.id)]);
+          if (!f) return;
+          const jc = await getJc(c, f.job_id);
+          if (f.uploaded_by !== c.me.id && !jc.canEdit) deny2("B\u1EA1n kh\xF4ng \u0111\u01B0\u1EE3c xo\xE1 t\u1EC7p n\xE0y.");
+          await c.q.query("DELETE FROM wf_files WHERE id=$1", [f.id]);
+          try {
+            fs2.rmSync(path.join(jobDir(f.job_id), f.id), { force: true });
+          } catch (e) {
+          }
+        }
+      };
+      async function upload(c, req, params) {
+        const jobId = str2(params.jobId);
+        if (!safeId(jobId)) throw new AppError2("Thi\u1EBFu m\xE3 job.");
+        const name = cleanFileName(params.name), ext = extOf(name);
+        if (!MIME[ext]) throw new AppError2("Lo\u1EA1i t\u1EC7p ." + (ext || "?") + " ch\u01B0a \u0111\u01B0\u1EE3c h\u1ED7 tr\u1EE3. H\u1ED7 tr\u1EE3: \u1EA3nh, PDF, Word, Excel, PowerPoint, v\u0103n b\u1EA3n, CSV, ZIP.");
+        if (Number(req.headers["content-length"] || 0) > MAX_FILE) throw new AppError2("T\u1EC7p qu\xE1 l\u1EDBn (t\u1ED1i \u0111a " + Math.round(MAX_FILE / 1048576) + "MB).");
+        const jc = await jobCtx(c, jobId);
+        if (!jc || !jc.wc) throw new AppError2("Job kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.");
+        needView(jc);
+        if (!jc.canEdit) deny2("B\u1EA1n kh\xF4ng \u0111\xEDnh k\xE8m \u0111\u01B0\u1EE3c t\u1EC7p v\xE0o job n\xE0y.");
+        const fieldId = str2(params.fieldId);
+        if (fieldId) {
+          const f = await one2(c.q, "SELECT type FROM wf_fields WHERE id=$1 AND workflow_id=$2", [fieldId, jc.j.workflow_id]);
+          if (!f || f.type !== "file") throw new AppError2("Tr\u01B0\u1EDDng t\u1EC7p kh\xF4ng h\u1EE3p l\u1EC7.");
+        }
+        const cnt = await one2(c.q, "SELECT count(*)::int AS n FROM wf_files WHERE job_id=$1", [jobId]);
+        if (cnt.n >= LIM.files) throw new AppError2("M\u1ED7i job t\u1ED1i \u0111a " + LIM.files + " t\u1EC7p.");
+        const id = newId("wf"), dir = jobDir(jobId), file = path.join(dir, id);
+        try {
+          fs2.mkdirSync(dir, { recursive: true });
+        } catch (e) {
+          console.error(e);
+          throw new AppError2("M\xE1y ch\u1EE7 ch\u01B0a c\u1EA5u h\xECnh \u0111\u01B0\u1EE3c n\u01A1i l\u01B0u t\u1EC7p.");
+        }
+        let size = 0;
+        const counter = new Transform({ transform(chunk, _enc, cb) {
+          size += chunk.length;
+          if (size > MAX_FILE) cb(new AppError2("T\u1EC7p qu\xE1 l\u1EDBn (t\u1ED1i \u0111a " + Math.round(MAX_FILE / 1048576) + "MB)."));
+          else cb(null, chunk);
+        } });
+        try {
+          await pipeline(req, counter, fs2.createWriteStream(file, { flags: "wx", mode: 416 }));
+          if (!size) throw new AppError2("T\u1EC7p r\u1ED7ng.");
+          const now = nowISO();
+          await c.q.query("INSERT INTO wf_files(id,job_id,field_id,name,mime,size,uploaded_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [id, jobId, fieldId, name, MIME[ext], size, c.me.id, now]);
+          return { id, fieldId, name, mime: MIME[ext], size, uploadedBy: c.me.id, createdAt: now };
+        } catch (e) {
+          try {
+            fs2.rmSync(file, { force: true });
+          } catch (_) {
+          }
+          throw e;
+        }
+      }
+      async function download(c, res, fileId) {
+        if (!safeId(fileId)) throw new AppError2("T\u1EC7p kh\xF4ng h\u1EE3p l\u1EC7.");
+        const f = await one2(c.q, "SELECT * FROM wf_files WHERE id=$1", [fileId]);
+        if (!f) throw new AppError2("Kh\xF4ng t\xECm th\u1EA5y t\u1EC7p.");
+        const jc = await jobCtx(c, f.job_id);
+        if (!jc || !jc.canView) deny2("B\u1EA1n kh\xF4ng c\xF3 quy\u1EC1n xem t\u1EC7p n\xE0y.");
+        const file = path.join(jobDir(f.job_id), f.id);
+        let st;
+        try {
+          st = fs2.statSync(file);
+        } catch (e) {
+          throw new AppError2("T\u1EC7p kh\xF4ng c\xF2n tr\xEAn m\xE1y ch\u1EE7.");
+        }
+        res.writeHead(200, {
+          "Content-Type": f.mime || "application/octet-stream",
+          "Content-Length": st.size,
+          "X-Content-Type-Options": "nosniff",
+          "Content-Disposition": (INLINE_EXT.has(extOf(f.name)) ? "inline" : "attachment") + "; filename*=UTF-8''" + encodeURIComponent(f.name),
+          "Cache-Control": "private, max-age=300",
+          "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        });
+        fs2.createReadStream(file).pipe(res);
+      }
+      return { SCHEMA: SCHEMA2, migrate: migrate2, actions, load, upload, download, scanSla, TEMPLATES, FIELD_TYPES };
+    };
   }
 });
 
@@ -21049,7 +22301,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 21;
+var VERSION = 22;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
@@ -21088,6 +22340,7 @@ async function migrate() {
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''");
   await W.migrate();
+  await F.migrate();
 }
 var AppError = class extends Error {
   constructor(msg, auth) {
@@ -21342,6 +22595,7 @@ async function tx(fn) {
 }
 var one = async (q, sql, args) => (await q.query(sql, args)).rows[0];
 var W = require_work()({ pool, AppError, deny, str, num, one, canManage, todayISO, ctxFor });
+var F = require_flow()({ pool, AppError, deny, str, num, one, canManage, todayISO, W });
 var M = makeMail({ pool });
 async function login(p, ip) {
   const username = str(p.username).trim();
@@ -21606,10 +22860,13 @@ var A = {
     if (c.users.some((x) => x.managerId === u.id)) throw new AppError(u.name + " c\xF2n ng\u01B0\u1EDDi tr\u1EF1c thu\u1ED9c, kh\xF4ng th\u1EC3 xo\xE1.");
     const used = await one(c.q, `SELECT (SELECT count(*) FROM okrs WHERE owner_id=$1 OR created_by=$1) + (SELECT count(*) FROM reports WHERE user_id=$1)
       + (SELECT count(*) FROM tasks WHERE assignee_id=$1 OR created_by=$1) + (SELECT count(*) FROM task_assignees WHERE user_id=$1)
-      + (SELECT count(*) FROM task_followers WHERE user_id=$1) + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1) AS n`, [u.id]);
+      + (SELECT count(*) FROM task_followers WHERE user_id=$1) + (SELECT count(*) FROM task_comments WHERE author_id=$1) + (SELECT count(*) FROM comments WHERE author_id=$1)
+      + (SELECT count(*) FROM wf_jobs WHERE created_by=$1) + (SELECT count(*) FROM wf_job_assignees WHERE user_id=$1) + (SELECT count(*) FROM wf_job_followers WHERE user_id=$1)
+      + (SELECT count(*) FROM wf_comments WHERE author_id=$1 AND NOT is_system) + (SELECT count(*) FROM wf_members WHERE user_id=$1 AND is_owner) AS n`, [u.id]);
     if (Number(used.n)) throw new AppError(u.name + ' \u0111\xE3 c\xF3 OKR, b\xE1o c\xE1o, c\xF4ng vi\u1EC7c ho\u1EB7c ph\u1EA3n h\u1ED3i trong h\u1EC7 th\u1ED1ng n\xEAn kh\xF4ng xo\xE1 \u0111\u01B0\u1EE3c. H\xE3y d\xF9ng "Kho\xE1 t\xE0i kho\u1EA3n" \u0111\u1EC3 gi\u1EEF l\u1EA1i l\u1ECBch s\u1EED.');
     await c.q.query("DELETE FROM workspace_members WHERE user_id=$1", [u.id]);
     await c.q.query("DELETE FROM project_members WHERE user_id=$1", [u.id]);
+    await c.q.query("DELETE FROM wf_members WHERE user_id=$1", [u.id]);
     await c.q.query("DELETE FROM notifications WHERE user_id=$1", [u.id]);
     await c.q.query("DELETE FROM users WHERE id=$1", [u.id]);
   },
@@ -21646,6 +22903,7 @@ var touchNotif = (ids) => {
 };
 var stampOf = (id) => notifStamps.get(id) || BOOT + ".0";
 Object.assign(A, W.actions);
+Object.assign(A, F.actions);
 async function solutionKrMap(q, okrId, krUpdates) {
   const valid = new Set((await q.query("SELECT id FROM krs WHERE okr_id=$1", [okrId])).rows.map((x) => x.id));
   const m = /* @__PURE__ */ new Map();
@@ -21735,13 +22993,23 @@ async function handle(req, res) {
       if (url.searchParams.get("ping")) return send(res, { ok: true, ping: "pong", version: VERSION, backend: "postgres", time: (/* @__PURE__ */ new Date()).toISOString() });
       const tok = url.searchParams.get("token");
       const fileM = url.pathname.match(/\/file\/([A-Za-z0-9_-]+)$/);
-      if (fileM) return await W.download(await ctx(await verifyToken(tok)), res, fileM[1]);
+      if (fileM) {
+        const fc = await ctx(await verifyToken(tok));
+        return await (fileM[1].startsWith("wf") ? F.download(fc, res, fileM[1]) : W.download(fc, res, fileM[1]));
+      }
       const viewer2 = tok ? await verifyToken(tok) : null;
       if (url.searchParams.get("notif")) {
         if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
         const nv = stampOf(viewer2.id);
         if (url.searchParams.get("nv") === nv) return send(res, { ok: true, unchanged: true, nv });
         return send(res, { ok: true, nv, ...await N.list(pool, viewer2.id) }, 200, req);
+      }
+      if (url.searchParams.get("flow")) {
+        if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
+        const fp = Object.fromEntries(url.searchParams.entries());
+        if (fp.v && fp.v === dataVersion && fp.flow !== "report") return send(res, { ok: true, unchanged: true, version: dataVersion });
+        const v = dataVersion;
+        return send(res, { ok: true, version: v, ...await F.load(await ctx(viewer2), str(fp.flow), fp) }, 200, req);
       }
       if (url.searchParams.get("work")) {
         if (!viewer2) throw authError("Vui l\xF2ng \u0111\u0103ng nh\u1EADp l\u1EA1i \u0111\u1EC3 ti\u1EBFp t\u1EE5c.");
@@ -21757,6 +23025,13 @@ async function handle(req, res) {
       return send(res, await dbResponse(viewer2), 200, req);
     }
     if (req.method !== "POST") return send(res, { ok: false, error: "Method not allowed" }, 405);
+    if (url.pathname.endsWith("/flow-upload")) {
+      const viewer2 = await verifyToken(req.headers["x-okr-token"]);
+      const c = await ctx(viewer2);
+      const file = await F.upload(c, req, { jobId: url.searchParams.get("jobId"), name: url.searchParams.get("name"), fieldId: url.searchParams.get("fieldId") });
+      bumpVersion();
+      return send(res, { ok: true, version: dataVersion, attachment: file });
+    }
     if (url.pathname.endsWith("/upload-inline")) {
       const viewer2 = await verifyToken(req.headers["x-okr-token"]);
       const file = await W.uploadInline(await ctx(viewer2), req, { name: url.searchParams.get("name") });
@@ -21822,6 +23097,32 @@ async function runDueRecurring() {
     console.error((/* @__PURE__ */ new Date()).toISOString(), "T\u1EA1o vi\u1EC7c l\u1EB7p l\u1EA1i \u0111\u1EBFn ng\xE0y l\u1ED7i:", e.message || e);
   } finally {
     dueRunning = false;
+  }
+}
+var slaRunning = false;
+async function runFlowSla() {
+  if (slaRunning) return;
+  slaRunning = true;
+  try {
+    let recipients = [];
+    const n = await tx(async (client) => {
+      const users = await getUsers(client), byId = {};
+      users.forEach((u) => {
+        byId[u.id] = u;
+      });
+      const notes = [];
+      const made = await F.scanSla({ q: client, me: { id: "" }, users, byId, notes });
+      if (made) recipients = await N.save(client, notes, byId);
+      return made;
+    });
+    if (n) {
+      touchNotif(recipients);
+      bumpVersion();
+    }
+  } catch (e) {
+    console.error((/* @__PURE__ */ new Date()).toISOString(), "Qu\xE9t qu\xE1 h\u1EA1n SLA c\u1EE7a Quy tr\xECnh l\u1ED7i:", e.message || e);
+  } finally {
+    slaRunning = false;
   }
 }
 async function importDB(db, opts = {}) {
@@ -21927,6 +23228,8 @@ async function main() {
   }).listen(PORT, () => console.log("OKR API v" + VERSION + " listening on " + PORT));
   runDueRecurring();
   setInterval(runDueRecurring, 5 * 6e4).unref();
+  runFlowSla();
+  setInterval(runFlowSla, 5 * 6e4).unref();
 }
 main().catch((e) => {
   console.error(e.message || e);
