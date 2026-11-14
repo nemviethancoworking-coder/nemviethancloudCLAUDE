@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hỏi đáp">
+<title>Hỏi đáp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  /* Layout: máy tính = thanh bên trái + ba thẻ lớn (mẫu A); điện thoại = ô ghép một cột, ô đầu lớn hơn (mẫu C). */
+  :root {
+    --bg: #eef1f5;
+    --surface: #ffffff;
+    --ink: #16202e;
+    --muted: #5a6779;
+    --line: #d9dfe8;
+    --m1: #1f6fd6;
+    --m2: #0f8f6f;
+    --m3: #c2571a;
+    --side: #14213a;
+    --font: "Be Vietnam Pro", "Segoe UI", Roboto, Arial, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d131b; --surface: #19212d; --ink: #eaf0f7; --muted: #9aa8ba; --line: #2b3646;
+      --m1: #6aa8f5; --m2: #4cc9a6; --m3: #f09a5e; --side: #0a1220; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d131b; --surface: #19212d; --ink: #eaf0f7; --muted: #9aa8ba; --line: #2b3646;
+    --m1: #6aa8f5; --m2: #4cc9a6; --m3: #f09a5e; --side: #0a1220; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 1.5; }
+  a { color: inherit; text-decoration: none; }
+  a:focus-visible { outline: 3px solid var(--m1); outline-offset: 3px; }
+
+  .ico { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .arrow { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ===== Máy tính (mẫu A) ===== */
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+  .side { background: var(--side); color: #dbe5f3; padding: 28px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .side small { color: #8fa1ba; font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; padding: 0 10px 8px; }
+  .side a { display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-radius: 8px; font-weight: 600; }
+  .side a:hover { background: rgba(255,255,255,.08); }
+  .side i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+  .cards { padding: 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-content: start; max-width: 1180px; width: 100%; }
+  .card { --c: var(--m1); position: relative; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 26px; display: flex; flex-direction: column; gap: 12px; min-height: 320px; transition: transform .15s ease, border-color .15s ease; }
+  .card:hover { transform: translateY(-3px); border-color: var(--c); }
+  .card.k2 { --c: var(--m2); }
+  .card.k3 { --c: var(--m3); }
+  .card > * { position: relative; z-index: 1; }
+  .chip { width: 56px; height: 56px; border-radius: 12px; display: grid; place-items: center; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+  .card h2 { margin: 6px 0 0; font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
+  .card p { margin: 0; color: var(--muted); flex: 1; }
+  .go { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--c); }
+
+  /* ===== Điện thoại (mẫu C) ===== */
+  @media (max-width: 860px) {
+    .app { display: block; min-height: 0; }
+    .side { display: none; }
+    .cards { grid-template-columns: 1fr; gap: 14px; padding: 16px; max-width: none; }
+    .card { border-radius: 16px; padding: 22px; gap: 10px; min-height: 160px; }
+    .card::after { content: ""; position: absolute; right: -44px; bottom: -44px; width: 160px; height: 160px; border-radius: 50%; background: color-mix(in srgb, var(--c) 16%, transparent); }
+    .card:hover { transform: none; }
+    .card:active { border-color: var(--c); }
+    .chip { width: 48px; height: 48px; border-radius: 50%; background: var(--c); color: var(--surface); }
+    .card h2 { font-size: 1.3rem; }
+    .card p { font-size: .95rem; max-width: 34ch; }
+    .card.k1 { min-height: 280px; padding: 26px; justify-content: space-between; }
+    .card.k1 h2 { font-size: 2rem; letter-spacing: -0.01em; }
+    .card.k1 p { flex: 0; }
+    .go { margin-top: 6px; min-height: 44px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) { .card { transition: none; } .card:hover { transform: none; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-fw" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="m8 9 1.6 1.6L12.5 7.7"/><path d="M8 15h8"/><path d="M14 10h2.5"/></symbol>
+    <symbol id="i-fd" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/></symbol>
+    <symbol id="i-sk" viewBox="0 0 24 24"><path d="M4 5h16v10H10l-4 4v-4H4z"/><path d="m9 10 2 2 4-4"/></symbol>
+    <symbol id="i-go" viewBox="0 0 24 24"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <nav class="side" aria-label="Module hỏi đáp">
+    <small>Module</small>
+    <a href="https://notebook.google.com/notebook/cde8d8a2-d555-4804-a3b2-6f7eb53218fb/preview" target="_blank" rel="noopener"><i style="background:var(--m1)"></i>FASTWORK</a>
+    <a href="https://notebook.google.com/notebook/519775fa-c066-48f9-a55d-099fe3709368/preview" target="_blank" rel="noopener"><i style="background:var(--m2)"></i>FUNDIN</a>
+    <a href="https://notebook.google.com/notebook/09594363-16f8-4089-9d97-e3c02e94c84c/preview" target="_blank" rel="noopener"><i style="background:var(--m3)"></i>KỸ NĂNG BÁN HÀNG</a>
+  </nav>
+
+  <main class="cards" aria-label="Các module hỏi đáp">
+    <a class="card k1" href="https://notebook.google.com/notebook/cde8d8a2-d555-4804-a3b2-6f7eb53218fb/preview" target="_blank" rel="noopener">
+      <span class="chip"><svg class="ico"><use href="#i-fw"/></svg></span>
+      <h2>FASTWORK</h2>
+      <p>Hỏi đáp về cách sử dụng Fastwork và quy trình làm việc trên Fastwork.</p>
+      <span class="go">Mở hỏi đáp <svg class="arrow"><use href="#i-go"/></svg></span>
+    </a>
+    <a class="card k2" href="https://notebook.google.com/notebook/519775fa-c066-48f9-a55d-099fe3709368/preview" target="_blank" rel="noopener">
+      <span class="chip"><svg class="ico"><use href="#i-fd"/></svg></span>
+      <h2>FUNDIN</h2>
+      <p>Hỏi đáp các thông tin liên quan đến Fundin.</p>
+      <span class="go">Mở hỏi đáp <svg class="arrow"><use href="#i-go"/></svg></span>
+    </a>
+    <a class="card k3" href="https://notebook.google.com/notebook/09594363-16f8-4089-9d97-e3c02e94c84c/preview" target="_blank" rel="noopener">
+      <span class="chip"><svg class="ico"><use href="#i-sk"/></svg></span>
+      <h2>KỸ NĂNG BÁN HÀNG</h2>
+      <p>Hỏi đáp về kỹ năng tư vấn, xử lý từ chối và chốt đơn.</p>
+      <span class="go">Mở hỏi đáp <svg class="arrow"><use href="#i-go"/></svg></span>
+    </a>
+  </main>
+</div>
+</body>
+</html>
