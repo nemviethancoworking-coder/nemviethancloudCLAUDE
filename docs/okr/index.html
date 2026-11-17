@@ -209,11 +209,11 @@
   }
 
   /* ---------- Hỏi đáp: máy tính = thẻ lớn (kiểu A); điện thoại = ô ghép một cột, ô đầu lớn hơn (kiểu C) ---------- */
-  .qa-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:20px; align-content:start; max-width:1100px; }
+  .qa-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:20px; align-content:start; max-width:900px; }
   .qa-card { --c:#1f6fd6; position:relative; overflow:hidden; display:flex; flex-direction:column; gap:12px; min-height:300px; padding:26px; background:#fff; border:1px solid #e5e7eb; border-radius:12px; color:inherit; text-decoration:none; transition:transform .15s ease, border-color .15s ease; }
   .qa-card:hover { transform:translateY(-3px); border-color:var(--c); }
   .qa-card:focus-visible { outline:3px solid var(--c); outline-offset:3px; }
-  .qa-card.k2 { --c:#0f8f6f; } .qa-card.k3 { --c:#c2571a; }
+  .qa-card.k2 { --c:#0f8f6f; } .qa-card.k3 { --c:#c2571a; } .qa-card.k4 { --c:#7c3aed; }
   .qa-card > * { position:relative; z-index:1; }
   .qa-chip { width:56px; height:56px; border-radius:12px; display:grid; place-items:center; color:var(--c); background:color-mix(in srgb, var(--c) 14%, transparent); }
   .qa-chip svg { width:28px; height:28px; }
@@ -1643,7 +1643,10 @@ const QA_MODULES = [
     icon:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/>' },
   { cls:'k3', name:'KỸ NĂNG BÁN HÀNG', desc:'Hỏi đáp về kỹ năng tư vấn, xử lý từ chối và chốt đơn.',
     url:'https://notebook.google.com/notebook/09594363-16f8-4089-9d97-e3c02e94c84c/preview',
-    icon:'<path d="M4 5h16v10H10l-4 4v-4H4z"/><path d="m9 10 2 2 4-4"/>' }
+    icon:'<path d="M4 5h16v10H10l-4 4v-4H4z"/><path d="m9 10 2 2 4-4"/>' },
+  { cls:'k4', name:'THÔNG TIN ĐỐI THỦ', desc:'Hỏi đáp thông tin về đối thủ: sản phẩm, giá, khuyến mãi và hoạt động của đối thủ.',
+    url:'https://notebook.google.com/notebook/d9224891-2485-4066-8e38-70c98f77905c/preview',
+    icon:'<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>' }
 ];
 function viewQA(){
   const svg = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
