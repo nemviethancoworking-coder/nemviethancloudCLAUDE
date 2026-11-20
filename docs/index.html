@@ -72,6 +72,12 @@ td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .pill.Ngon{background:var(--good-soft);color:var(--good)}
 .pill.Dở{background:var(--bad-soft);color:var(--bad)}
 .pill.other{background:var(--unk-soft);color:var(--unk)}
+.cmp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cmp .col{border:1px solid var(--line);border-radius:6px;padding:10px 12px}
+.cmp .col h3{margin:0 0 6px;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.cmp .row{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;padding:2px 0}
+.moves{display:flex;flex-wrap:wrap;gap:6px}
+.up{color:var(--good)} .down{color:var(--bad)}
 .tag{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 details summary{cursor:pointer;color:var(--accent);font-size:.8rem}
 details pre{white-space:pre-wrap;font:inherit;font-size:.8rem;margin:6px 0 0;color:var(--muted)}
@@ -129,6 +135,12 @@ a{color:var(--accent)}
     <div class="kpi"><span>Tỉ lệ ngon</span><b id="k-rate">–</b></div>
   </section>
 
+  <section class="panel" id="cmp-panel" aria-label="So sánh chấm lần 1 và lần 2">
+    <h2>So sánh chấm lần 1 và lần 2</h2>
+    <p class="muted" style="margin:0;font-size:.85rem">Lần 1 chấm lúc 3h sáng hôm sau. Lần 2 chấm lại toàn bộ lead của ngày này sau 7 ngày (8h sáng), để xem lead thay đổi thế nào sau một tuần chăm sóc. Các số chính ở trên là lần 1.</p>
+    <div id="cmp"><p class="muted">Chưa có dữ liệu.</p></div>
+  </section>
+
   <div class="grid2">
     <section class="panel">
       <h2>14 ngày gần nhất</h2>
@@ -155,19 +167,20 @@ a{color:var(--accent)}
       <div class="controls">
         <select id="page" aria-label="Lọc theo page"><option value="">Tất cả page</option></select>
         <select id="group" aria-label="Lọc theo nhóm nhân viên"><option value="">Tất cả nhóm</option></select>
+        <select id="move" aria-label="Lọc theo thay đổi giữa lần 1 và lần 2"><option value="">Lần 2: tất cả</option></select>
         <input id="q" type="search" placeholder="Tìm tên khách, lý do…" aria-label="Tìm trong bảng">
       </div>
     </div>
     <div class="chips" id="chips" role="group" aria-label="Lọc theo kết luận"></div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Khách hàng</th><th>Page</th><th>Nhóm</th><th>Kết luận</th><th>Lý do</th><th>Nhu cầu</th><th>Tin K/P</th><th></th></tr></thead>
-        <tbody id="rows"><tr><td colspan="8" class="muted">Chưa có dữ liệu.</td></tr></tbody>
+        <thead><tr><th>Khách hàng</th><th>Page</th><th>Nhóm</th><th>Kết luận</th><th>Lý do</th><th>Nhu cầu</th><th>Tin K/P</th><th>Lần 2 (sau 7 ngày)</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="9" class="muted">Chưa có dữ liệu.</td></tr></tbody>
       </table>
     </div>
     <button id="more" class="more" type="button" hidden>Hiện thêm</button>
   </section>
-  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file <a id="sheet-link" href="#" target="_blank" rel="noopener">ĐÁNH GIÁ CHẤT LƯỢNG LEAD</a>, mỗi sáng 7h. Trang tự làm mới mỗi 5 phút. <a href="#" id="relock">Khóa lại trên thiết bị này</a></p>
+  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file <a id="sheet-link" href="#" target="_blank" rel="noopener">ĐÁNH GIÁ CHẤT LƯỢNG LEAD</a>, chấm lần 1 lúc 3h sáng và chấm lần 2 (lead của 7 ngày trước) lúc 8h sáng. Trang tự làm mới mỗi 5 phút. <a href="#" id="relock">Khóa lại trên thiết bị này</a></p>
 </div>
 
 <script>
@@ -176,9 +189,13 @@ const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}`;
 const csvUrl = (tab) => `${SHEET_URL}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(tab)}`;
 const PAGE_SIZE = 100;
 const $ = (id) => document.getElementById(id);
-const state = { days: [], leads: [], day: null, filter: "Tất cả", page: "", group: "", q: "", limit: PAGE_SIZE, readAt: null };
+const state = { days: [], leads: [], day: null, filter: "Tất cả", page: "", group: "", move: "", q: "", limit: PAGE_SIZE, readAt: null };
 const NONE = "__none";
 const gOf = (l) => String(l["Nhóm"] || "").trim() || NONE;
+const NOT_L1 = "Không có ở lần 1";
+const isL1 = (l) => l["Kết luận"] !== NOT_L1;
+const hasL2 = (l) => !!String(l["Thay đổi"] || "").trim();
+const MOVES = ["Lên mức", "Xuống mức", "Giữ nguyên", "Chỉ có lần 2", "Không thấy ở lần 2", "Lần 2 lỗi AI"];
 const gLabel = (g) => (g === NONE ? "(chưa ghi nhóm)" : g);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const num = (v) => Number(String(v ?? "").trim().replace(",", ".")) || 0;
@@ -278,7 +295,7 @@ const splitList = (text) => String(text || "").split(";").map((s) => s.trim()).f
 
 function render() {
   const d = state.days.find((x) => x._k === state.day) || {};
-  const allDay = state.leads.filter((l) => l._k === state.day);
+  const allDay = state.leads.filter((l) => l._k === state.day && isL1(l));
   const gCount = {};
   allDay.forEach((l) => { const g = gOf(l); gCount[g] = (gCount[g] || 0) + 1; });
   const gNames = Object.keys(gCount).sort((a, b) => (a === NONE) - (b === NONE) || a.localeCompare(b, "vi"));
@@ -327,8 +344,29 @@ function render() {
 
   if (d["Ghi chú"]) showMsg(`<b>Ghi chú của lần chạy:</b> ${esc(d["Ghi chú"])}`); else $("msg").hidden = true;
 
+  renderCmp();
   drawTrend();
   renderTable();
+}
+
+function renderCmp() {
+  const all = state.leads.filter((l) => l._k === state.day && (!state.group || gOf(l) === state.group));
+  const l2 = all.filter(hasL2);
+  if (!l2.length) {
+    const d = new Date(state.day + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 7);
+    $("cmp").innerHTML = `<p class="muted" style="margin:0">Ngày này chưa chấm lần 2${state.day >= "2026-11-13" ? ` (dự kiến chấm lúc 8h sáng ${fmtDay(d.toISOString().slice(0, 10))})` : ""}.</p>`;
+    return;
+  }
+  const c1 = all.filter(isL1), c2 = l2.filter((l) => l["Thay đổi"] !== "Không thấy ở lần 2");
+  const cnt = (arr, key, v) => arr.filter((l) => l[key] === v).length;
+  const col = (title, arr, key) => {
+    const n = cnt(arr, key, "Ngon"), b = cnt(arr, key, "Dở"), o = arr.length - n - b;
+    return `<div class="col"><h3>${title}</h3><div class="row"><span>Tổng lead</span><b>${arr.length}</b></div><div class="row"><span>Ngon</span><b class="up">${n}</b></div><div class="row"><span>Dở</span><b class="down">${b}</b></div><div class="row"><span>Chưa rõ / lỗi</span><b>${o}</b></div><div class="row"><span>Tỉ lệ ngon</span><b>${arr.length ? Math.round((n / arr.length) * 1000) / 10 : 0}%</b></div></div>`;
+  };
+  const at = l2.map((l) => l["Chấm lần 2 lúc"]).filter(Boolean).sort().pop() || "–";
+  const mv = MOVES.map((m) => [m, cnt(all, "Thay đổi", m)]).filter(([, n]) => n);
+  $("cmp").innerHTML = `<div class="cmp">${col("Lần 1", c1, "Kết luận")}${col("Lần 2 · chấm lúc " + esc(at), c2, "Kết luận lần 2")}</div>
+    <div class="moves">${mv.map(([m, n]) => `<button type="button" class="chip" data-m="${esc(m)}" aria-pressed="${state.move === m}"><span class="${m === "Lên mức" ? "up" : m === "Xuống mức" ? "down" : ""}">${esc(m)}</span> · ${n}</button>`).join("")}</div>`;
 }
 
 function renderTable() {
@@ -344,10 +382,16 @@ function renderTable() {
   grpSel.innerHTML = `<option value="">Tất cả nhóm</option>` + gNames.map((g) => `<option value="${esc(g)}">${esc(gLabel(g))} · ${dayLeads.filter((l) => gOf(l) === g).length}</option>`).join("");
   grpSel.value = state.group;
 
+  const moveSel = $("move");
+  const mvNames = MOVES.filter((m) => dayLeads.some((l) => l["Thay đổi"] === m));
+  if (state.move && state.move !== "__doi" && !mvNames.includes(state.move)) state.move = "";
+  moveSel.innerHTML = `<option value="">Lần 2: tất cả</option>` + (mvNames.length ? `<option value="__doi">Chỉ lead đổi mức · ${dayLeads.filter((l) => /^(Lên|Xuống) mức$/.test(l["Thay đổi"])).length}</option>` : "") + mvNames.map((m) => `<option value="${esc(m)}">${esc(m)} · ${dayLeads.filter((l) => l["Thay đổi"] === m).length}</option>`).join("");
+  moveSel.value = state.move; moveSel.hidden = !mvNames.length;
+  const okMove = (l) => !state.move || (state.move === "__doi" ? /^(Lên|Xuống) mức$/.test(l["Thay đổi"]) : l["Thay đổi"] === state.move);
   const q = state.q.trim().toLowerCase();
-  const scoped = dayLeads.filter((l) => (!state.page || l["Page"] === state.page) && (!state.group || gOf(l) === state.group) &&
-    (!q || ["Khách hàng", "Nhóm lý do", "Lý do", "Nhu cầu", "Page"].some((k) => String(l[k] || "").toLowerCase().includes(q))));
-  const kinds = ["Tất cả", "Ngon", "Dở", "Chưa rõ", "Lỗi AI"].filter((k) => k === "Tất cả" || scoped.some((l) => l["Kết luận"] === k));
+  const scoped = dayLeads.filter((l) => (!state.page || l["Page"] === state.page) && (!state.group || gOf(l) === state.group) && okMove(l) &&
+    (!q || ["Khách hàng", "Nhóm lý do", "Lý do", "Nhu cầu", "Page", "Lý do lần 2"].some((k) => String(l[k] || "").toLowerCase().includes(q))));
+  const kinds = ["Tất cả", "Ngon", "Dở", "Chưa rõ", "Lỗi AI", "Chưa chấm (lỗi AI)", NOT_L1].filter((k) => k === "Tất cả" || scoped.some((l) => l["Kết luận"] === k));
   if (!kinds.includes(state.filter)) state.filter = "Tất cả";
   $("chips").innerHTML = kinds.map((k) => {
     const n = k === "Tất cả" ? scoped.length : scoped.filter((l) => l["Kết luận"] === k).length;
@@ -367,9 +411,10 @@ function renderTable() {
         ${l["Chi tiết bộ lọc"] ? `<details><summary>Từng bộ lọc</summary><pre>${esc(l["Chi tiết bộ lọc"])}</pre></details>` : ""}</td>
       <td>${esc(l["Nhu cầu"])}</td>
       <td class="num">${esc(l["Tin khách/page"])}</td>
+      <td class="why">${hasL2(l) ? `${l["Kết luận lần 2"] ? `<span class="pill ${l["Kết luận lần 2"] === "Ngon" || l["Kết luận lần 2"] === "Dở" ? l["Kết luận lần 2"] : "other"}">${esc(l["Kết luận lần 2"])}</span> ` : ""}<b class="${l["Thay đổi"] === "Lên mức" ? "up" : l["Thay đổi"] === "Xuống mức" ? "down" : ""}">${esc(l["Thay đổi"])}</b>${l["Tin khách/page lần 2"] ? ` <span class="muted">(tin K/P ${esc(l["Tin khách/page lần 2"])})</span>` : ""}${l["Lý do lần 2"] ? `<details><summary>Lý do lần 2</summary><b>${esc(l["Nhóm lý do lần 2"])}</b><br>${esc(l["Lý do lần 2"])}</details>` : ""}` : `<span class="muted">—</span>`}</td>
       <td>${l["Link Pancake"] ? `<a href="${esc(l["Link Pancake"])}" target="_blank" rel="noopener">Mở</a>` : ""}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="8" class="muted">Không có lead nào trong nhóm này.</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="muted">Không có lead nào trong nhóm này.</td></tr>`;
   const more = $("more");
   more.hidden = shown.length <= state.limit;
   more.textContent = `Hiện thêm (${shown.length - state.limit} lead còn lại)`;
@@ -402,6 +447,8 @@ $("chips").addEventListener("click", (e) => { const b = e.target.closest("button
 $("page").addEventListener("change", (e) => { state.page = e.target.value; state.limit = PAGE_SIZE; renderTable(); });
 $("group").addEventListener("change", (e) => { state.group = e.target.value; state.limit = PAGE_SIZE; render(); });
 $("groups").addEventListener("click", (e) => { const b = e.target.closest("[data-g]"); if (b) { state.group = b.dataset.g; state.limit = PAGE_SIZE; render(); $("group").scrollIntoView({ behavior: "smooth", block: "center" }); } });
+$("move").addEventListener("change", (e) => { state.move = e.target.value; state.limit = PAGE_SIZE; render(); });
+$("cmp").addEventListener("click", (e) => { const b = e.target.closest("[data-m]"); if (b) { state.move = state.move === b.dataset.m ? "" : b.dataset.m; state.limit = PAGE_SIZE; render(); } });
 $("q").addEventListener("input", (e) => { state.q = e.target.value; state.limit = PAGE_SIZE; renderTable(); });
 $("more").addEventListener("click", () => { state.limit += PAGE_SIZE; renderTable(); });
 $("reload").addEventListener("click", load);
