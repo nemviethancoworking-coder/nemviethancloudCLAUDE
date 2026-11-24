@@ -21063,7 +21063,7 @@ var require_flow = __commonJS({
     var { Transform } = require("stream");
     var PRIORITIES = ["low", "medium", "high", "urgent"];
     var FIELD_TYPES = ["text", "textarea", "number", "money", "date", "select", "multiselect", "user", "checkbox", "link", "file"];
-    var LIM = { stages: 20, todos: 30, fields: 30, reasons: 30, rules: 20, members: 300, tags: 10, files: 30, options: 50 };
+    var LIM = { stages: 20, todos: 30, fields: 30, fieldsTotal: 150, reasons: 30, rules: 20, members: 300, tags: 10, files: 30, options: 50 };
     var MAX_CHAIN = 8;
     var TEMPLATES = {
       blank: {
@@ -21079,10 +21079,30 @@ var require_flow = __commonJS({
         stages: [
           { name: "Ti\u1EBFp nh\u1EADn h\u1ED3 s\u01A1", sla: 24, todos: [["Ki\u1EC3m tra h\u1ED3 s\u01A1 \u0111\u1EE7", true]] },
           { name: "S\xE0ng l\u1ECDc CV", sla: 48, todos: [["\u0110\xE1nh gi\xE1 CV theo m\xF4 t\u1EA3 c\xF4ng vi\u1EC7c (JD)", true], ["G\u1ECDi \u0111i\u1EC7n s\u01A1 b\u1ED9", false]] },
-          { name: "Ph\u1ECFng v\u1EA5n v\xF2ng 1", sla: 72, todos: [["X\u1EBFp l\u1ECBch ph\u1ECFng v\u1EA5n", true], ["\u0110i\u1EC1n phi\u1EBFu \u0111\xE1nh gi\xE1 ph\u1ECFng v\u1EA5n", true]] },
-          { name: "Ph\u1ECFng v\u1EA5n v\xF2ng 2", sla: 72, todos: [["\u0110i\u1EC1n phi\u1EBFu \u0111\xE1nh gi\xE1 ph\u1ECFng v\u1EA5n", true]] },
-          { name: "\u0110\u1EC1 ngh\u1ECB (offer)", sla: 48, todos: [["So\u1EA1n th\u01B0 m\u1EDDi nh\u1EADn vi\u1EC7c", true], ["Tho\u1EA3 thu\u1EADn l\u01B0\u01A1ng v\xE0 ng\xE0y nh\u1EADn vi\u1EC7c", false]] },
-          { name: "Nh\u1EADn vi\u1EC7c", sla: 120, todos: [["K\xFD h\u1EE3p \u0111\u1ED3ng", true], ["B\xE0n giao thi\u1EBFt b\u1ECB, t\xE0i kho\u1EA3n", false]] }
+          {
+            name: "Ph\u1ECFng v\u1EA5n v\xF2ng 1",
+            sla: 72,
+            todos: [["X\u1EBFp l\u1ECBch ph\u1ECFng v\u1EA5n", true], ["\u0110i\u1EC1n phi\u1EBFu \u0111\xE1nh gi\xE1 ph\u1ECFng v\u1EA5n", true]],
+            fields: [{ name: "Ng\xE0y ph\u1ECFng v\u1EA5n v\xF2ng 1", type: "date" }, { name: "K\u1EBFt qu\u1EA3 v\xF2ng 1", type: "select", options: ["\u0110\u1EA1t", "Kh\xF4ng \u0111\u1EA1t", "C\xE2n nh\u1EAFc"] }]
+          },
+          {
+            name: "Ph\u1ECFng v\u1EA5n v\xF2ng 2",
+            sla: 72,
+            todos: [["\u0110i\u1EC1n phi\u1EBFu \u0111\xE1nh gi\xE1 ph\u1ECFng v\u1EA5n", true]],
+            fields: [{ name: "Ng\xE0y ph\u1ECFng v\u1EA5n v\xF2ng 2", type: "date" }, { name: "K\u1EBFt qu\u1EA3 v\xF2ng 2", type: "select", options: ["\u0110\u1EA1t", "Kh\xF4ng \u0111\u1EA1t", "C\xE2n nh\u1EAFc"] }]
+          },
+          {
+            name: "\u0110\u1EC1 ngh\u1ECB (offer)",
+            sla: 48,
+            todos: [["So\u1EA1n th\u01B0 m\u1EDDi nh\u1EADn vi\u1EC7c", true], ["Tho\u1EA3 thu\u1EADn l\u01B0\u01A1ng v\xE0 ng\xE0y nh\u1EADn vi\u1EC7c", false]],
+            fields: [{ name: "M\u1EE9c l\u01B0\u01A1ng \u0111\u1EC1 ngh\u1ECB", type: "money" }, { name: "Ng\xE0y nh\u1EADn vi\u1EC7c d\u1EF1 ki\u1EBFn", type: "date" }]
+          },
+          {
+            name: "Nh\u1EADn vi\u1EC7c",
+            sla: 120,
+            todos: [["K\xFD h\u1EE3p \u0111\u1ED3ng", true], ["B\xE0n giao thi\u1EBFt b\u1ECB, t\xE0i kho\u1EA3n", false]],
+            fields: [{ name: "Ng\xE0y nh\u1EADn vi\u1EC7c th\u1EF1c t\u1EBF", type: "date" }]
+          }
         ],
         fields: [
           { name: "V\u1ECB tr\xED \u1EE9ng tuy\u1EC3n", type: "select", options: ["Nh\xE2n vi\xEAn kinh doanh", "Nh\xE2n vi\xEAn marketing", "K\u1EBF to\xE1n", "Kh\xE1c"], required: true },
@@ -21125,6 +21145,7 @@ CREATE TABLE IF NOT EXISTS wf_stage_todos (id text PRIMARY KEY, stage_id text NO
 CREATE TABLE IF NOT EXISTS wf_fields (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, name text NOT NULL, type text NOT NULL,
   options jsonb NOT NULL DEFAULT '[]', required boolean NOT NULL DEFAULT false, pos int NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS wf_fields_wf ON wf_fields(workflow_id);
+ALTER TABLE wf_fields ADD COLUMN IF NOT EXISTS stage_id text NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS wf_fail_reasons (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, text text NOT NULL, pos int NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS wf_forward_rules (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, stage_id text NOT NULL DEFAULT '',
   target_workflow_id text NOT NULL, mode text NOT NULL DEFAULT 'manual', field_map jsonb NOT NULL DEFAULT '{}', seq bigserial);
@@ -21210,7 +21231,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         });
         return {
           stages: st.rows.map((s) => ({ id: s.id, name: s.name, pos: s.pos, slaHours: s.sla_hours === null ? null : Number(s.sla_hours), assigneeIds: idList(s.assignees), todos: todosBy[s.id] || [] })),
-          fields: fl.rows.map((f) => ({ id: f.id, name: f.name, type: f.type, options: Array.isArray(f.options) ? f.options : [], required: f.required })),
+          fields: fl.rows.map((f) => ({ id: f.id, name: f.name, type: f.type, options: Array.isArray(f.options) ? f.options : [], required: f.required, stageId: f.stage_id || "" })),
           failReasons: rs.rows.map((r) => ({ id: r.id, text: r.text })),
           forwardRules: ru.rows.map((r) => ({ id: r.id, stageId: r.stage_id, targetWorkflowId: r.target_workflow_id, mode: r.mode, fieldMap: r.field_map || {} }))
         };
@@ -21294,6 +21315,19 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         });
         const miss = fields.filter((f) => f.required && emptyVal(f, values[f.id], cnt[f.id]));
         if (miss.length) throw new AppError2("C\xF2n tr\u01B0\u1EDDng b\u1EAFt bu\u1ED9c ch\u01B0a nh\u1EADp: " + miss.slice(0, 4).map((f) => f.name).join(", ") + (miss.length > 4 ? "\u2026" : "") + ".");
+      }
+      const stagePos = (cfg, sid) => cfg.stages.findIndex((s) => s.id === sid);
+      const fieldsForStage = (cfg, sid) => cfg.fields.filter((f) => !f.stageId || f.stageId === sid);
+      function editableFields(cfg, jc) {
+        if (!jc.canEdit) return [];
+        const cur = stagePos(cfg, jc.j.stage_id);
+        return cfg.fields.filter((f) => {
+          if (!f.stageId) return true;
+          const pos = stagePos(cfg, f.stageId);
+          if (pos < 0) return false;
+          if (pos === cur) return true;
+          return pos < cur && jc.wc.canManage;
+        });
       }
       function cleanTags(v) {
         return uniq((Array.isArray(v) ? v : []).map((t) => clipText(t, 30)).filter(Boolean)).slice(0, LIM.tags);
@@ -21550,7 +21584,8 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
           },
           ...cfg,
           jobs: jobs.map((j) => jobJson(j, ex[j.id])),
-          archivedView: !!archived
+          archivedView: !!archived,
+          features: { stageFields: true }
         };
       }
       async function loadJob(c, id) {
@@ -21758,12 +21793,28 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
           await c.q.query("INSERT INTO wf_stages(id,workflow_id,name,pos,sla_hours,assignees) VALUES($1,$2,$3,$4,$5,$6)", [sid, wfId, s.name, i, s.sla || null, JSON.stringify(s.assignees || [])]);
           for (let k = 0; k < (s.todos || []).length; k++) await c.q.query("INSERT INTO wf_stage_todos(id,stage_id,title,required,pos) VALUES($1,$2,$3,$4,$5)", [newId("wp"), sid, s.todos[k][0], !!s.todos[k][1], k]);
           if (s.oldId) idMap[s.oldId] = sid;
+          s._newId = sid;
         }
-        for (let i = 0; i < (spec.fields || []).length; i++) {
-          const f = spec.fields[i];
-          await c.q.query("INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos) VALUES($1,$2,$3,$4,$5,$6,$7)", [newId("wf"), wfId, f.name, f.type, JSON.stringify(f.options || []), !!f.required, i]);
+        const all = (spec.fields || []).map((f) => ({ ...f, _sid: f.stageId ? idMap[f.stageId] || null : "" })).filter((f) => f._sid !== null);
+        spec.stages.forEach((s) => (s.fields || []).forEach((f) => all.push({ ...f, _sid: s._newId })));
+        for (let i = 0; i < all.length; i++) {
+          const f = all[i];
+          await c.q.query("INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos,stage_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [newId("wf"), wfId, f.name, f.type, JSON.stringify(f.options || []), !!f.required, i, f._sid]);
         }
         for (let i = 0; i < (spec.reasons || []).length; i++) await c.q.query("INSERT INTO wf_fail_reasons(id,workflow_id,text,pos) VALUES($1,$2,$3,$4)", [newId("wr"), wfId, spec.reasons[i], i]);
+      }
+      async function deleteFields(c, ids) {
+        for (const id of ids) {
+          await c.q.query("DELETE FROM wf_fields WHERE id=$1", [id]);
+          const files = (await c.q.query("SELECT id, job_id FROM wf_files WHERE field_id=$1", [id])).rows;
+          for (const f of files) {
+            try {
+              fs2.rmSync(path.join(jobDir(f.job_id), f.id), { force: true });
+            } catch (e) {
+            }
+          }
+          await c.q.query("DELETE FROM wf_files WHERE field_id=$1", [id]);
+        }
       }
       const actions = {
         /* ----- Quy trình ----- */
@@ -21788,14 +21839,14 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
             if (!src.canView) deny2("B\u1EA1n kh\xF4ng xem \u0111\u01B0\u1EE3c quy tr\xECnh c\u1EA7n nh\xE2n b\u1EA3n.");
             const cfg = await loadConfig(c.q, src.w.id);
             spec = {
-              stages: cfg.stages.map((s) => ({ name: s.name, sla: s.slaHours, assignees: [], todos: s.todos.map((t) => [t.title, t.required]) })),
+              stages: cfg.stages.map((s) => ({ oldId: s.id, name: s.name, sla: s.slaHours, assignees: [], todos: s.todos.map((t) => [t.title, t.required]) })),
               fields: cfg.fields,
               reasons: cfg.failReasons.map((r) => r.text)
             };
           } else {
             const t = TEMPLATES[str2(p.templateKey) || "blank"];
             if (!t) throw new AppError2("M\u1EABu quy tr\xECnh kh\xF4ng t\u1ED3n t\u1EA1i.");
-            spec = t;
+            spec = { ...t, stages: t.stages.map((s) => ({ ...s })) };
           }
           await c.q.query("INSERT INTO wf_workflows(id,name,description,category,color,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)", [...row, c.me.id, nowISO()]);
           await c.q.query("INSERT INTO wf_members(workflow_id,user_id,is_owner) VALUES($1,$2,true)", [w.id, c.me.id]);
@@ -21872,6 +21923,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
               if (open.n) throw new AppError2('Giai \u0111o\u1EA1n "' + old.name + '" c\xF2n ' + open.n + " job \u0111ang l\xE0m, h\xE3y chuy\u1EC3n ch\xFAng \u0111i tr\u01B0\u1EDBc khi xo\xE1 giai \u0111o\u1EA1n.");
               await c.q.query("DELETE FROM wf_stages WHERE id=$1", [old.id]);
               await c.q.query("DELETE FROM wf_forward_rules WHERE workflow_id=$1 AND stage_id=$2", [wfId, old.id]);
+              await deleteFields(c, (await c.q.query("SELECT id FROM wf_fields WHERE workflow_id=$1 AND stage_id=$2", [wfId, old.id])).rows.map((r) => r.id));
             }
             for (let i = 0; i < stages.length; i++) {
               const s = stages[i], exists = cfg.stages.some((o) => o.id === s.id);
@@ -21890,37 +21942,33 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
             }
           }
           if (Array.isArray(p.fields)) {
-            if (p.fields.length > LIM.fields) throw new AppError2("T\u1ED1i \u0111a " + LIM.fields + " tr\u01B0\u1EDDng tu\u1EF3 ch\u1EC9nh.");
+            const cfgF = await loadConfig(c.q, wfId), stIds = new Set(cfgF.stages.map((s) => s.id)), per = {};
+            if (p.fields.length > LIM.fieldsTotal) throw new AppError2("T\u1ED1i \u0111a " + LIM.fieldsTotal + " tr\u01B0\u1EDDng tu\u1EF3 ch\u1EC9nh trong m\u1ED9t quy tr\xECnh.");
             const seen = /* @__PURE__ */ new Set();
             for (const f of p.fields) {
+              const was = cfgF.fields.find((o) => o.id === f.id);
+              f._sid = f.stageId === void 0 && was ? was.stageId : str2(f.stageId);
+              if (f._sid && !stIds.has(f._sid)) throw new AppError2('Tr\u01B0\u1EDDng "' + clipText(f.name, 40) + '" thu\u1ED9c giai \u0111o\u1EA1n kh\xF4ng c\xF2n t\u1ED3n t\u1EA1i.');
+              per[f._sid] = (per[f._sid] || 0) + 1;
+              if (per[f._sid] > LIM.fields) throw new AppError2(f._sid ? "M\u1ED7i giai \u0111o\u1EA1n t\u1ED1i \u0111a " + LIM.fields + " tr\u01B0\u1EDDng." : "T\u1ED1i \u0111a " + LIM.fields + " tr\u01B0\u1EDDng chung.");
               if (!safeId(f.id) || seen.has(f.id)) throw new AppError2("M\xE3 tr\u01B0\u1EDDng kh\xF4ng h\u1EE3p l\u1EC7.");
               seen.add(f.id);
               if (!clipText(f.name, 80)) throw new AppError2("Nh\u1EADp t\xEAn cho m\u1ECDi tr\u01B0\u1EDDng.");
               if (!FIELD_TYPES.includes(f.type)) throw new AppError2("Ki\u1EC3u tr\u01B0\u1EDDng kh\xF4ng h\u1EE3p l\u1EC7.");
               const other = await one2(c.q, "SELECT workflow_id FROM wf_fields WHERE id=$1", [f.id]);
               if (other && other.workflow_id !== wfId) throw new AppError2("M\xE3 tr\u01B0\u1EDDng b\u1ECB tr\xF9ng.");
-              const prev = cfg.fields.find((o) => o.id === f.id);
+              const prev = cfgF.fields.find((o) => o.id === f.id);
               if (prev && prev.type !== f.type) throw new AppError2('Kh\xF4ng \u0111\u1ED5i \u0111\u01B0\u1EE3c ki\u1EC3u c\u1EE7a tr\u01B0\u1EDDng "' + prev.name + '". H\xE3y t\u1EA1o tr\u01B0\u1EDDng m\u1EDBi.');
               if (f.type === "select" || f.type === "multiselect") {
                 f._options = uniq((Array.isArray(f.options) ? f.options : []).map((o) => clipText(o, 100)).filter(Boolean)).slice(0, LIM.options);
                 if (!f._options.length) throw new AppError2('Tr\u01B0\u1EDDng "' + clipText(f.name, 40) + '" c\u1EA7n \xEDt nh\u1EA5t 1 l\u1EF1a ch\u1ECDn.');
               } else f._options = [];
             }
-            for (const old of cfg.fields) if (!seen.has(old.id)) {
-              await c.q.query("DELETE FROM wf_fields WHERE id=$1", [old.id]);
-              const files = (await c.q.query("SELECT id, job_id FROM wf_files WHERE field_id=$1", [old.id])).rows;
-              for (const f of files) {
-                try {
-                  fs2.rmSync(path.join(jobDir(f.job_id), f.id), { force: true });
-                } catch (e) {
-                }
-              }
-              await c.q.query("DELETE FROM wf_files WHERE field_id=$1", [old.id]);
-            }
+            await deleteFields(c, cfgF.fields.filter((o) => !seen.has(o.id)).map((o) => o.id));
             for (let i = 0; i < p.fields.length; i++) {
-              const f = p.fields[i], exists = cfg.fields.some((o) => o.id === f.id);
-              if (exists) await c.q.query("UPDATE wf_fields SET name=$2, options=$3, required=$4, pos=$5 WHERE id=$1", [f.id, clipText(f.name, 80), JSON.stringify(f._options), !!f.required, i]);
-              else await c.q.query("INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos) VALUES($1,$2,$3,$4,$5,$6,$7)", [f.id, wfId, clipText(f.name, 80), f.type, JSON.stringify(f._options), !!f.required, i]);
+              const f = p.fields[i], exists = cfgF.fields.some((o) => o.id === f.id);
+              if (exists) await c.q.query("UPDATE wf_fields SET name=$2, options=$3, required=$4, pos=$5, stage_id=$6 WHERE id=$1", [f.id, clipText(f.name, 80), JSON.stringify(f._options), !!f.required, i, f._sid]);
+              else await c.q.query("INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos,stage_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [f.id, wfId, clipText(f.name, 80), f.type, JSON.stringify(f._options), !!f.required, i, f._sid]);
             }
           }
           if (Array.isArray(p.failReasons)) {
@@ -21976,12 +22024,13 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
           if (due && !validISO(due)) throw new AppError2("H\u1EA1n ch\xF3t kh\xF4ng h\u1EE3p l\u1EC7.");
           const priority = PRIORITIES.includes(t.priority) ? t.priority : old ? old.j.priority : "medium";
           const desc = W2.cleanText(t.description, 3e4), tags = cleanTags(t.tags);
-          const values = cleanFieldValues(c, cfg.fields, t.fieldValues);
+          const editable = old ? editableFields(cfg, old) : fieldsForStage(cfg, cfg.stages[0].id);
+          const values = cleanFieldValues(c, editable, t.fieldValues);
           const followersIn = idList(t.followerIds);
           if (old) {
             if (old.j.status !== "open" && !wc.canManage) throw new AppError2("Job \u0111\xE3 \u0111\xF3ng, ch\u1EC9 owner m\u1EDF l\u1EA1i \u0111\u01B0\u1EE3c.");
             const merged = { ...old.j.field_values || {}, ...values };
-            for (const f of cfg.fields) if (f.id in (t.fieldValues || {}) && !(f.id in values)) delete merged[f.id];
+            for (const f of editable) if (f.id in (t.fieldValues || {}) && !(f.id in values)) delete merged[f.id];
             const assignees2 = Array.isArray(t.assigneeIds) ? idList(t.assigneeIds) : old.assignees;
             if (Array.isArray(t.assigneeIds)) checkPeople(c, wc, assignees2, "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n");
             const followers2 = Array.isArray(t.followerIds) ? followersIn.filter((u) => !assignees2.includes(u)) : old.followers;
@@ -21997,7 +22046,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
             await logAct(c, wfId, old.j.id, "job.edit", {});
             return;
           }
-          await checkRequiredFields(c, cfg.fields.filter((f) => f.type !== "file"), values, null);
+          await checkRequiredFields(c, cfg.fields.filter((f) => !f.stageId && f.type !== "file"), values, null);
           const first = cfg.stages[0], now = nowISO();
           let assignees = Array.isArray(t.assigneeIds) ? idList(t.assigneeIds) : [];
           if (assignees.length) checkPeople(c, wc, assignees, "Ng\u01B0\u1EDDi th\u1EF1c hi\u1EC7n");
@@ -22034,7 +22083,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
           if (dir === "next") {
             const open = (await c.q.query("SELECT title FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND required AND NOT done ORDER BY seq", [j.id, j.stage_id])).rows;
             if (open.length) throw new AppError2("C\xF2n " + open.length + " todo b\u1EAFt bu\u1ED9c ch\u01B0a xong: " + open.slice(0, 3).map((t) => '"' + t.title + '"').join(", ") + (open.length > 3 ? "\u2026" : "") + ".");
-            await checkRequiredFields(c, cfg.fields, j.field_values || {}, j.id);
+            await checkRequiredFields(c, fieldsForStage(cfg, j.stage_id), j.field_values || {}, j.id);
           }
           const now = nowISO(), cur = cfg.stages[idx];
           let assignees = idList(p.assigneeIds);
@@ -22062,7 +22111,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
             if (!isLast) throw new AppError2("Ch\u1EC9 b\u1EA5m Ho\xE0n th\xE0nh \u0111\u01B0\u1EE3c \u1EDF giai \u0111o\u1EA1n cu\u1ED1i. N\u1EBFu job kh\xF4ng \u0111i ti\u1EBFp, h\xE3y \u0111\xE1nh d\u1EA5u Th\u1EA5t b\u1EA1i.");
             const open = (await c.q.query("SELECT title FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND required AND NOT done", [j.id, j.stage_id])).rows;
             if (open.length) throw new AppError2("C\xF2n " + open.length + " todo b\u1EAFt bu\u1ED9c ch\u01B0a xong: " + open.slice(0, 3).map((t) => '"' + t.title + '"').join(", ") + ".");
-            await checkRequiredFields(c, cfg.fields, j.field_values || {}, j.id);
+            await checkRequiredFields(c, fieldsForStage(cfg, j.stage_id), j.field_values || {}, j.id);
           } else {
             reason = clipText(p.reason, 200);
             if (cfg.failReasons.length && !cfg.failReasons.some((r) => r.text === reason)) throw new AppError2("H\xE3y ch\u1ECDn m\u1ED9t l\xFD do th\u1EA5t b\u1EA1i trong danh s\xE1ch.");
@@ -22207,6 +22256,10 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
           if (!f) return;
           const jc = await getJc(c, f.job_id);
           if (f.uploaded_by !== c.me.id && !jc.canEdit) deny2("B\u1EA1n kh\xF4ng \u0111\u01B0\u1EE3c xo\xE1 t\u1EC7p n\xE0y.");
+          if (f.field_id) {
+            const cfg = await loadConfig(c.q, jc.j.workflow_id), fd = cfg.fields.find((x) => x.id === f.field_id);
+            if (fd && fd.stageId && stagePos(cfg, fd.stageId) < stagePos(cfg, jc.j.stage_id) && !jc.wc.canManage) deny2("Ch\u1EC9 owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa tr\u01B0\u1EDDng c\u1EE7a giai \u0111o\u1EA1n \u0111\xE3 qua.");
+          }
           await c.q.query("DELETE FROM wf_files WHERE id=$1", [f.id]);
           try {
             fs2.rmSync(path.join(jobDir(f.job_id), f.id), { force: true });
@@ -22226,8 +22279,9 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         if (!jc.canEdit) deny2("B\u1EA1n kh\xF4ng \u0111\xEDnh k\xE8m \u0111\u01B0\u1EE3c t\u1EC7p v\xE0o job n\xE0y.");
         const fieldId = str2(params.fieldId);
         if (fieldId) {
-          const f = await one2(c.q, "SELECT type FROM wf_fields WHERE id=$1 AND workflow_id=$2", [fieldId, jc.j.workflow_id]);
+          const cfg = await loadConfig(c.q, jc.j.workflow_id), f = cfg.fields.find((x) => x.id === fieldId);
           if (!f || f.type !== "file") throw new AppError2("Tr\u01B0\u1EDDng t\u1EC7p kh\xF4ng h\u1EE3p l\u1EC7.");
+          if (!editableFields(cfg, jc).includes(f)) deny2(f.stageId && stagePos(cfg, f.stageId) > stagePos(cfg, jc.j.stage_id) ? 'Job ch\u01B0a t\u1EDBi giai \u0111o\u1EA1n c\u1EE7a tr\u01B0\u1EDDng "' + f.name + '".' : "Ch\u1EC9 owner ho\u1EB7c Gi\xE1m \u0111\u1ED1c \u0111\u01B0\u1EE3c s\u1EEDa tr\u01B0\u1EDDng c\u1EE7a giai \u0111o\u1EA1n \u0111\xE3 qua.");
         }
         const cnt = await one2(c.q, "SELECT count(*)::int AS n FROM wf_files WHERE job_id=$1", [jobId]);
         if (cnt.n >= LIM.files) throw new AppError2("M\u1ED7i job t\u1ED1i \u0111a " + LIM.files + " t\u1EC7p.");
@@ -22301,7 +22355,7 @@ var PORT = Number(process.env.PORT || 3100);
 var TOKEN_SECRET = process.env.TOKEN_SECRET || "";
 var TOKEN_DAYS = 30;
 var ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean);
-var VERSION = 22;
+var VERSION = 23;
 var ROLES = ["director", "head", "manager", "employee"];
 var PARENT_ROLE = { head: "director", manager: "head", employee: "manager" };
 var ROLE_NAME = { director: "Gi\xE1m \u0111\u1ED1c", head: "Tr\u01B0\u1EDFng ph\xF2ng", manager: "Qu\u1EA3n l\xFD", employee: "Nh\xE2n vi\xEAn" };
