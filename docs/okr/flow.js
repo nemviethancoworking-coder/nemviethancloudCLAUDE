@@ -1,5 +1,5 @@
 /* ============================================================
-   MODULE QUY TRÌNH (kiểu Base Workflow) — chạy trong app OKR Weekly (v22)
+   MODULE QUY TRÌNH (kiểu Base Workflow) — chạy trong app OKR Weekly (v22; v23: trường tuỳ chỉnh theo từng giai đoạn)
    Quy trình → Giai đoạn → Job. Mỗi job đi tuần tự qua các giai đoạn, có người thực hiện, hạn SLA, todo (có todo bắt buộc),
    trường tuỳ chỉnh, bình luận, tệp đính kèm, chuyển tiếp sang quy trình khác.
    - Quyền: Giám đốc + Trưởng phòng tạo quy trình (người tạo = owner). Chỉ thành viên (và Giám đốc) thấy quy trình; mọi thành viên tạo được job.
@@ -637,6 +637,28 @@ function archiveView(d){
 async function unarchive(id){ const j = await act('wfArchiveJob', { id, archived: false }, 'Đã bỏ lưu trữ job.', true); if(j){ await refresh(); } }
 async function archiveJob(id){ const j = await act('wfArchiveJob', { id, archived: true }, 'Đã lưu trữ job.'); if(j){ A.closeModal(); S.det = null; } }
 
+/* ---------- Trường tuỳ chỉnh: trường chung + trường theo giai đoạn (v23) ---------- */
+const stageFieldsOn = d => !!(d && d.features && d.features.stageFields);     // máy chủ v23 trở lên
+const genFields = d => d.fields.filter(f => !f.stageId);
+const fieldsOfStage = (d, sid) => d.fields.filter(f => f.stageId === sid);
+/** Trường chung & giai đoạn hiện tại: ai sửa được job thì sửa được; giai đoạn đã qua: owner/Giám đốc; giai đoạn chưa tới: không ai. */
+function fieldEditable(d, j, f){
+  if(!j || !j.canEdit) return false;
+  if(!f.stageId) return true;
+  const p = stageIdx(d, f.stageId), cur = stageIdx(d, j.stageId);
+  if(p < 0) return false;
+  if(p === cur) return true;
+  return p < cur && !!(j.canManage || d.workflow.canManage);
+}
+function fieldEmpty(f, j){
+  const v = (j.fieldValues || {})[f.id];
+  if(f.type === 'file') return !(j.files || []).some(x => x.fieldId === f.id);
+  if(f.type === 'checkbox') return v !== true;
+  if(f.type === 'multiselect') return !Array.isArray(v) || !v.length;
+  return v === undefined || v === null || String(v).trim() === '';
+}
+const fieldLabel = (d, f) => { const s = f.stageId ? stageOf(d, f.stageId) : null; return f.name + (s ? ' (' + s.name + ')' : ''); };
+
 /* ---------- Xuất Excel (làm ngay trên trình duyệt) ---------- */
 function fieldText(f, v){
   if(v === undefined || v === null || v === '') return '';
@@ -678,7 +700,7 @@ function exportXlsx(){
   let jobs = filtered(d); if(S.f.st === 'open') jobs = jobs.filter(j => j.status === 'open'); else if(S.f.st === 'closed') jobs = jobs.filter(j => j.status !== 'open');
   jobs = sortJobs(d, jobs);
   const fields = d.fields.filter(f => f.type !== 'file');
-  const head = ['Job', 'Giai đoạn', 'Trạng thái', 'Lý do thất bại', 'Ưu tiên', 'Người thực hiện', 'Người theo dõi', 'Người tạo', 'Ngày tạo', 'Hạn chót', 'Hạn SLA giai đoạn', 'Thẻ nhãn'].concat(fields.map(f => f.name));
+  const head = ['Job', 'Giai đoạn', 'Trạng thái', 'Lý do thất bại', 'Ưu tiên', 'Người thực hiện', 'Người theo dõi', 'Người tạo', 'Ngày tạo', 'Hạn chót', 'Hạn SLA giai đoạn', 'Thẻ nhãn'].concat(fields.map(f => fieldLabel(d, f)));
   const rows = [head].concat(jobs.map(j => [j.title, (stageOf(d, j.stageId) || {}).name || '', j.status === 'open' ? 'Đang làm' : j.status === 'done' ? 'Hoàn thành' : 'Thất bại', j.failReason || '', (PRIO[j.priority] || PRIO.medium).t,
     j.assigneeIds.map(uName).join(', '), j.followerIds.map(uName).join(', '), uName(j.createdBy), j.createdAt ? fmtDT(j.createdAt) : '', j.due ? fmt(j.due) : '', j.status === 'open' && j.slaDueAt ? fmtDT(j.slaDueAt) : '', (j.tags || []).join(', ')]
     .concat(fields.map(f => fieldText(f, (j.fieldValues || {})[f.id])))));
@@ -760,6 +782,27 @@ function fileRow(a){
 function uploadBtn(fieldId, label){
   return `<label class="btn btn-ghost btn-sm cursor-pointer">${FI.clip} ${label || 'Thêm tệp'}<input type="file" multiple class="hidden" onchange="event.stopPropagation();Fl.pickFiles(this,'${fieldId || ''}')" accept=".${OK_EXT.join(',.')}"></label>`;
 }
+/** Khối "Thông tin": trường chung + trường của các giai đoạn đã qua / hiện tại (giai đoạn chưa tới thì ẩn). */
+function fieldsDetailHtml(d, j, idx, open, archived){
+  const rows = list => `<div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${list.map(f => `
+      <div class="px-3 py-2 grid sm:grid-cols-3 gap-1 sm:gap-3 items-start"><div class="text-[12.5px] text-gray-500">${esc(f.name)}${f.required ? ' <span class="text-red-500">*</span>' : ''}</div>
+        <div class="sm:col-span-2 text-[13.5px] text-slate-800 min-w-0">${fieldValueHtml(f, j)}${f.type === 'file' && open && !archived && fieldEditable(d, j, f) ? `<div class="mt-1.5">${uploadBtn(f.id, 'Thêm tệp')}</div>` : ''}</div></div>`).join('')}</div>`;
+  const canForm = j.canEdit && !archived && (open || j.canManage);
+  const editBtn = `<button class="inline-flex items-center gap-1 whitespace-nowrap text-[12.5px] text-base-600 hover:underline shrink-0" onclick="Fl.openJobForm('${j.id}')">${I.edit} Nhập / sửa</button>`;
+  const out = [];
+  const gf = genFields(d);
+  if(gf.length) out.push(`<div><div class="flex items-center justify-between gap-2"><label class="label">${stageFieldsOn(d) && d.fields.some(f => f.stageId) ? 'Thông tin chung' : 'Thông tin theo quy trình'}</label>${canForm && gf.some(f => f.type !== 'file') ? editBtn : ''}</div>${rows(gf)}</div>`);
+  d.stages.forEach((s, i) => {
+    if(i > idx) return;                                                             // giai đoạn chưa tới: ẩn
+    const fs = fieldsOfStage(d, s.id); if(!fs.length) return;
+    const cur = i === idx && open, miss = cur ? fs.filter(f => f.required && fieldEmpty(f, j)) : [];
+    const canEdit = canForm && fs.some(f => f.type !== 'file' && fieldEditable(d, j, f));
+    const tag = cur ? '<span class="badge bg-blue-50 text-blue-700 border-blue-200">Giai đoạn hiện tại</span>' : i < idx || !open ? '<span class="badge bg-gray-100 text-gray-500 border-gray-200">Đã qua · chỉ xem</span>' : '';
+    out.push(`<div><div class="flex items-center justify-between gap-2 flex-wrap"><label class="label flex items-center gap-2 flex-wrap">${esc(s.name)} ${tag}</label>${canEdit ? editBtn : ''}</div>${rows(fs)}
+      ${miss.length ? `<div class="mt-1.5 text-[12.5px] text-amber-700">Cần nhập ${miss.map(f => '“' + esc(f.name) + '”').join(', ')} trước khi ${idx === d.stages.length - 1 ? 'bấm Hoàn thành' : 'chuyển sang giai đoạn sau'}.</div>` : ''}</div>`);
+  });
+  return out.length ? `<div class="space-y-4">${out.join('')}</div>` : '';
+}
 function paintDetail(){
   const j = curDet(); if(!j || !detOpen()) return;
   const d = wfd(j.workflowId), set = (id, html) => { const el = $(id); if(el) el.innerHTML = html; };
@@ -779,10 +822,7 @@ function paintDetail(){
   /* Mô tả */
   set('fl-d-desc', plain(j.description) || /<img/.test(j.description || '') ? `<div><label class="label">Mô tả</label><div class="text-[13.5px] text-slate-700 break-words">${richHtml(j.description || '')}</div></div>` : '');
   /* Trường tuỳ chỉnh */
-  set('fl-d-fields', d && d.fields.length ? `<div><div class="flex items-center justify-between"><label class="label">Thông tin theo quy trình</label></div>
-    <div class="border border-gray-200 rounded-lg divide-y divide-gray-100">${d.fields.map(f => `
-      <div class="px-3 py-2 grid sm:grid-cols-3 gap-1 sm:gap-3 items-start"><div class="text-[12.5px] text-gray-500">${esc(f.name)}${f.required ? ' <span class="text-red-500">*</span>' : ''}</div>
-        <div class="sm:col-span-2 text-[13.5px] text-slate-800 min-w-0">${fieldValueHtml(f, j)}${f.type === 'file' && j.canEdit && open ? `<div class="mt-1.5">${uploadBtn(f.id, 'Thêm tệp')}</div>` : ''}</div></div>`).join('')}</div></div>` : '');
+  set('fl-d-fields', d ? fieldsDetailHtml(d, j, idx, open, archived) : '');
   /* Todo */
   set('fl-d-todos', todoHtml(j, d, mv));
   /* Tệp chung */
@@ -993,6 +1033,18 @@ function fieldInput(f, v){
   }
   return `<input id="${id}" class="input" maxlength="500" value="${esc(val)}" onchange="modalDirty=true">`;
 }
+/** Nhóm trường trong form tạo/sửa job. Tạo mới: trường chung + giai đoạn đầu. Sửa: trường chung + trường giai đoạn mình được sửa. */
+function formFieldGroups(d, j){
+  const groups = [], gf = genFields(d), cur = j ? stageIdx(d, j.stageId) : 0, multi = d.fields.some(f => f.stageId);
+  if(gf.length) groups.push({ title: multi ? 'Thông tin chung' : 'Thông tin theo quy trình', fields: gf, note: multi ? 'Hiện ở mọi giai đoạn.' : '' });
+  d.stages.forEach((s, i) => {
+    const fs = fieldsOfStage(d, s.id).filter(f => j ? fieldEditable(d, j, f) : i === 0);
+    if(!fs.length) return;
+    groups.push({ title: 'Giai đoạn ' + (i + 1) + ' · ' + s.name, fields: fs,
+      note: j && i < cur ? 'Giai đoạn đã qua — chỉ owner và Giám đốc sửa được.' : i === cur ? 'Nhập khi job ở giai đoạn này.' : '' });
+  });
+  return groups;
+}
 function openJobForm(id){
   let j = null, d;
   if(id){ j = curDet(); if(!j || j.id !== id) return; d = wfd(j.workflowId); } else d = wfd();
@@ -1011,7 +1063,7 @@ function openJobForm(id){
         <div><label class="label">Hạn chót của cả job</label><input id="fl-j-due" type="date" class="input" value="${esc(j ? j.due : '')}" onchange="modalDirty=true"></div>
       </div>
       <div><label class="label">Thẻ nhãn <span class="font-normal text-gray-400">(cách nhau bằng dấu phẩy)</span></label><input id="fl-j-tags" class="input" maxlength="200" value="${esc(j ? j.tags.join(', ') : '')}" onchange="modalDirty=true"></div>
-      ${d.fields.length ? `<div class="rounded-lg border border-gray-200 p-4 space-y-3"><div class="section-title">Thông tin theo quy trình</div>${d.fields.map(f => `<div><label class="label">${esc(f.name)}${f.required && f.type !== 'file' ? ' <span class="text-red-500">*</span>' : ''}${f.type === 'file' && f.required ? ' <span class="font-normal text-amber-600">(cần có tệp trước khi chuyển giai đoạn)</span>' : ''}</label>${fieldInput(f, j ? (j.fieldValues || {})[f.id] : undefined)}</div>`).join('')}</div>` : ''}
+      ${formFieldGroups(d, j).map(g => `<div class="rounded-lg border border-gray-200 p-4 space-y-3"><div class="section-title">${esc(g.title)}</div>${g.note ? `<div class="text-[12px] text-gray-500 -mt-1">${g.note}</div>` : ''}${g.fields.map(f => `<div><label class="label">${esc(f.name)}${f.required ? (f.type === 'file' || f.stageId ? ' <span class="font-normal text-amber-600">* cần có ' + (f.type === 'file' ? 'tệp ' : '') + 'trước khi chuyển giai đoạn</span>' : ' <span class="text-red-500">*</span>') : ''}</label>${fieldInput(f, j ? (j.fieldValues || {})[f.id] : undefined)}</div>`).join('')}</div>`).join('')}
       <div class="grid md:grid-cols-2 gap-4">
         <div><label class="label">Người thực hiện</label>${picker('fl-j-asg', defAsg, ws)}<div class="text-[12px] text-gray-400 mt-1">${id ? 'Bỏ trống hết sẽ báo lỗi: job cần ít nhất 1 người.' : 'Đã chọn sẵn theo người mặc định của giai đoạn đầu.'}</div></div>
         <div><label class="label">Người theo dõi</label>${picker('fl-j-fol', j ? j.followerIds : [], ws)}<div class="text-[12px] text-gray-400 mt-1">Chỉ xem và bình luận.</div></div>
@@ -1116,7 +1168,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 function cfgInit(d){
   if(S.cfg && S.cfg.id === d.workflow.id) return;
   S.cfg = { id: d.workflow.id, stages: d.stages.map(s => ({ id: s.id, name: s.name, slaHours: s.slaHours === null ? '' : s.slaHours, assigneeIds: [...s.assigneeIds], todos: s.todos.map(t => ({ id: t.id, title: t.title, required: !!t.required })) })),
-    fields: d.fields.map(f => ({ id: f.id, name: f.name, type: f.type, required: !!f.required, optText: (f.options || []).join('\n'), old: true })),
+    fields: d.fields.map(f => ({ id: f.id, name: f.name, type: f.type, required: !!f.required, optText: (f.options || []).join('\n'), old: true, stageId: f.stageId || '' })),
     reasons: d.failReasons.map(r => r.text), rules: d.forwardRules.map(r => clone(r)), dirty: false };
 }
 function settingsView(d){
@@ -1135,6 +1187,21 @@ function settingsView(d){
     <div class="flex gap-2"><button class="btn btn-ghost" onclick="Fl.cfgReset()">Hoàn tác</button><button class="btn btn-primary" id="fl-cfg-save" onclick="Fl.cfgSave()">${I.check} Lưu cấu hình</button></div>
   </div>`;
 }
+/** Một dòng cài đặt trường tuỳ chỉnh (i = vị trí trong S.cfg.fields; nút lên/xuống chỉ đổi chỗ trong cùng nhóm: trường chung hoặc cùng giai đoạn). */
+function fieldCfgHtml(c, f, i){
+  const nb = dir => { for(let k = i + dir; k >= 0 && k < c.fields.length; k += dir) if((c.fields[k].stageId || '') === (f.stageId || '')) return k; return -1; };
+  return `
+    <div class="border border-gray-200 rounded-lg p-3 bg-white">
+      <div class="flex items-center gap-2 flex-wrap">
+        <input class="input !py-1.5 flex-1 min-w-[150px]" maxlength="80" value="${esc(f.name)}" placeholder="Tên trường" oninput="Fl.cfgSet('fields',${i},'name',this.value)">
+        ${f.old ? `<span class="badge bg-gray-100 text-gray-700 border-gray-200" title="Không đổi được kiểu của trường đã tạo">${esc(FT[f.type])}</span>` : `<select class="input !py-1.5 !w-auto" onchange="Fl.cfgFieldType(${i},this.value)">${Object.keys(FT).map(k => `<option value="${k}" ${f.type === k ? 'selected' : ''}>${FT[k]}</option>`).join('')}</select>`}
+        ${f.type === 'file' ? '' : `<label class="flex items-center gap-1.5 text-[12.5px] text-gray-600 whitespace-nowrap"><input type="checkbox" class="checkbox" ${f.required ? 'checked' : ''} onchange="Fl.cfgSet('fields',${i},'required',this.checked)"> Bắt buộc</label>`}
+        ${f.type === 'file' ? `<label class="flex items-center gap-1.5 text-[12.5px] text-gray-600 whitespace-nowrap"><input type="checkbox" class="checkbox" ${f.required ? 'checked' : ''} onchange="Fl.cfgSet('fields',${i},'required',this.checked)"> Cần có tệp mới được chuyển giai đoạn</label>` : ''}
+        <div class="flex gap-1 ml-auto"><button class="p-1.5 text-gray-400 hover:text-slate-800 disabled:opacity-30" ${nb(-1) < 0 ? 'disabled' : ''} title="Lên" onclick="Fl.cfgMoveField(${i},-1)">${FI.up}</button><button class="p-1.5 text-gray-400 hover:text-slate-800 disabled:opacity-30" ${nb(1) < 0 ? 'disabled' : ''} title="Xuống" onclick="Fl.cfgMoveField(${i},1)">${FI.dn}</button><button class="p-1.5 text-gray-400 hover:text-red-600" title="Xoá trường (xoá luôn dữ liệu của trường này ở mọi job)" onclick="Fl.cfgDel('fields',${i})">${I.trash}</button></div>
+      </div>
+      ${f.type === 'select' || f.type === 'multiselect' ? `<div class="mt-2"><div class="text-[12px] text-gray-500 mb-1">Các lựa chọn (mỗi dòng một lựa chọn)</div><textarea class="input" rows="3" oninput="Fl.cfgSet('fields',${i},'optText',this.value)">${esc(f.optText)}</textarea></div>` : ''}
+    </div>`;
+}
 function cfgHtml(d){
   const c = S.cfg, ms = (d.workflow.members || []);
   const sec = (title, sub, body, add) => `<div class="card mb-4"><div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-2 flex-wrap"><div><div class="font-semibold text-slate-900">${title}</div><div class="text-[12px] text-gray-500">${sub}</div></div>${add || ''}</div><div class="p-4 space-y-3">${body}</div></div>`;
@@ -1150,18 +1217,11 @@ function cfgHtml(d){
       <div class="mt-2.5"><div class="text-[12px] text-gray-500 mb-1">Todo mẫu (tự sinh khi job vào giai đoạn này)</div>
         ${s.todos.map((t, k) => `<div class="flex items-center gap-2 mb-1.5"><input class="input !py-1.5 flex-1" maxlength="200" value="${esc(t.title)}" placeholder="Nội dung todo" oninput="Fl.cfgTodo(${i},${k},'title',this.value)"><label class="flex items-center gap-1.5 text-[12.5px] text-gray-600 whitespace-nowrap"><input type="checkbox" class="checkbox" ${t.required ? 'checked' : ''} onchange="Fl.cfgTodo(${i},${k},'required',this.checked)"> Bắt buộc</label><button class="p-1 text-gray-300 hover:text-red-600" onclick="Fl.cfgDelTodo(${i},${k})">${I.x}</button></div>`).join('')}
         <button class="text-[12.5px] text-base-600 hover:underline" onclick="Fl.cfgAddTodo(${i})">+ Thêm todo mẫu</button></div>
+      ${stageFieldsOn(d) ? `<div class="mt-3 pt-2.5 border-t border-dashed border-gray-200"><div class="text-[12px] text-gray-500 mb-1.5">Trường tuỳ chỉnh của giai đoạn này (nhập khi job ở giai đoạn này; trường “Bắt buộc” phải điền trước khi chuyển sang giai đoạn sau)</div>
+        <div class="space-y-2">${c.fields.map((f, k) => f.stageId === s.id ? fieldCfgHtml(c, f, k) : '').join('')}</div>
+        <button class="text-[12.5px] text-base-600 hover:underline mt-1.5" onclick="Fl.cfgAdd('fields','${s.id}')">+ Thêm trường cho giai đoạn</button></div>` : ''}
     </div>`).join('');
-  const fields = c.fields.map((f, i) => `
-    <div class="border border-gray-200 rounded-lg p-3 bg-white">
-      <div class="flex items-center gap-2 flex-wrap">
-        <input class="input !py-1.5 flex-1 min-w-[150px]" maxlength="80" value="${esc(f.name)}" placeholder="Tên trường" oninput="Fl.cfgSet('fields',${i},'name',this.value)">
-        ${f.old ? `<span class="badge bg-gray-100 text-gray-700 border-gray-200" title="Không đổi được kiểu của trường đã tạo">${esc(FT[f.type])}</span>` : `<select class="input !py-1.5 !w-auto" onchange="Fl.cfgFieldType(${i},this.value)">${Object.keys(FT).map(k => `<option value="${k}" ${f.type === k ? 'selected' : ''}>${FT[k]}</option>`).join('')}</select>`}
-        ${f.type === 'file' ? '' : `<label class="flex items-center gap-1.5 text-[12.5px] text-gray-600 whitespace-nowrap"><input type="checkbox" class="checkbox" ${f.required ? 'checked' : ''} onchange="Fl.cfgSet('fields',${i},'required',this.checked)"> Bắt buộc</label>`}
-        ${f.type === 'file' ? `<label class="flex items-center gap-1.5 text-[12.5px] text-gray-600 whitespace-nowrap"><input type="checkbox" class="checkbox" ${f.required ? 'checked' : ''} onchange="Fl.cfgSet('fields',${i},'required',this.checked)"> Cần có tệp mới được chuyển giai đoạn</label>` : ''}
-        <div class="flex gap-1 ml-auto"><button class="p-1.5 text-gray-400 hover:text-slate-800 disabled:opacity-30" ${i === 0 ? 'disabled' : ''} onclick="Fl.cfgMove('fields',${i},-1)">${FI.up}</button><button class="p-1.5 text-gray-400 hover:text-slate-800 disabled:opacity-30" ${i === c.fields.length - 1 ? 'disabled' : ''} onclick="Fl.cfgMove('fields',${i},1)">${FI.dn}</button><button class="p-1.5 text-gray-400 hover:text-red-600" title="Xoá trường (xoá luôn dữ liệu của trường này ở mọi job)" onclick="Fl.cfgDel('fields',${i})">${I.trash}</button></div>
-      </div>
-      ${f.type === 'select' || f.type === 'multiselect' ? `<div class="mt-2"><div class="text-[12px] text-gray-500 mb-1">Các lựa chọn (mỗi dòng một lựa chọn)</div><textarea class="input" rows="3" oninput="Fl.cfgSet('fields',${i},'optText',this.value)">${esc(f.optText)}</textarea></div>` : ''}
-    </div>`).join('');
+  const fields = c.fields.map((f, i) => f.stageId ? '' : fieldCfgHtml(c, f, i)).join('');
   const reasons = c.reasons.map((r, i) => `<div class="flex items-center gap-2"><input class="input !py-1.5 flex-1" maxlength="120" value="${esc(r)}" placeholder="Lý do thất bại" oninput="Fl.cfgReason(${i},this.value)"><button class="p-1 text-gray-300 hover:text-red-600" onclick="Fl.cfgDel('reasons',${i})">${I.x}</button></div>`).join('');
   const targets = (S.list ? S.list.workflows : []).filter(x => x.id !== d.workflow.id && !x.archived && (x.isMember || isDir()));
   const rules = c.rules.map((r, i) => `
@@ -1171,8 +1231,11 @@ function cfgHtml(d){
       <div class="sm:col-span-3"><div class="text-[11.5px] text-gray-500 mb-0.5">Cách chuyển</div><select class="input !py-1.5" onchange="Fl.cfgRule(${i},'mode',this.value)"><option value="manual" ${r.mode === 'manual' ? 'selected' : ''}>Thủ công (bấm nút)</option><option value="auto" ${r.mode === 'auto' ? 'selected' : ''}>Tự động</option></select></div>
       <div class="sm:col-span-1 text-right"><button class="p-1.5 text-gray-400 hover:text-red-600" onclick="Fl.cfgDel('rules',${i})">${I.trash}</button></div>
     </div>`).join('');
-  return sec('Giai đoạn', 'Job đi tuần tự từ giai đoạn đầu đến giai đoạn cuối rồi Hoàn thành. Mỗi giai đoạn có SLA, người thực hiện mặc định và todo mẫu.', stages || '<div class="text-gray-400 text-[13px]">Chưa có giai đoạn.</div>', `<button class="btn btn-ghost btn-sm" onclick="Fl.cfgAdd('stages')">${I.plus} Thêm giai đoạn</button>`)
-    + sec('Trường tuỳ chỉnh', 'Thông tin riêng của quy trình, điền ở mỗi job (ví dụ Vị trí ứng tuyển, Mức lương...). Trường “Bắt buộc” phải điền khi tạo job.', fields || '<div class="text-gray-400 text-[13px]">Chưa có trường nào.</div>', `<button class="btn btn-ghost btn-sm" onclick="Fl.cfgAdd('fields')">${I.plus} Thêm trường</button>`)
+  return sec('Giai đoạn', 'Job đi tuần tự từ giai đoạn đầu đến giai đoạn cuối rồi Hoàn thành. Mỗi giai đoạn có SLA, người thực hiện mặc định, todo mẫu' + (stageFieldsOn(d) ? ' và trường tuỳ chỉnh riêng.' : '.'), stages || '<div class="text-gray-400 text-[13px]">Chưa có giai đoạn.</div>', `<button class="btn btn-ghost btn-sm" onclick="Fl.cfgAdd('stages')">${I.plus} Thêm giai đoạn</button>`)
+    + sec(stageFieldsOn(d) ? 'Trường chung' : 'Trường tuỳ chỉnh', stageFieldsOn(d)
+        ? 'Điền khi tạo job và hiện ở mọi giai đoạn (ví dụ Vị trí ứng tuyển, Số điện thoại...). Trường “Bắt buộc” phải điền khi tạo job. Trường riêng của từng giai đoạn cài ngay trong mục Giai đoạn ở trên.'
+        : 'Thông tin riêng của quy trình, điền ở mỗi job. Trường “Bắt buộc” phải điền khi tạo job. (Cập nhật máy chủ lên v23 để cài trường riêng cho từng giai đoạn.)',
+      fields || '<div class="text-gray-400 text-[13px]">Chưa có trường nào.</div>', `<button class="btn btn-ghost btn-sm" onclick="Fl.cfgAdd('fields')">${I.plus} Thêm trường</button>`)
     + sec('Lý do thất bại', 'Khi đánh dấu Thất bại, người dùng chọn một lý do trong danh sách này. Danh sách trống thì được nhập tự do.', reasons || '<div class="text-gray-400 text-[13px]">Chưa có lý do nào.</div>', `<button class="btn btn-ghost btn-sm" onclick="Fl.cfgAdd('reasons')">${I.plus} Thêm lý do</button>`)
     + sec('Chuyển tiếp sang quy trình khác', 'Ví dụ: job Tuyển dụng Hoàn thành → tạo job ở quy trình Onboarding. Job mới vào giai đoạn đầu của quy trình đích; job gốc vẫn giữ lại và được đánh dấu đã chuyển tiếp. Trường cùng tên và cùng kiểu được tự chép sang.', rules || '<div class="text-gray-400 text-[13px]">Chưa có luật nào.</div>', targets.length ? `<button class="btn btn-ghost btn-sm" onclick="Fl.cfgAdd('rules')">${I.plus} Thêm luật</button>` : '<span class="text-[12px] text-gray-400">Cần có quy trình khác mà bạn là thành viên</span>');
 }
@@ -1182,17 +1245,25 @@ function cfgFieldType(i, v){ const f = S.cfg.fields[i]; if(f){ f.type = v; paint
 function cfgTodo(i, k, key, v){ const t = S.cfg.stages[i] && S.cfg.stages[i].todos[k]; if(t) t[key] = v; }
 function cfgReason(i, v){ S.cfg.reasons[i] = v; }
 function cfgRule(i, k, v){ const r = S.cfg.rules[i]; if(r){ r[k] = v; } }
+function cfgMoveField(i, dir){
+  const a = S.cfg.fields, sid = a[i] ? a[i].stageId || '' : null; if(sid === null) return;
+  for(let k = i + dir; k >= 0 && k < a.length; k += dir) if((a[k].stageId || '') === sid){ [a[i], a[k]] = [a[k], a[i]]; paintCfg(); return; }
+}
 function cfgMove(list, i, dir){ const a = S.cfg[list], j = i + dir; if(j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; paintCfg(); }
 function cfgDel(list, i){
   const a = S.cfg[list];
-  if(list === 'stages' && !confirm('Xoá giai đoạn này? (Chỉ xoá được khi không còn job đang làm ở đó.)')) return;
+  if(list === 'stages'){
+    const sid = a[i].id, nf = S.cfg.fields.filter(f => f.stageId === sid).length;
+    if(!confirm('Xoá giai đoạn này? (Chỉ xoá được khi không còn job đang làm ở đó.)' + (nf ? '\nCác trường của giai đoạn (' + nf + ' trường) và dữ liệu của chúng cũng bị xoá khi bạn bấm Lưu cấu hình.' : ''))) return;
+    S.cfg.fields = S.cfg.fields.filter(f => f.stageId !== sid);
+  }
   if(list === 'fields' && S.cfg.fields[i].old && !confirm('Xoá trường này? Dữ liệu của trường ở mọi job (kể cả tệp đính kèm theo trường) sẽ bị xoá khi bạn bấm Lưu cấu hình.')) return;
   a.splice(i, 1); paintCfg();
 }
-function cfgAdd(list){
+function cfgAdd(list, sid){
   const c = S.cfg;
   if(list === 'stages') c.stages.push({ id: newId('ws'), name: '', slaHours: '', assigneeIds: [], todos: [] });
-  else if(list === 'fields') c.fields.push({ id: newId('wd'), name: '', type: 'text', required: false, optText: '', old: false });
+  else if(list === 'fields') c.fields.push({ id: newId('wd'), name: '', type: 'text', required: false, optText: '', old: false, stageId: sid || '' });
   else if(list === 'reasons') c.reasons.push('');
   else if(list === 'rules') c.rules.push({ id: newId('wu'), stageId: '', targetWorkflowId: '', mode: 'manual', fieldMap: {} });
   paintCfg();
@@ -1212,7 +1283,7 @@ async function cfgSave(){
   const d = wfd(), c = S.cfg; if(!d || !c) return;
   const body = { workflowId: d.workflow.id,
     stages: c.stages.map(s => ({ id: s.id, name: s.name.trim(), slaHours: String(s.slaHours).trim() === '' ? null : Number(s.slaHours), assigneeIds: s.assigneeIds, todos: s.todos.map(t => ({ id: t.id, title: t.title.trim(), required: !!t.required })).filter(t => t.title) })),
-    fields: c.fields.map(f => ({ id: f.id, name: f.name.trim(), type: f.type, required: !!f.required, options: f.type === 'select' || f.type === 'multiselect' ? f.optText.split('\n').map(x => x.trim()).filter(Boolean) : [] })),
+    fields: c.fields.map(f => ({ id: f.id, name: f.name.trim(), type: f.type, required: !!f.required, stageId: f.stageId || '', options: f.type === 'select' || f.type === 'multiselect' ? f.optText.split('\n').map(x => x.trim()).filter(Boolean) : [] })),
     failReasons: c.reasons.map(r => r.trim()).filter(Boolean),
     forwardRules: c.rules.filter(r => r.targetWorkflowId).map(r => ({ id: r.id, stageId: r.stageId, targetWorkflowId: r.targetWorkflowId, mode: r.mode, fieldMap: r.fieldMap || {} })) };
   const b = $('fl-cfg-save'); if(b) b.disabled = true;
@@ -1347,9 +1418,9 @@ window.Fl = {
   dragStart, dragEnd, colOver, colLeave, drop, openMove, doMove, openClose, doClose, subClose, unarchive, archiveJob, exportXlsx, exportReport,
   openJobForm, formCancel, saveJob, pendFiles, pendDel, addTodo, tickTodo, tickTodoD, delTodo, pickFiles, delFile, openFollowers, saveFollowers, reopenJob, deleteJob, forward,
   cmInput, cmPick, cmKey, postComment, delComment, filterPick,
-  openWorkflowForm, saveWorkflow, cfgSet, cfgFieldType, cfgTodo, cfgReason, cfgRule, cfgMove, cfgDel, cfgAdd, cfgAddTodo, cfgDelTodo, cfgPickAsg, cfgAsgOk, cfgReset, cfgSave, toggleArchWorkflow, deleteWorkflow,
+  openWorkflowForm, saveWorkflow, cfgSet, cfgFieldType, cfgTodo, cfgReason, cfgRule, cfgMove, cfgMoveField, cfgDel, cfgAdd, cfgAddTodo, cfgDelTodo, cfgPickAsg, cfgAsgOk, cfgReset, cfgSave, toggleArchWorkflow, deleteWorkflow,
   memAdd, memDel, memOwner, memReset, memSave, setRange, clearRange,
   reload: () => { S.ver = {}; return refresh(); }, ensureTodos, pollTodos, todoCards, todoRows, todoCount, myTodos,
-  _test: { S, slaOver, dueOver, isOver, filtered, canMoveJob, fieldText, actText, dur },
+  _test: { S, slaOver, dueOver, isOver, filtered, canMoveJob, fieldText, actText, dur, fieldEditable, fieldEmpty, formFieldGroups, fieldsDetailHtml },
 };
 })();

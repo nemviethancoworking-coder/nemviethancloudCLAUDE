@@ -1,5 +1,5 @@
 /**
- * Kiểm thử module Quy trình (src/flow.js, v22) với PostgreSQL thật.
+ * Kiểm thử module Quy trình (src/flow.js, v22–v23) với PostgreSQL thật.
  *   PGHOST=127.0.0.1 PGPORT=5432 PGUSER=okr PGPASSWORD=… npm test
  * Mỗi lần chạy tạo 1 cơ sở dữ liệu tạm, khởi động server thật (dist/server.js — chạy `npm run build` trước) rồi gọi API qua HTTP.
  */
@@ -95,9 +95,9 @@ describe('Module Quy trình (v22)', () => {
     other = await mk('uo', 'other', 'employee', mgr.id);
   });
 
-  test('Ping báo version 22', async () => {
+  test('Ping báo version 23', async () => {
     const r = await (await fetch(BASE + '?ping=1')).json();
-    assert.equal(r.version, 22);
+    assert.equal(r.version, 23);
   });
 
   test('Cần đăng nhập mới đọc được dữ liệu Quy trình', async () => {
@@ -118,7 +118,8 @@ describe('Module Quy trình (v22)', () => {
     assert.deepEqual(j.stages.map(s => s.name), ['Tiếp nhận hồ sơ', 'Sàng lọc CV', 'Phỏng vấn vòng 1', 'Phỏng vấn vòng 2', 'Đề nghị (offer)', 'Nhận việc']);
     assert.equal(j.stages[0].slaHours, 24);
     assert.equal(j.stages[2].todos.filter(t => t.required).length, 2);
-    assert.equal(j.fields.length, 9); assert.ok(j.fields.some(f => f.type === 'file'));
+    assert.equal(j.fields.filter(f => !f.stageId).length, 9); assert.ok(j.fields.some(f => f.type === 'file'));
+    assert.deepEqual(j.fields.filter(f => f.stageId === j.stages[2].id).map(f => f.name), ['Ngày phỏng vấn vòng 1', 'Kết quả vòng 1'], 'mẫu có trường riêng cho giai đoạn');
     assert.equal(j.failReasons.length, 5);
     assert.equal(j.workflow.isOwner, true); assert.equal(j.workflow.canManage, true);
     assert.deepEqual(j.workflow.members, [{ userId: head.id, owner: true }]);
@@ -166,7 +167,8 @@ describe('Module Quy trình (v22)', () => {
     await fail(head.token, 'wfSaveConfig', { workflowId: WF, fields: changed }, /Không đổi được kiểu/);
     const withReq = cur(); withReq.push({ id: nid('f'), name: 'Đồng ý điều khoản', type: 'checkbox', required: false });
     await call(head.token, 'wfSaveConfig', { workflowId: WF, fields: withReq });
-    await reload(); assert.equal(fields.length, 10);
+    await reload(); assert.equal(fields.filter(f => !f.stageId).length, 10);
+    assert.equal(fields.filter(f => f.stageId).length, 7, 'bản app cũ không gửi stageId: trường giai đoạn giữ nguyên giai đoạn');
     // giá trị sai kiểu bị từ chối
     await fail(hr.token, 'wfSaveJob', { job: { id: nid('wj'), workflowId: WF, title: 'X', fieldValues: { [fieldBy('Vị trí ứng tuyển').id]: 'Phi hành gia' } } }, /không nằm trong danh sách/);
     await fail(hr.token, 'wfSaveJob', { job: { id: nid('wj'), workflowId: WF, title: 'X', fieldValues: { [fieldBy('Vị trí ứng tuyển').id]: 'Kế toán', [fieldBy('Link CV').id]: 'javascript:alert(1)' } } }, /đường link/);
@@ -378,7 +380,7 @@ describe('Module Quy trình (v22)', () => {
       ONB = nid('wf');
       await call(head.token, 'wfSaveWorkflow', { workflow: { id: ONB, name: 'Onboarding' }, cloneFromId: WF });
       let j = await load(head.token, ONB);
-      assert.equal(j.stages.length, 6, 'nhân bản giai đoạn'); assert.equal(j.fields.length, 10); assert.equal(j.jobs.length, 0, 'không chép job');
+      assert.equal(j.stages.length, 6, 'nhân bản giai đoạn'); assert.equal(j.fields.filter(f => !f.stageId).length, 10); assert.equal(j.fields.filter(f => f.stageId).length, 7); assert.equal(j.jobs.length, 0, 'không chép job');
       await call(head.token, 'wfSetMembers', { workflowId: ONB, members: [{ userId: head.id, owner: true }, { userId: hr.id }, { userId: b.id }] });
       j = await load(head.token, ONB); onbStages = j.stages; onbFields = j.fields;
       await call(head.token, 'wfSaveConfig', { workflowId: ONB, stages: onbStages.map((s, i) => ({ id: s.id, name: i === 0 ? 'Chuẩn bị' : s.name, slaHours: s.slaHours, assigneeIds: i === 0 ? [b.id] : [], todos: i === 0 ? [{ id: nid('wp'), title: 'Chuẩn bị thiết bị', required: true }] : [] })) });
@@ -447,6 +449,84 @@ describe('Module Quy trình (v22)', () => {
       await fail(hr.token, 'wfDeleteWorkflow', { id: EMPTY }, /thành viên|Chỉ owner/);
       await call(head.token, 'wfDeleteWorkflow', { id: EMPTY });
       assert.ok(!(await flow(head.token, 'list')).workflows.some(w => w.id === EMPTY));
+    });
+  });
+
+  describe('Trường tuỳ chỉnh theo từng giai đoạn (v23)', () => {
+    let W2, st2, fl2;
+    const re2 = async () => { const j = await load(head.token, W2); st2 = j.stages; fl2 = j.fields; return j; };
+    const f2 = name => fl2.find(f => f.name === name);
+    const asStages = () => st2.map(s => ({ id: s.id, name: s.name, slaHours: s.slaHours, assigneeIds: s.assigneeIds, todos: s.todos }));
+    const asFields = () => fl2.map(f => ({ id: f.id, name: f.name, type: f.type, options: f.options, required: f.required, stageId: f.stageId }));
+    let JID;
+
+    test('Cài trường chung + trường riêng cho từng giai đoạn; giai đoạn không tồn tại bị từ chối', async () => {
+      W2 = nid('wf');
+      await call(head.token, 'wfSaveWorkflow', { workflow: { id: W2, name: 'Bảo hành' }, templateKey: 'blank' });
+      await call(head.token, 'wfSetMembers', { workflowId: W2, members: [{ userId: head.id, owner: true }, { userId: hr.id }, { userId: b.id }] });
+      await re2();
+      const ss = asStages(); ss.forEach(s => { s.assigneeIds = [hr.id]; });
+      await call(head.token, 'wfSaveConfig', { workflowId: W2, stages: ss });
+      await fail(head.token, 'wfSaveConfig', { workflowId: W2, fields: [{ id: nid('f'), name: 'Lạc', type: 'text', stageId: 'ws_khong_co' }] }, /không còn tồn tại/);
+      await call(head.token, 'wfSaveConfig', { workflowId: W2, fields: [
+        { id: nid('f'), name: 'Khách hàng', type: 'text', required: true, stageId: '' },
+        { id: nid('f'), name: 'Mã tiếp nhận', type: 'text', required: true, stageId: st2[0].id },
+        { id: nid('f'), name: 'Kết quả xử lý', type: 'select', options: ['OK', 'Lỗi'], required: true, stageId: st2[1].id },
+        { id: nid('f'), name: 'Biên bản', type: 'file', stageId: st2[1].id },
+      ] });
+      await re2();
+      assert.equal(f2('Khách hàng').stageId, ''); assert.equal(f2('Mã tiếp nhận').stageId, st2[0].id); assert.equal(f2('Kết quả xử lý').stageId, st2[1].id);
+      await fail(hr.token, 'wfSaveConfig', { workflowId: W2, fields: asFields() }, /owner/);
+    });
+
+    test('Tạo job: chỉ nhận trường chung + trường giai đoạn đầu; trường bắt buộc của giai đoạn sau không chặn tạo job', async () => {
+      JID = nid('wj');
+      await fail(b.token, 'wfSaveJob', { job: { id: JID, workflowId: W2, title: 'Máy lỗi', fieldValues: { [f2('Mã tiếp nhận').id]: 'TN-1' } } }, /Khách hàng/);
+      await call(b.token, 'wfSaveJob', { job: { id: JID, workflowId: W2, title: 'Máy lỗi',
+        fieldValues: { [f2('Khách hàng').id]: 'Anh Nam', [f2('Kết quả xử lý').id]: 'OK' } } });
+      const j = await jobOf(b.token, JID);
+      assert.equal(j.fieldValues[f2('Khách hàng').id], 'Anh Nam');
+      assert.equal(j.fieldValues[f2('Kết quả xử lý').id], undefined, 'trường của giai đoạn chưa tới bị bỏ qua');
+    });
+
+    test('Trường bắt buộc của giai đoạn hiện tại chặn chuyển tiến; giai đoạn chưa tới không sửa / đính kèm được', async () => {
+      await fail(hr.token, 'wfMoveJob', { id: JID, dir: 'next' }, /Mã tiếp nhận/);
+      await call(hr.token, 'wfSaveJob', { job: { id: JID, title: 'Máy lỗi', fieldValues: { [f2('Mã tiếp nhận').id]: 'TN-1', [f2('Kết quả xử lý').id]: 'Lỗi' } } });
+      let j = await jobOf(hr.token, JID);
+      assert.equal(j.fieldValues[f2('Mã tiếp nhận').id], 'TN-1'); assert.equal(j.fieldValues[f2('Kết quả xử lý').id], undefined);
+      const up = await (await fetch(BASE + 'flow-upload?jobId=' + JID + '&name=bb.pdf&fieldId=' + f2('Biên bản').id, { method: 'POST', headers: { 'x-okr-token': hr.token }, body: Buffer.from('pdf') })).json();
+      assert.equal(up.ok, false); assert.match(up.error, /chưa tới giai đoạn/);
+      await call(hr.token, 'wfMoveJob', { id: JID, dir: 'next' });
+      j = await jobOf(hr.token, JID); assert.equal(j.stageId, st2[1].id);
+    });
+
+    test('Giai đoạn đã qua: người thực hiện chỉ xem, owner sửa được; lùi không bị chặn; trường bắt buộc chặn Hoàn thành', async () => {
+      await call(hr.token, 'wfSaveJob', { job: { id: JID, title: 'Máy lỗi', fieldValues: { [f2('Mã tiếp nhận').id]: 'SỬA-LÉN' } } });
+      assert.equal((await jobOf(hr.token, JID)).fieldValues[f2('Mã tiếp nhận').id], 'TN-1', 'người thực hiện không sửa được giai đoạn đã qua');
+      await call(head.token, 'wfSaveJob', { job: { id: JID, title: 'Máy lỗi', fieldValues: { [f2('Mã tiếp nhận').id]: 'TN-2' } } });
+      assert.equal((await jobOf(hr.token, JID)).fieldValues[f2('Mã tiếp nhận').id], 'TN-2', 'owner sửa được');
+      await call(hr.token, 'wfMoveJob', { id: JID, dir: 'prev' });                                     // lùi không bị chặn dù Kết quả xử lý còn trống
+      await call(hr.token, 'wfMoveJob', { id: JID, dir: 'next' });
+      await fail(hr.token, 'wfCloseJob', { id: JID, status: 'done' }, /Kết quả xử lý/);
+      await call(hr.token, 'wfSaveJob', { job: { id: JID, title: 'Máy lỗi', fieldValues: { [f2('Kết quả xử lý').id]: 'OK' } } });
+      await call(hr.token, 'wfCloseJob', { id: JID, status: 'done' });
+      assert.equal((await jobOf(hr.token, JID)).status, 'done');
+    });
+
+    test('Xoá giai đoạn thì xoá luôn trường của giai đoạn đó; nhân bản quy trình chép trường theo đúng giai đoạn', async () => {
+      const extra = { id: nid('ws'), name: 'Lưu hồ sơ', slaHours: null, assigneeIds: [], todos: [] };
+      await call(head.token, 'wfSaveConfig', { workflowId: W2, stages: [...asStages(), extra] });
+      await re2();
+      await call(head.token, 'wfSaveConfig', { workflowId: W2, fields: [...asFields(), { id: nid('f'), name: 'Số lưu', type: 'number', stageId: extra.id }] });
+      await re2(); assert.ok(f2('Số lưu'));
+      await call(head.token, 'wfSaveConfig', { workflowId: W2, stages: asStages().slice(0, 2) });
+      await re2(); assert.equal(st2.length, 2); assert.equal(f2('Số lưu'), undefined);
+      const C = nid('wf');
+      await call(head.token, 'wfSaveWorkflow', { workflow: { id: C, name: 'Bảo hành (bản sao)' }, cloneFromId: W2 });
+      const c2 = await load(head.token, C);
+      const sname = id => (c2.stages.find(s => s.id === id) || {}).name || '';
+      assert.deepEqual(c2.fields.map(f => [f.name, sname(f.stageId), f.required]),
+        [['Khách hàng', '', true], ['Mã tiếp nhận', 'Tiếp nhận', true], ['Kết quả xử lý', 'Xử lý', true], ['Biên bản', 'Xử lý', false]]);
     });
   });
 

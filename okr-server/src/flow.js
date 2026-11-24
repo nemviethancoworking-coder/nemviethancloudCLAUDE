@@ -1,5 +1,5 @@
 /**
- * OKR Weekly — Module Quy trình (v22), kiểu Base Workflow.
+ * OKR Weekly — Module Quy trình (v22; v23: trường tuỳ chỉnh theo từng giai đoạn), kiểu Base Workflow.
  *   Quy trình (workflow) → Giai đoạn (stage) → Job. Job đi tuần tự qua các giai đoạn và kết thúc ở Hoàn thành / Thất bại.
  *
  * Quyền (lọc tại máy chủ):
@@ -9,6 +9,9 @@
  *   SỬA job            : người tạo, người thực hiện, owner, Giám đốc.
  *   CHUYỂN giai đoạn / Hoàn thành / Thất bại / chuyển tiếp : người thực hiện hiện tại, owner, Giám đốc.
  *   XOÁ job            : chỉ Giám đốc (owner chỉ Lưu trữ job đã đóng).
+ *   TRƯỜNG tuỳ chỉnh (v23): "trường chung" (stage_id rỗng) nhập khi tạo job, hiện ở mọi giai đoạn; "trường giai đoạn" thuộc 1 giai đoạn.
+ *     Trường chung & trường của giai đoạn hiện tại: ai sửa được job thì sửa được. Trường giai đoạn đã qua: chỉ owner + Giám đốc.
+ *     Trường giai đoạn chưa tới: không sửa được. Trường bắt buộc của giai đoạn hiện tại chặn chuyển tiến / Hoàn thành.
  *
  * Dữ liệu: bảng wf_* (tự tạo khi máy chủ khởi động). Tệp đính kèm lưu ở UPLOAD_DIR/wf/<mã job>/<mã tệp>.
  * Mô-đun được nạp bằng require('./flow')(deps) để dùng chung kết nối, lỗi và hàm làm sạch văn bản với server.js / work.js.
@@ -22,7 +25,7 @@ const { Transform } = require('stream');
 
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'select', 'multiselect', 'user', 'checkbox', 'link', 'file'];
-const LIM = { stages: 20, todos: 30, fields: 30, reasons: 30, rules: 20, members: 300, tags: 10, files: 30, options: 50 };
+const LIM = { stages: 20, todos: 30, fields: 30, fieldsTotal: 150, reasons: 30, rules: 20, members: 300, tags: 10, files: 30, options: 50 };
 const MAX_CHAIN = 8;                       // chuyển tiếp tự động nối tiếp tối đa 8 quy trình (chặn vòng lặp)
 
 /* ====================== Mẫu quy trình dựng sẵn (nằm trong mã, không cần bảng) ====================== */
@@ -36,10 +39,14 @@ const TEMPLATES = {
     stages: [
       { name: 'Tiếp nhận hồ sơ', sla: 24, todos: [['Kiểm tra hồ sơ đủ', true]] },
       { name: 'Sàng lọc CV', sla: 48, todos: [['Đánh giá CV theo mô tả công việc (JD)', true], ['Gọi điện sơ bộ', false]] },
-      { name: 'Phỏng vấn vòng 1', sla: 72, todos: [['Xếp lịch phỏng vấn', true], ['Điền phiếu đánh giá phỏng vấn', true]] },
-      { name: 'Phỏng vấn vòng 2', sla: 72, todos: [['Điền phiếu đánh giá phỏng vấn', true]] },
-      { name: 'Đề nghị (offer)', sla: 48, todos: [['Soạn thư mời nhận việc', true], ['Thoả thuận lương và ngày nhận việc', false]] },
-      { name: 'Nhận việc', sla: 120, todos: [['Ký hợp đồng', true], ['Bàn giao thiết bị, tài khoản', false]] },
+      { name: 'Phỏng vấn vòng 1', sla: 72, todos: [['Xếp lịch phỏng vấn', true], ['Điền phiếu đánh giá phỏng vấn', true]],
+        fields: [{ name: 'Ngày phỏng vấn vòng 1', type: 'date' }, { name: 'Kết quả vòng 1', type: 'select', options: ['Đạt', 'Không đạt', 'Cân nhắc'] }] },
+      { name: 'Phỏng vấn vòng 2', sla: 72, todos: [['Điền phiếu đánh giá phỏng vấn', true]],
+        fields: [{ name: 'Ngày phỏng vấn vòng 2', type: 'date' }, { name: 'Kết quả vòng 2', type: 'select', options: ['Đạt', 'Không đạt', 'Cân nhắc'] }] },
+      { name: 'Đề nghị (offer)', sla: 48, todos: [['Soạn thư mời nhận việc', true], ['Thoả thuận lương và ngày nhận việc', false]],
+        fields: [{ name: 'Mức lương đề nghị', type: 'money' }, { name: 'Ngày nhận việc dự kiến', type: 'date' }] },
+      { name: 'Nhận việc', sla: 120, todos: [['Ký hợp đồng', true], ['Bàn giao thiết bị, tài khoản', false]],
+        fields: [{ name: 'Ngày nhận việc thực tế', type: 'date' }] },
     ],
     fields: [
       { name: 'Vị trí ứng tuyển', type: 'select', options: ['Nhân viên kinh doanh', 'Nhân viên marketing', 'Kế toán', 'Khác'], required: true },
@@ -81,6 +88,7 @@ CREATE TABLE IF NOT EXISTS wf_stage_todos (id text PRIMARY KEY, stage_id text NO
 CREATE TABLE IF NOT EXISTS wf_fields (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, name text NOT NULL, type text NOT NULL,
   options jsonb NOT NULL DEFAULT '[]', required boolean NOT NULL DEFAULT false, pos int NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS wf_fields_wf ON wf_fields(workflow_id);
+ALTER TABLE wf_fields ADD COLUMN IF NOT EXISTS stage_id text NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS wf_fail_reasons (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, text text NOT NULL, pos int NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS wf_forward_rules (id text PRIMARY KEY, workflow_id text NOT NULL REFERENCES wf_workflows(id) ON DELETE CASCADE, stage_id text NOT NULL DEFAULT '',
   target_workflow_id text NOT NULL, mode text NOT NULL DEFAULT 'manual', field_map jsonb NOT NULL DEFAULT '{}', seq bigserial);
@@ -154,7 +162,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
     const todosBy = {}; td.rows.forEach(t => { (todosBy[t.stage_id] = todosBy[t.stage_id] || []).push({ id: t.id, title: t.title, required: t.required }); });
     return {
       stages: st.rows.map(s => ({ id: s.id, name: s.name, pos: s.pos, slaHours: s.sla_hours === null ? null : Number(s.sla_hours), assigneeIds: idList(s.assignees), todos: todosBy[s.id] || [] })),
-      fields: fl.rows.map(f => ({ id: f.id, name: f.name, type: f.type, options: Array.isArray(f.options) ? f.options : [], required: f.required })),
+      fields: fl.rows.map(f => ({ id: f.id, name: f.name, type: f.type, options: Array.isArray(f.options) ? f.options : [], required: f.required, stageId: f.stage_id || '' })),
       failReasons: rs.rows.map(r => ({ id: r.id, text: r.text })),
       forwardRules: ru.rows.map(r => ({ id: r.id, stageId: r.stage_id, targetWorkflowId: r.target_workflow_id, mode: r.mode, fieldMap: r.field_map || {} })),
     };
@@ -194,6 +202,22 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
     const cnt = {}; files.forEach(r => { cnt[r.field_id] = r.n; });
     const miss = fields.filter(f => f.required && emptyVal(f, values[f.id], cnt[f.id]));
     if (miss.length) throw new AppError('Còn trường bắt buộc chưa nhập: ' + miss.slice(0, 4).map(f => f.name).join(', ') + (miss.length > 4 ? '…' : '') + '.');
+  }
+  /* ---------- Trường theo giai đoạn (v23) ---------- */
+  const stagePos = (cfg, sid) => cfg.stages.findIndex(s => s.id === sid);
+  /** Trường áp dụng cho một giai đoạn: trường chung + trường của chính giai đoạn đó. */
+  const fieldsForStage = (cfg, sid) => cfg.fields.filter(f => !f.stageId || f.stageId === sid);
+  /** Trường mà người đang thao tác được sửa trên job (jc) hiện tại. */
+  function editableFields(cfg, jc) {
+    if (!jc.canEdit) return [];
+    const cur = stagePos(cfg, jc.j.stage_id);
+    return cfg.fields.filter(f => {
+      if (!f.stageId) return true;
+      const pos = stagePos(cfg, f.stageId);
+      if (pos < 0) return false;
+      if (pos === cur) return true;
+      return pos < cur && jc.wc.canManage;                     // giai đoạn đã qua: chỉ owner + Giám đốc
+    });
   }
   function cleanTags(v) { return uniq((Array.isArray(v) ? v : []).map(t => clipText(t, 30)).filter(Boolean)).slice(0, LIM.tags); }
 
@@ -375,7 +399,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
     const w = wc.w;
     return { workflow: { id: w.id, name: w.name, description: w.description, category: w.category, color: w.color, archived: w.archived, createdBy: w.created_by, createdAt: w.created_at,
         members: [...wc.members.values()].map(m => ({ userId: m.user_id, owner: m.is_owner })), pinned: !!(wc.members.get(c.me.id) || {}).pinned, isMember: wc.isMember, isOwner: wc.isOwner, canManage: wc.canManage },
-      ...cfg, jobs: jobs.map(j => jobJson(j, ex[j.id])), archivedView: !!archived };
+      ...cfg, jobs: jobs.map(j => jobJson(j, ex[j.id])), archivedView: !!archived, features: { stageFields: true } };
   }
   async function loadJob(c, id) {
     const jc = await jobCtx(c, id);
@@ -500,12 +524,25 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
       await c.q.query('INSERT INTO wf_stages(id,workflow_id,name,pos,sla_hours,assignees) VALUES($1,$2,$3,$4,$5,$6)', [sid, wfId, s.name, i, s.sla || null, JSON.stringify(s.assignees || [])]);
       for (let k = 0; k < (s.todos || []).length; k++) await c.q.query('INSERT INTO wf_stage_todos(id,stage_id,title,required,pos) VALUES($1,$2,$3,$4,$5)', [newId('wp'), sid, s.todos[k][0], !!s.todos[k][1], k]);
       if (s.oldId) idMap[s.oldId] = sid;
+      s._newId = sid;
     }
-    for (let i = 0; i < (spec.fields || []).length; i++) {
-      const f = spec.fields[i];
-      await c.q.query('INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos) VALUES($1,$2,$3,$4,$5,$6,$7)', [newId('wf'), wfId, f.name, f.type, JSON.stringify(f.options || []), !!f.required, i]);
+    // Trường chung (stageId rỗng) + trường giai đoạn: trong mẫu khai báo ở stages[i].fields, khi nhân bản thì theo stageId cũ
+    const all = (spec.fields || []).map(f => ({ ...f, _sid: f.stageId ? (idMap[f.stageId] || null) : '' })).filter(f => f._sid !== null);
+    spec.stages.forEach(s => (s.fields || []).forEach(f => all.push({ ...f, _sid: s._newId })));
+    for (let i = 0; i < all.length; i++) {
+      const f = all[i];
+      await c.q.query('INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos,stage_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [newId('wf'), wfId, f.name, f.type, JSON.stringify(f.options || []), !!f.required, i, f._sid]);
     }
     for (let i = 0; i < (spec.reasons || []).length; i++) await c.q.query('INSERT INTO wf_fail_reasons(id,workflow_id,text,pos) VALUES($1,$2,$3,$4)', [newId('wr'), wfId, spec.reasons[i], i]);
+  }
+  /** Xoá trường tuỳ chỉnh và tệp đính kèm của chúng (giá trị cũ trong job để nguyên, không còn hiển thị). */
+  async function deleteFields(c, ids) {
+    for (const id of ids) {
+      await c.q.query('DELETE FROM wf_fields WHERE id=$1', [id]);
+      const files = (await c.q.query('SELECT id, job_id FROM wf_files WHERE field_id=$1', [id])).rows;
+      for (const f of files) { try { fs.rmSync(path.join(jobDir(f.job_id), f.id), { force: true }); } catch (e) { /* đã mất */ } }
+      await c.q.query('DELETE FROM wf_files WHERE field_id=$1', [id]);
+    }
   }
   const actions = {
     /* ----- Quy trình ----- */
@@ -529,12 +566,12 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         const src = await getWc(c, str(p.cloneFromId));
         if (!src.canView) deny('Bạn không xem được quy trình cần nhân bản.');
         const cfg = await loadConfig(c.q, src.w.id);
-        spec = { stages: cfg.stages.map(s => ({ name: s.name, sla: s.slaHours, assignees: [], todos: s.todos.map(t => [t.title, t.required]) })),
+        spec = { stages: cfg.stages.map(s => ({ oldId: s.id, name: s.name, sla: s.slaHours, assignees: [], todos: s.todos.map(t => [t.title, t.required]) })),
           fields: cfg.fields, reasons: cfg.failReasons.map(r => r.text) };
       } else {
         const t = TEMPLATES[str(p.templateKey) || 'blank'];
         if (!t) throw new AppError('Mẫu quy trình không tồn tại.');
-        spec = t;
+        spec = { ...t, stages: t.stages.map(s => ({ ...s })) };   // bản sao: seedConfig ghi mã mới vào từng giai đoạn
       }
       await c.q.query('INSERT INTO wf_workflows(id,name,description,category,color,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [...row, c.me.id, nowISO()]);
       await c.q.query('INSERT INTO wf_members(workflow_id,user_id,is_owner) VALUES($1,$2,true)', [w.id, c.me.id]);
@@ -607,6 +644,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
           if (open.n) throw new AppError('Giai đoạn "' + old.name + '" còn ' + open.n + ' job đang làm, hãy chuyển chúng đi trước khi xoá giai đoạn.');
           await c.q.query('DELETE FROM wf_stages WHERE id=$1', [old.id]);
           await c.q.query('DELETE FROM wf_forward_rules WHERE workflow_id=$1 AND stage_id=$2', [wfId, old.id]);
+          await deleteFields(c, (await c.q.query('SELECT id FROM wf_fields WHERE workflow_id=$1 AND stage_id=$2', [wfId, old.id])).rows.map(r => r.id));
         }
         for (let i = 0; i < stages.length; i++) {
           const s = stages[i], exists = cfg.stages.some(o => o.id === s.id);
@@ -623,32 +661,33 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         }
       }
       if (Array.isArray(p.fields)) {
-        if (p.fields.length > LIM.fields) throw new AppError('Tối đa ' + LIM.fields + ' trường tuỳ chỉnh.');
+        const cfgF = await loadConfig(c.q, wfId), stIds = new Set(cfgF.stages.map(s => s.id)), per = {};
+        if (p.fields.length > LIM.fieldsTotal) throw new AppError('Tối đa ' + LIM.fieldsTotal + ' trường tuỳ chỉnh trong một quy trình.');
         const seen = new Set();
         for (const f of p.fields) {
+          const was = cfgF.fields.find(o => o.id === f.id);
+          f._sid = f.stageId === undefined && was ? was.stageId : str(f.stageId);   // bản app cũ (chưa biết stageId) lưu lại: giữ nguyên giai đoạn của trường
+          if (f._sid && !stIds.has(f._sid)) throw new AppError('Trường "' + clipText(f.name, 40) + '" thuộc giai đoạn không còn tồn tại.');
+          per[f._sid] = (per[f._sid] || 0) + 1;
+          if (per[f._sid] > LIM.fields) throw new AppError(f._sid ? 'Mỗi giai đoạn tối đa ' + LIM.fields + ' trường.' : 'Tối đa ' + LIM.fields + ' trường chung.');
           if (!safeId(f.id) || seen.has(f.id)) throw new AppError('Mã trường không hợp lệ.');
           seen.add(f.id);
           if (!clipText(f.name, 80)) throw new AppError('Nhập tên cho mọi trường.');
           if (!FIELD_TYPES.includes(f.type)) throw new AppError('Kiểu trường không hợp lệ.');
           const other = await one(c.q, 'SELECT workflow_id FROM wf_fields WHERE id=$1', [f.id]);
           if (other && other.workflow_id !== wfId) throw new AppError('Mã trường bị trùng.');
-          const prev = cfg.fields.find(o => o.id === f.id);
+          const prev = cfgF.fields.find(o => o.id === f.id);
           if (prev && prev.type !== f.type) throw new AppError('Không đổi được kiểu của trường "' + prev.name + '". Hãy tạo trường mới.');
           if (f.type === 'select' || f.type === 'multiselect') {
             f._options = uniq((Array.isArray(f.options) ? f.options : []).map(o => clipText(o, 100)).filter(Boolean)).slice(0, LIM.options);
             if (!f._options.length) throw new AppError('Trường "' + clipText(f.name, 40) + '" cần ít nhất 1 lựa chọn.');
           } else f._options = [];
         }
-        for (const old of cfg.fields) if (!seen.has(old.id)) {
-          await c.q.query('DELETE FROM wf_fields WHERE id=$1', [old.id]);
-          const files = (await c.q.query('SELECT id, job_id FROM wf_files WHERE field_id=$1', [old.id])).rows;
-          for (const f of files) { try { fs.rmSync(path.join(jobDir(f.job_id), f.id), { force: true }); } catch (e) { /* đã mất */ } }
-          await c.q.query('DELETE FROM wf_files WHERE field_id=$1', [old.id]);
-        }
+        await deleteFields(c, cfgF.fields.filter(o => !seen.has(o.id)).map(o => o.id));
         for (let i = 0; i < p.fields.length; i++) {
-          const f = p.fields[i], exists = cfg.fields.some(o => o.id === f.id);
-          if (exists) await c.q.query('UPDATE wf_fields SET name=$2, options=$3, required=$4, pos=$5 WHERE id=$1', [f.id, clipText(f.name, 80), JSON.stringify(f._options), !!f.required, i]);
-          else await c.q.query('INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos) VALUES($1,$2,$3,$4,$5,$6,$7)', [f.id, wfId, clipText(f.name, 80), f.type, JSON.stringify(f._options), !!f.required, i]);
+          const f = p.fields[i], exists = cfgF.fields.some(o => o.id === f.id);
+          if (exists) await c.q.query('UPDATE wf_fields SET name=$2, options=$3, required=$4, pos=$5, stage_id=$6 WHERE id=$1', [f.id, clipText(f.name, 80), JSON.stringify(f._options), !!f.required, i, f._sid]);
+          else await c.q.query('INSERT INTO wf_fields(id,workflow_id,name,type,options,required,pos,stage_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [f.id, wfId, clipText(f.name, 80), f.type, JSON.stringify(f._options), !!f.required, i, f._sid]);
         }
       }
       if (Array.isArray(p.failReasons)) {
@@ -703,12 +742,13 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
       const due = str(t.due); if (due && !validISO(due)) throw new AppError('Hạn chót không hợp lệ.');
       const priority = PRIORITIES.includes(t.priority) ? t.priority : (old ? old.j.priority : 'medium');
       const desc = W.cleanText(t.description, 30000), tags = cleanTags(t.tags);
-      const values = cleanFieldValues(c, cfg.fields, t.fieldValues);
+      const editable = old ? editableFields(cfg, old) : fieldsForStage(cfg, cfg.stages[0].id);   // job mới: trường chung + trường giai đoạn đầu
+      const values = cleanFieldValues(c, editable, t.fieldValues);
       const followersIn = idList(t.followerIds);
       if (old) {
         if (old.j.status !== 'open' && !wc.canManage) throw new AppError('Job đã đóng, chỉ owner mở lại được.');
         const merged = { ...(old.j.field_values || {}), ...values };
-        for (const f of cfg.fields) if (f.id in (t.fieldValues || {}) && !(f.id in values)) delete merged[f.id];    // xoá giá trị khi người dùng bỏ trống
+        for (const f of editable) if (f.id in (t.fieldValues || {}) && !(f.id in values)) delete merged[f.id];    // xoá giá trị khi người dùng bỏ trống
         const assignees = Array.isArray(t.assigneeIds) ? idList(t.assigneeIds) : old.assignees;
         if (Array.isArray(t.assigneeIds)) checkPeople(c, wc, assignees, 'Người thực hiện');
         const followers = Array.isArray(t.followerIds) ? followersIn.filter(u => !assignees.includes(u)) : old.followers;
@@ -724,7 +764,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         await logAct(c, wfId, old.j.id, 'job.edit', {});
         return;
       }
-      await checkRequiredFields(c, cfg.fields.filter(f => f.type !== 'file'), values, null);
+      await checkRequiredFields(c, cfg.fields.filter(f => !f.stageId && f.type !== 'file'), values, null);   // trường bắt buộc của giai đoạn đầu chặn lúc chuyển tiến, không chặn lúc tạo
       const first = cfg.stages[0], now = nowISO();
       let assignees = Array.isArray(t.assigneeIds) ? idList(t.assigneeIds) : [];
       if (assignees.length) checkPeople(c, wc, assignees, 'Người thực hiện');
@@ -757,7 +797,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
       if (dir === 'next') {
         const open = (await c.q.query('SELECT title FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND required AND NOT done ORDER BY seq', [j.id, j.stage_id])).rows;
         if (open.length) throw new AppError('Còn ' + open.length + ' todo bắt buộc chưa xong: ' + open.slice(0, 3).map(t => '"' + t.title + '"').join(', ') + (open.length > 3 ? '…' : '') + '.');
-        await checkRequiredFields(c, cfg.fields, j.field_values || {}, j.id);
+        await checkRequiredFields(c, fieldsForStage(cfg, j.stage_id), j.field_values || {}, j.id);
       }
       const now = nowISO(), cur = cfg.stages[idx];
       let assignees = idList(p.assigneeIds);
@@ -785,7 +825,7 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
         if (!isLast) throw new AppError('Chỉ bấm Hoàn thành được ở giai đoạn cuối. Nếu job không đi tiếp, hãy đánh dấu Thất bại.');
         const open = (await c.q.query('SELECT title FROM wf_todos WHERE job_id=$1 AND stage_id=$2 AND required AND NOT done', [j.id, j.stage_id])).rows;
         if (open.length) throw new AppError('Còn ' + open.length + ' todo bắt buộc chưa xong: ' + open.slice(0, 3).map(t => '"' + t.title + '"').join(', ') + '.');
-        await checkRequiredFields(c, cfg.fields, j.field_values || {}, j.id);
+        await checkRequiredFields(c, fieldsForStage(cfg, j.stage_id), j.field_values || {}, j.id);
       } else {
         reason = clipText(p.reason, 200);
         if (cfg.failReasons.length && !cfg.failReasons.some(r => r.text === reason)) throw new AppError('Hãy chọn một lý do thất bại trong danh sách.');
@@ -921,6 +961,10 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
       const f = await one(c.q, 'SELECT * FROM wf_files WHERE id=$1', [str(p.id)]); if (!f) return;
       const jc = await getJc(c, f.job_id);
       if (f.uploaded_by !== c.me.id && !jc.canEdit) deny('Bạn không được xoá tệp này.');
+      if (f.field_id) {                                         // tệp của trường giai đoạn đã qua: chỉ owner + Giám đốc
+        const cfg = await loadConfig(c.q, jc.j.workflow_id), fd = cfg.fields.find(x => x.id === f.field_id);
+        if (fd && fd.stageId && stagePos(cfg, fd.stageId) < stagePos(cfg, jc.j.stage_id) && !jc.wc.canManage) deny('Chỉ owner hoặc Giám đốc được sửa trường của giai đoạn đã qua.');
+      }
       await c.q.query('DELETE FROM wf_files WHERE id=$1', [f.id]);
       try { fs.rmSync(path.join(jobDir(f.job_id), f.id), { force: true }); } catch (e) { /* tệp đã mất thì thôi */ }
     },
@@ -939,8 +983,10 @@ CREATE INDEX IF NOT EXISTS wf_forward_log_to ON wf_forward_log(to_job_id);
     if (!jc.canEdit) deny('Bạn không đính kèm được tệp vào job này.');
     const fieldId = str(params.fieldId);
     if (fieldId) {
-      const f = await one(c.q, 'SELECT type FROM wf_fields WHERE id=$1 AND workflow_id=$2', [fieldId, jc.j.workflow_id]);
+      const cfg = await loadConfig(c.q, jc.j.workflow_id), f = cfg.fields.find(x => x.id === fieldId);
       if (!f || f.type !== 'file') throw new AppError('Trường tệp không hợp lệ.');
+      if (!editableFields(cfg, jc).includes(f)) deny(f.stageId && stagePos(cfg, f.stageId) > stagePos(cfg, jc.j.stage_id)
+        ? 'Job chưa tới giai đoạn của trường "' + f.name + '".' : 'Chỉ owner hoặc Giám đốc được sửa trường của giai đoạn đã qua.');
     }
     const cnt = await one(c.q, 'SELECT count(*)::int AS n FROM wf_files WHERE job_id=$1', [jobId]);
     if (cnt.n >= LIM.files) throw new AppError('Mỗi job tối đa ' + LIM.files + ' tệp.');
