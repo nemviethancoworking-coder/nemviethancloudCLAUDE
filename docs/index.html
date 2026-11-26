@@ -137,8 +137,14 @@ a{color:var(--accent)}
 
   <section class="panel" id="cmp-panel" aria-label="So sánh chấm lần 1 và lần 2">
     <h2>So sánh chấm lần 1 và lần 2</h2>
-    <p class="muted" style="margin:0;font-size:.85rem">Lần 1 chấm lúc 3h sáng hôm sau. Lần 2 chấm lại toàn bộ lead của ngày này sau 7 ngày (8h sáng), để xem lead thay đổi thế nào sau một tuần chăm sóc. Các số chính ở trên là lần 1.</p>
+    <p class="muted" style="margin:0;font-size:.85rem">Lần 1 chấm lúc 3h sáng hôm sau. Lần 2 chấm lại toàn bộ lead của ngày này sau 7 ngày (7h sáng), để xem lead thay đổi thế nào sau một tuần chăm sóc. Các số chính ở trên là lần 1.</p>
     <div id="cmp"><p class="muted">Chưa có dữ liệu.</p></div>
+  </section>
+
+  <section class="panel" id="cost-panel" aria-label="Chi phí quảng cáo Facebook cho mỗi lead">
+    <h2>Chi phí quảng cáo Facebook / lead <span class="tag">theo chấm lần 2</span></h2>
+    <p class="muted" style="margin:0;font-size:.85rem">Chi phí lấy từ sheet “Báo Cáo Quảng Cáo 2026” (cột Ngân sách của từng page), chia cho số lead ngon / dở của lần chấm lại sau 7 ngày. Livestream tính vào page Nệm Việt Hàn. Không tính lead lỗi AI và lead Zalo / kênh khác. Page không có chi phí để trống.</p>
+    <div id="cost"><p class="muted">Chưa có dữ liệu.</p></div>
   </section>
 
   <div class="grid2">
@@ -180,7 +186,7 @@ a{color:var(--accent)}
     </div>
     <button id="more" class="more" type="button" hidden>Hiện thêm</button>
   </section>
-  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file <a id="sheet-link" href="#" target="_blank" rel="noopener">ĐÁNH GIÁ CHẤT LƯỢNG LEAD</a>, chấm lần 1 lúc 3h sáng và chấm lần 2 (lead của 7 ngày trước) lúc 8h sáng. Trang tự làm mới mỗi 5 phút. <a href="#" id="relock">Khóa lại trên thiết bị này</a></p>
+  <p class="muted" style="font-size:.8rem;margin:0">Dữ liệu do workflow n8n ghi vào tab <b>BC_NGAY</b> và <b>BC_CHI_TIET</b> của file <a id="sheet-link" href="#" target="_blank" rel="noopener">ĐÁNH GIÁ CHẤT LƯỢNG LEAD</a>, chấm lần 1 lúc 3h sáng và chấm lần 2 (lead của 7 ngày trước) lúc 7h sáng; chi phí / lead ghi vào tab <b>CHI_PHI_ADS</b> cùng lúc chấm lần 2. Trang tự làm mới mỗi 5 phút. <a href="#" id="relock">Khóa lại trên thiết bị này</a></p>
 </div>
 
 <script>
@@ -189,7 +195,7 @@ const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}`;
 const csvUrl = (tab) => `${SHEET_URL}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(tab)}`;
 const PAGE_SIZE = 100;
 const $ = (id) => document.getElementById(id);
-const state = { days: [], leads: [], day: null, filter: "Tất cả", page: "", group: "", move: "", q: "", limit: PAGE_SIZE, readAt: null };
+const state = { days: [], leads: [], day: null, filter: "Tất cả", page: "", group: "", move: "", q: "", limit: PAGE_SIZE, readAt: null, cost: [] };
 const NONE = "__none";
 const gOf = (l) => String(l["Nhóm"] || "").trim() || NONE;
 const NOT_L1 = "Không có ở lần 1";
@@ -244,7 +250,7 @@ async function load() {
   $("reload").disabled = true;
   $("sub").textContent = "Đang tải dữ liệu từ Google Sheet…";
   try {
-    const [days, leads] = await Promise.all([fetchTab("BC_NGAY"), fetchTab("BC_CHI_TIET")]);
+    const [days, leads, cost] = await Promise.all([fetchTab("BC_NGAY"), fetchTab("BC_CHI_TIET"), fetchTab("CHI_PHI_ADS").catch(() => [])]);
     $("msg").hidden = true;
     if (!days.length) {
       $("sub").textContent = "Chưa có báo cáo nào.";
@@ -253,6 +259,7 @@ async function load() {
     }
     state.days = days.map((d) => ({ ...d, _k: dayKey(d["Ngày"]) })).filter((d) => d._k).sort((a, b) => a._k.localeCompare(b._k));
     state.leads = leads.map((l) => ({ ...l, _k: dayKey(l["Ngày"]) }));
+    state.cost = cost.map((r) => ({ ...r, _k: dayKey(r["Ngày"]) })).filter((r) => r._k);
     state.readAt = new Date();
     const sel = $("day");
     sel.innerHTML = state.days.slice().reverse().map((d) => `<option value="${d._k}">${fmtDay(d._k)}</option>`).join("");
@@ -345,8 +352,33 @@ function render() {
   if (d["Ghi chú"]) showMsg(`<b>Ghi chú của lần chạy:</b> ${esc(d["Ghi chú"])}`); else $("msg").hidden = true;
 
   renderCmp();
+  renderCost();
   drawTrend();
   renderTable();
+}
+
+// Bổ sung 26/11/2026: chi phí quảng cáo Facebook / lead, đọc tab CHI_PHI_ADS (workflow chấm lần 2 tự điền)
+const vnd = (v) => { const s = String(v ?? "").trim(); const n = Number(s.replace(/[^\d.-]/g, "")); return !s || !isFinite(n) ? "–" : n.toLocaleString("vi-VN") + " đ"; };
+function costRow(r, total) {
+  return `<tr${total ? ' style="font-weight:600"' : ""}><td>${esc(r["Page"])}</td><td class="num">${vnd(r["Chi phí"])}</td><td class="num">${num(r["Lead (lần 2)"])}</td><td class="num up">${num(r["Ngon (lần 2)"])}</td><td class="num down">${num(r["Dở (lần 2)"])}</td><td class="num">${vnd(r["Chi phí/lead ngon"])}</td><td class="num">${vnd(r["Chi phí/lead dở"])}</td><td class="num">${vnd(r["Chi phí/lead"])}</td><td class="muted" style="font-size:.8rem">${esc(r["Ghi chú"])}</td></tr>`;
+}
+const COST_HEAD = `<thead><tr><th>Page</th><th>Chi phí</th><th>Lead</th><th>Ngon</th><th>Dở</th><th>Chi phí / lead ngon</th><th>Chi phí / lead dở</th><th>Chi phí / lead</th><th>Ghi chú</th></tr></thead>`;
+function renderCost() {
+  const rows = (state.cost || []).filter((r) => r._k === state.day);
+  const tot = rows.find((r) => r["Page"] === "TỔNG FB");
+  let html = "";
+  if (!tot) {
+    const nd = new Date(state.day + "T00:00:00Z"); nd.setUTCDate(nd.getUTCDate() + 7);
+    html = `<p class="muted" style="margin:0">Ngày này chưa có chi phí / lead. Số được tính cùng lúc chấm lần 2${state.day >= "2026-11-13" ? ` (dự kiến 7h sáng ${fmtDay(nd.toISOString().slice(0, 10))})` : ""}.</p>`;
+  } else {
+    const k = (label, v, cls) => `<div class="kpi ${cls || ""}"><span>${label}</span><b>${v}</b></div>`;
+    html += `<div class="kpis">${k("Chi phí Facebook", vnd(tot["Chi phí"]))}${k("Chi phí / 1 lead ngon", vnd(tot["Chi phí/lead ngon"]), "good")}${k("Chi phí / 1 lead dở", vnd(tot["Chi phí/lead dở"]), "bad")}${k("Chi phí / 1 lead", vnd(tot["Chi phí/lead"]))}${k("Ngon / tổng lead", `${num(tot["Ngon (lần 2)"])} / ${num(tot["Lead (lần 2)"])}`)}</div>`;
+    const pr = rows.filter((r) => r !== tot).sort((a, b) => num(b["Chi phí"]) - num(a["Chi phí"]) || num(b["Lead (lần 2)"]) - num(a["Lead (lần 2)"]));
+    html += `<div class="tablewrap"><table>${COST_HEAD}<tbody>${pr.map((r) => costRow(r)).join("")}${costRow(tot, true)}</tbody></table></div>`;
+  }
+  const hist = (state.cost || []).filter((r) => r["Page"] === "TỔNG FB").sort((a, b) => b._k.localeCompare(a._k)).slice(0, 14);
+  if (hist.length) html += `<details><summary>Tổng Facebook theo ngày (${hist.length} ngày gần nhất có số)</summary><div class="tablewrap"><table><thead><tr><th>Ngày</th><th>Chi phí</th><th>Lead</th><th>Ngon</th><th>Dở</th><th>Chi phí / lead ngon</th><th>Chi phí / lead dở</th><th>Chi phí / lead</th></tr></thead><tbody>${hist.map((r) => `<tr${r._k === state.day ? ' style="font-weight:600"' : ""}><td>${fmtDay(r._k)}</td><td class="num">${vnd(r["Chi phí"])}</td><td class="num">${num(r["Lead (lần 2)"])}</td><td class="num up">${num(r["Ngon (lần 2)"])}</td><td class="num down">${num(r["Dở (lần 2)"])}</td><td class="num">${vnd(r["Chi phí/lead ngon"])}</td><td class="num">${vnd(r["Chi phí/lead dở"])}</td><td class="num">${vnd(r["Chi phí/lead"])}</td></tr>`).join("")}</tbody></table></div></details>`;
+  $("cost").innerHTML = html;
 }
 
 function renderCmp() {
@@ -354,7 +386,7 @@ function renderCmp() {
   const l2 = all.filter(hasL2);
   if (!l2.length) {
     const d = new Date(state.day + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 7);
-    $("cmp").innerHTML = `<p class="muted" style="margin:0">Ngày này chưa chấm lần 2${state.day >= "2026-11-13" ? ` (dự kiến chấm lúc 8h sáng ${fmtDay(d.toISOString().slice(0, 10))})` : ""}.</p>`;
+    $("cmp").innerHTML = `<p class="muted" style="margin:0">Ngày này chưa chấm lần 2${state.day >= "2026-11-13" ? ` (dự kiến chấm lúc 7h sáng ${fmtDay(d.toISOString().slice(0, 10))})` : ""}.</p>`;
     return;
   }
   const c1 = all.filter(isL1), c2 = l2.filter((l) => l["Thay đổi"] !== "Không thấy ở lần 2");
