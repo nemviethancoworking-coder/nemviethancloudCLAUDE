@@ -53,7 +53,7 @@ const WI = {
 /* ---------- Trạng thái ---------- */
 const S = {
   data: null, loading: false, error: null, version: null, wsLoaded: null,
-  ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, mineView: lsGet('okr_work_mine_view') === 'list' ? 'list' : 'kanban', project: 'all', showArch: false,
+  ws: lsGet('okr_work_ws') || '', mode: ['kanban', 'list', 'dash', 'mine', 'created', 'rec'].includes(lsGet('okr_work_mode')) ? lsGet('okr_work_mode') : 'kanban', tabs: { created: 'open', mine: 'open' }, mineView: lsGet('okr_work_mine_view') === 'list' ? 'list' : 'kanban', createdView: lsGet('okr_work_created_view') === 'list' ? 'list' : 'kanban', project: 'all', showArch: false,
   f: { q: '', who: 'all', pri: 'all', st: 'all', fol: false },
   rf: { who: 'all', pri: 'all', type: 'all' },              // bộ lọc riêng của mục Việc lặp lại: người thực hiện, ưu tiên, kiểu lịch lặp
   tm: { p: 'all', by: 'span', from: '', to: '' },          // khung thời gian: mốc có sẵn (p), tính theo gì (by), khoảng tuỳ chỉnh
@@ -320,7 +320,7 @@ function view(){
   }
   const d = S.data, ws = d.workspaces.find(w => w.id === d.currentId);
   const projs = d.projects.filter(p => !p.archived);
-  const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : S.mode === 'mine' ? mineBoard() : S.mode === 'created' ? personalView('created') : S.mode === 'rec' ? recView() : dashboard();
+  const body = !projs.length && !d.projects.length ? emptyWorkspace() : S.mode === 'kanban' ? kanban() : S.mode === 'list' ? listView() : S.mode === 'mine' ? mineBoard() : S.mode === 'created' ? createdBoard() : S.mode === 'rec' ? recView() : dashboard();
   return `
   ${toolbar(ws)}
   <div class="desk-only text-[12px] text-gray-400 mb-3 -mt-1 flex items-center gap-1.5">${WI.eye} ${esc(scopeNote())}</div>
@@ -1128,6 +1128,22 @@ function mineBoard(){
   return sw + note + kanban(ts);
 }
 function setMineView(v){ S.mineView = v === 'list' ? 'list' : 'kanban'; lsSet('okr_work_mine_view', S.mineView); repaint(); }
+/** Việc tôi tạo: chuyển giữa dạng Kanban (mặc định) và Danh sách. Kanban gồm mọi việc tôi tạo (không tính việc sinh từ việc lặp lại), theo dự án và khung thời gian đang chọn. */
+function createdBoard(){
+  const v = S.createdView === 'list' ? 'list' : 'kanban';
+  const btn = (k, ic, label) => `<button class="btn btn-sm ${v === k ? 'btn-primary' : 'btn-ghost'}" onclick="W.setCreatedView('${k}')">${ic} ${label}</button>`;
+  const sw = `<div class="flex items-center gap-2 mb-3"><span class="text-[12.5px] text-gray-500">Xem dạng:</span>${btn('kanban', WI.kanban, 'Kanban')}${btn('list', WI.list, 'Danh sách')}</div>`;
+  if(v === 'list') return sw + personalView('created');
+  const q = S.f.q.trim().toLowerCase();
+  const ts = createdTasks().filter(t => !q || t.title.toLowerCase().includes(q) || richPlain(t.description).toLowerCase().includes(q) || t.tags.some(g => g.toLowerCase().includes(q)));
+  const head = `<div class="card p-4 mb-3 flex items-start justify-between gap-3 flex-wrap">
+    <div class="text-[13px] text-slate-600 max-w-3xl"><b class="text-slate-800">Việc tôi tạo.</b> Mọi công việc bạn đã tạo/giao. Bấm vào thẻ để xem chi tiết; muốn sửa <b>tên, mô tả</b>, ưu tiên, hạn… chuyển sang dạng <a class="text-base-600 underline cursor-pointer" onclick="W.setCreatedView('list')">Danh sách</a> và bấm <b>Sửa nội dung</b>.</div>
+    <button class="btn btn-primary" onclick="W.openTaskForm('')">${I.plus} Thêm công việc</button>
+  </div>`;
+  const note = createdTasks({ time: false }).length ? '' : '<div class="card p-4 mb-3 text-[13px] text-gray-500">Bạn chưa tạo công việc nào ở đây. Bấm "Thêm công việc" để giao việc cho mọi người.</div>';
+  return sw + head + note + kanban(ts);
+}
+function setCreatedView(v){ S.createdView = v === 'list' ? 'list' : 'kanban'; lsSet('okr_work_created_view', S.createdView); repaint(); }
 function personalView(kind){
   if(kind === 'mine' && window.Fl) Fl.ensureTodos();
   const mine = kind === 'mine', q = S.f.q.trim().toLowerCase(), tab = S.tabs[kind], lb = TAB_LABEL[kind];
@@ -1426,7 +1442,7 @@ function reload(){ S.version = null; load(); }
 function retry(){ S.error = null; S.data = null; repaint(); }
 
 window.W = {
-  view, load, reload, reset, poll, repaint, active, dragging, setWs, setMode, setMineView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry, treeToggle,
+  view, load, reload, reset, poll, repaint, active, dragging, setWs, setMode, setMineView, setCreatedView, setProject, setF, setQ, toggleFol, setRF, clearRF, setTm, setTmBy, setTmDate, toggleArch, sortBy, moreDone, moreList, retry, treeToggle,
   dragStart, dragEnd, colOver, colLeave, cardOver, drop, setStatus, toggleDone, deleteTask,
   openTask, gotoTask, openTaskForm, openRecurring, saveRecurring, deleteRecurring, gotoCreated, gotoRec, setTab, subTick, detailStatus, reassignStart, reassignCancel, reassignSave,
   d, checkDates, pendFiles, pendDel, saveTask, subAdd, subToggle, subText, subDel, asgToggle, filterAsg, paintAssignees, folToggle, filterFol, followStart, followCancel, followSave, tagAdd, tagDel, paintRecurrence, recType, recSet, recWd, recStart,
